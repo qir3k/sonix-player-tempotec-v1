@@ -494,7 +494,10 @@ static void row_tick_put(int index, bool on) {
 	if (!check) {
 		check = lv_image_create(row_objs[index]);
 		lv_obj_set_size(check, 32, 32);
-		lv_image_set_src(check, &icon_circle_check);
+		// The plain tick the file browser puts on a chosen row: the circled one
+		// this used to show was a 36 px ring around its own tick, and at 22 px
+		// the two ran into each other and read as a smudge.
+		lv_image_set_src(check, &icon_check);
 		lv_obj_add_style(check, &theme_style_icon, 0);
 		lv_obj_set_style_image_recolor(check, theme()->accent, 0);
 		lv_obj_set_style_image_recolor_opa(check, LV_OPA_COVER, 0);
@@ -526,6 +529,10 @@ typedef enum {
 	BULK_NONE,
 	BULK_TRACK_ADD,
 	BULK_TRACK_REMOVE,
+	// A playlist's own tracks: removed by position, from the end of the list
+	// backwards, because every removal renumbers the ones after it (see
+	// bulk_step).
+	BULK_PLAYLIST_REMOVE,
 	BULK_ALBUM_ADD,
 	BULK_ALBUM_REMOVE,
 	BULK_ARTIST_ADD,
@@ -538,6 +545,8 @@ static bulk_kind_t bulk_kind_for(job_kind_t kind) {
 		return BULK_TRACK_ADD;
 	case ROW_MENU_TRACK_REMOVE:
 		return BULK_TRACK_REMOVE;
+	case ROW_MENU_PLAYLIST_TRACK:
+		return BULK_PLAYLIST_REMOVE;
 	case ROW_MENU_ALBUM_ADD:
 		return BULK_ALBUM_ADD;
 	case ROW_MENU_ALBUM_REMOVE:
@@ -590,6 +599,7 @@ static bool bulk_failed;
 static int bulk_at;
 static int bulk_count;
 static long bulk_track_ids[TIDAL_MAX_HELD];
+static int bulk_positions[TIDAL_MAX_HELD]; // playlist rows: the position on screen
 static long bulk_artist_ids[TIDAL_MAX_HELD];
 static char bulk_album_ids[TIDAL_MAX_HELD][TIDAL_ID_MAX];
 static char bulk_message[192];
@@ -602,6 +612,14 @@ static void bulk_finish(void) {
 	case BULK_TRACK_REMOVE:
 		listcache_drop(LISTCACHE_TIDAL_FAV_TRACKS);
 		break;
+	case BULK_PLAYLIST_REMOVE: {
+		// The playlist's own copy on the card: the positions in it have just
+		// changed, so it is dropped rather than patched.
+		char key[64];
+		listcache_tidal_playlist_key(list_playlist_id, key, sizeof(key));
+		listcache_drop(key);
+		break;
+	}
 	case BULK_ALBUM_ADD:
 	case BULK_ALBUM_REMOVE:
 		listcache_drop(LISTCACHE_TIDAL_FAV_ALBUMS);
@@ -658,6 +676,13 @@ static void bulk_step(void) {
 	case BULK_TRACK_REMOVE:
 		tidalsync_favorite_toggle(bulk_track_ids[bulk_at], false, bulk_one_done, NULL);
 		break;
+	case BULK_PLAYLIST_REMOVE:
+		// Backwards: the chosen positions were gathered in screen order, and
+		// removing the last one first leaves every position still to come
+		// where it was.
+		tidalsync_playlist_track_remove(list_playlist_id, bulk_positions[bulk_count - 1 - bulk_at], bulk_one_done,
+										NULL);
+		break;
 	case BULK_ALBUM_ADD:
 		tidalsync_album_favorite(bulk_album_ids[bulk_at], true, bulk_one_done, NULL);
 		break;
@@ -697,6 +722,9 @@ static void bulk_action_cb(lv_event_t *e) {
 			if (result_tracks[i].id > 0) {
 				bulk_track_ids[bulk_count++] = result_tracks[i].id;
 			}
+			break;
+		case BULK_PLAYLIST_REMOVE:
+			bulk_positions[bulk_count++] = i;
 			break;
 		case BULK_ALBUM_ADD:
 		case BULK_ALBUM_REMOVE:
@@ -3587,7 +3615,8 @@ static void update_corner_buttons(void) {
 	}
 	if (selecting && sel_action_btn) {
 		bulk_kind_t kind = bulk_kind_for(list_kind);
-		bool removes = kind == BULK_TRACK_REMOVE || kind == BULK_ALBUM_REMOVE || kind == BULK_ARTIST_REMOVE;
+		bool removes = kind == BULK_TRACK_REMOVE || kind == BULK_PLAYLIST_REMOVE || kind == BULK_ALBUM_REMOVE ||
+					   kind == BULK_ARTIST_REMOVE;
 		lv_obj_t *icon = lv_obj_get_child(sel_action_btn, 0);
 		if (icon) {
 			lv_image_set_src(icon, removes ? &icon_star_x : &icon_star_plus);

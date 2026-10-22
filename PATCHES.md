@@ -1263,9 +1263,11 @@ different feature and not a faster version of this one.
 On Tidal a long press starts the selection on the favourites, an album's tracks,
 an artist's albums and search results, and the corner button is the same action
 the row's three dots offer -- favourite or unfavourite, tracks, albums or artists.
-Two things are left out on purpose: a playlist's tracks are removed by position,
+Two things were left out at first: a playlist's tracks are removed by position,
 and each removal renumbers the ones after it; a playlist itself is deleted
-outright. `tidalsync` also takes one job at a time and the newest submission
+outright. The first of those is now in, removing from the end backwards so the
+positions still to come never move (see "A release of small fixes" below); a
+playlist itself is still deleted outright. `tidalsync` also takes one job at a time and the newest submission
 replaces the one already waiting, so the chosen ids are walked one after another,
 each starting when the previous answer comes back -- firing them all at once would
 have performed exactly one of them.
@@ -1376,3 +1378,70 @@ row stood 56 px tall over every search on a 320 px screen. Each pill is as wide
 as its own text now, one line and 40 px tall, in a row that scrolls sideways
 like the Tidal tab's -- so the results start 16 px higher and a long translation
 ("Исполнители 1234") widens its pill instead of wrapping inside it.
+
+## A release of small fixes
+
+Nine things noticed in use, none of them a redesign: the words in the heading,
+the field at the foot of the screensaver, the row that would not hold two lines
+of text, the two pages that did not fit, the podcasts' search and selection, and
+a margin.
+
+**The heading sits on the chevron's middle.** The page title's line box carries
+more air above its capitals than the back chevron does above its own, so aligning
+their tops put every title a few pixels low against the `"<"`. The label is
+placed four pixels higher in `settingsrow_title()`, which is the one place every
+page's heading is built, so Settings, Music, More and the rest moved together.
+
+**The screensaver's field is a rectangle again.** The band that melted the top
+edge of the metadata field into the sleeve is gone; the field is the flat
+translucent rectangle it was, at the palette's own opacity, with the white clock
+and everything else untouched. The UI test follows the flat field.
+
+**A name and a value share a row.** `fit_row_label()` shrank a name that did not
+fit but left it at its natural width, so on the V1's 212 px row a long name
+wrapped onto a second line inside a row with height for one and ran out over the
+value beside it -- *Trending region* against *Interface language* was the visible
+case. The value now gives way first: it steps down like a name, and its share of
+the row is capped at whatever the name needs at its smallest step (never under
+two fifths of the row, past which neither is readable). Anything still too wide
+is cut with the ellipsis on its one line, on both sides.
+
+**A list starts as far down as it ends.** Pages built with `settingsrow_page()`
+had `cfg->padding` under the last row and none above the first, which read as the
+first row being cut off by the heading. The top padding is the bottom one now,
+on the V1 where it exists at all.
+
+**The podcasts' controls page fits one screen.** Two cards of three pills were
+sized for the 480 px panel and overflowed the V1's 320 px, so the page scrolled
+for six buttons. Cards, gaps and pills step down on the compact panel; the whole
+page is 184 px of the 236 it has.
+
+**Selection on Podcasts starts on the row.** A podcast's row opens no menu of its
+own, so the long press had to go through the three-dot menu's *Select* to begin
+choosing. The lift starts the selection now, with that row already ticked,
+exactly as it does on Tidal and in the file browser; an episode keeps its own
+long press (download, mark listened) and offers *Select* beside them.
+
+**Playlist tracks can be chosen too.** Tidal's selection covered the favourites,
+an album's tracks, an artist's albums and search results, and left a playlist's
+own tracks out because removing one renumbers those after it. They are in now:
+the chosen positions are walked from the *end* of the list backwards, so every
+position still to come is where it was when it was chosen, one request at a time
+as `tidalsync` requires. The list's copy on the card is dropped when the run
+finishes.
+
+**The selection tick is the plain one.** Rows wore `icon_circle_check`, a 36 px
+ring drawn around its own tick; at the 22 px the rows use, the two ran into each
+other and read as a smudge. Podcasts and Tidal show the plain tick the file
+browser puts on a chosen row.
+
+**The podcasts' search remembers what was asked.** Under the field, where the
+Tidal tab puts its history: the last eight queries, newest first, each row a tap
+to run it again and an x to forget it, in `[podcast]` as `search_history_count`
+and `search_history_N`. The keyboard replaces the history while typing, as it
+does there, and the history comes back when the search runs or the page is
+reopened.
+
+**"No podcasts on the card" sits in the middle.** The notice was placed 140 px
+down from the heading, which on the V1's 320 px put it near the foot of the page;
+it is centred in the list's own area now, both ways.

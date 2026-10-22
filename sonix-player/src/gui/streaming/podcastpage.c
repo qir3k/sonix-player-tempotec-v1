@@ -8,8 +8,10 @@
 #include <time.h>
 #include <malloc.h>
 
+#include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/system/playback/sleeptimer.h"
+#include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/nowplaying/player.h"
@@ -1103,7 +1105,10 @@ static void build_rows(int width) {
 		// dots: it is the last thing a finger passes on its way off the row.
 		row->check = lv_image_create(row->button);
 		lv_obj_set_size(row->check, 32, 32);
-		lv_image_set_src(row->check, &icon_circle_check);
+		// The plain tick the file browser puts on a chosen row: the circled one
+		// this used to show was a 36 px ring around its own tick, and at 22 px
+		// the two ran into each other and read as a smudge.
+		lv_image_set_src(row->check, &icon_check);
 		lv_obj_add_style(row->check, &theme_style_icon, 0);
 		lv_obj_set_style_image_recolor_opa(row->check, LV_OPA_COVER, 0);
 		lv_image_set_scale(row->check, 156); // 36 px source -> about 22 px
@@ -2419,9 +2424,33 @@ static void mark_not_heard_cb(void *user) {
 // it has been heard. Two tables of initialisers rather than one label chosen
 // with a ternary, for the same reason as the follow menu above.
 static void row_long_cb(lv_event_t *e) {
-	if (list_kind != JOB_EPISODES || switcher_back_drag_active() || player_sheet_drag_active()) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
 		return;
 	}
+
+	// A podcast's row opens no menu of its own, so the lift is the selection:
+	// the row under the finger is chosen and the corner trades its buttons for
+	// the action, as a long press does on Tidal and in the file browser.
+	// An episode's lift keeps its menu -- downloading it, or ticking it off, is
+	// what a long press on an episode is for -- and Select is offered there.
+	if (list_kind != JOB_EPISODES) {
+		int index = row_index_of(lv_event_get_current_target(e));
+		if (index < 0 || index >= list_count) {
+			return;
+		}
+		lv_indev_t *indev = lv_indev_active();
+		if (indev) {
+			lv_indev_wait_release(indev);
+		}
+		if (!selection_start()) {
+			return;
+		}
+		if (!chosen[index]) {
+			selection_toggle(index);
+		}
+		return;
+	}
+
 	dl_row = row_index_of(lv_event_get_current_target(e));
 	if (dl_row < 0 || dl_row >= list_count) {
 		return;
@@ -2807,6 +2836,108 @@ static void build_page(gui_config_t *cfg) {
 static lv_obj_t *search_field;
 static lv_obj_t *search_clear_btn;
 static keyboard_t *search_keyboard;
+static lv_obj_t *search_history_list;
+static lv_obj_t *search_history_empty;
+
+// The last few queries, newest first -- Tidal's history, in the podcast
+// section's own part of the configuration file. Eight, because a history is
+// for picking up a search from the day before and not for keeping a log.
+#define SEARCH_HISTORY_MAX 8
+#define SEARCH_HISTORY_LEN 96
+#define SEARCH_HISTORY_FONT (bp_is_tempotec_v1() ? &font_ui_18 : &font_ui_24)
+
+static char history_terms[SEARCH_HISTORY_MAX][SEARCH_HISTORY_LEN];
+static int history_count;
+static bool history_loaded;
+
+static void search_history_rebuild(void);
+
+// Rebuilding deletes the rows, and one of them may be the widget whose tap
+// asked for it: the work is queued, so it runs after the event has returned.
+static void search_history_rebuild_async(void *user) {
+	(void)user;
+	search_history_rebuild();
+}
+
+static void history_load(void) {
+	if (history_loaded) {
+		return;
+	}
+	history_loaded = true;
+	history_count = 0;
+
+	int stored = (int)config_get_int("podcast", "search_history_count", 0);
+	if (stored < 0) {
+		stored = 0;
+	}
+	if (stored > SEARCH_HISTORY_MAX) {
+		stored = SEARCH_HISTORY_MAX;
+	}
+	for (int i = 0; i < stored; i++) {
+		char key[24];
+		snprintf(key, sizeof(key), "search_history_%d", i);
+		const char *term = config_get("podcast", key, "");
+		if (term && term[0]) {
+			snprintf(history_terms[history_count], SEARCH_HISTORY_LEN, "%s", term);
+			history_count++;
+		}
+	}
+}
+
+static void history_save(void) {
+	config_set_int("podcast", "search_history_count", history_count);
+	// Past the end the keys are emptied rather than left where they were: a
+	// cleared history that a later read finds again is worse than none.
+	for (int i = 0; i < SEARCH_HISTORY_MAX; i++) {
+		char key[24];
+		snprintf(key, sizeof(key), "search_history_%d", i);
+		config_set("podcast", key, i < history_count ? history_terms[i] : "");
+	}
+	config_save();
+}
+
+// Puts the term on top, once: a search already in the list moves up instead of
+// filling it with the same word repeated.
+static void history_remember(const char *term) {
+	history_load();
+	while (term && *term == ' ') {
+		term++;
+	}
+	if (!term || !*term) {
+		return;
+	}
+
+	char kept[SEARCH_HISTORY_MAX][SEARCH_HISTORY_LEN];
+	int kept_count = 0;
+	for (int i = 0; i < history_count && kept_count < SEARCH_HISTORY_MAX - 1; i++) {
+		if (strcmp(history_terms[i], term) == 0) {
+			continue;
+		}
+		snprintf(kept[kept_count], SEARCH_HISTORY_LEN, "%s", history_terms[i]);
+		kept_count++;
+	}
+	snprintf(history_terms[0], SEARCH_HISTORY_LEN, "%s", term);
+	for (int i = 0; i < kept_count; i++) {
+		snprintf(history_terms[i + 1], SEARCH_HISTORY_LEN, "%s", kept[i]);
+	}
+	history_count = kept_count + 1;
+	history_save();
+}
+
+// Typing needs the keyboard, and the keyboard and the history cannot both be on
+// the V1's screen: one replaces the other, as on Tidal's search page.
+static void search_keyboard_show(bool visible) {
+	if (!search_keyboard) {
+		return;
+	}
+	keyboard_set_visible(search_keyboard, visible);
+	if (visible) {
+		lv_obj_set_hidden(search_history_list, true);
+		lv_obj_set_hidden(search_history_empty, true);
+	} else {
+		search_history_rebuild();
+	}
+}
 
 static void refresh_search_clear(void) {
 	if (!search_clear_btn) {
@@ -2840,10 +2971,123 @@ static void search_accept_cb(lv_event_t *e) {
 	if (!text || !text[0]) {
 		return;
 	}
+	history_remember(text);
 	job_t job = {0};
 	job.kind = JOB_SEARCH;
 	snprintf(job.text, sizeof(job.text), "%s", text);
+	// The results get the whole page, as on Tidal: the keyboard would
+	// otherwise stay up over a list nobody asked to see with it.
+	search_keyboard_show(false);
 	run(&job);
+}
+
+// Tapping the field brings the keyboard, and the history steps aside for it.
+static void search_field_clicked_cb(lv_event_t *e) {
+	(void)e;
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	search_keyboard_show(true);
+	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
+	lv_obj_send_event(search_field, LV_EVENT_FOCUSED, NULL);
+}
+
+// One row of the history: the query, and an x to forget just that one.
+static void history_forget_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= history_count) {
+		return;
+	}
+	for (int i = index; i + 1 < history_count; i++) {
+		snprintf(history_terms[i], SEARCH_HISTORY_LEN, "%s", history_terms[i + 1]);
+	}
+	history_count--;
+	history_save();
+	gui_post(search_history_rebuild_async, NULL);
+}
+
+static void history_pick_cb(lv_event_t *e) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= history_count) {
+		return;
+	}
+	lv_textarea_set_text(search_field, history_terms[index]);
+	refresh_search_clear();
+	search_accept_cb(e);
+}
+
+// Draws the history, in place of the keyboard while nothing is being typed.
+static void search_history_rebuild(void) {
+	if (!search_history_list) {
+		return;
+	}
+	history_load();
+	lv_obj_clean(search_history_list);
+
+	bool any = history_count > 0;
+	lv_obj_set_hidden(search_history_list, !any);
+	if (search_history_empty) {
+		lv_obj_set_hidden(search_history_empty, any);
+	}
+	if (!any) {
+		return;
+	}
+
+	for (int i = 0; i < history_count; i++) {
+		lv_obj_t *row = lv_btn_create(search_history_list);
+		lv_obj_set_width(row, lv_pct(100));
+		lv_obj_set_height(row, bp_pick(40, 68));
+		lv_obj_add_style(row, &theme_style_card, 0);
+		lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
+		lv_obj_set_style_radius(row, bp_pick(10, 12), 0);
+		lv_obj_set_style_border_width(row, 0, 0);
+		lv_obj_set_style_shadow_width(row, 0, 0);
+		lv_obj_set_style_pad_hor(row, bp_pick(8, 20), 0);
+		lv_obj_set_style_pad_column(row, bp_pick(4, 10), 0);
+		lv_obj_set_scrollable(row, false);
+		lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+		lv_obj_add_event_cb(row, history_pick_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		lv_obj_t *label = lv_label_create(row);
+		lv_label_set_text(label, history_terms[i]);
+		lv_obj_add_style(label, &theme_style_text, 0);
+		lv_obj_set_style_text_font(label, SEARCH_HISTORY_FONT, 0);
+		lv_obj_set_flex_grow(label, 1);
+		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+		lv_obj_set_height(label, lv_font_get_line_height(SEARCH_HISTORY_FONT));
+
+		lv_obj_t *x = lv_btn_create(row);
+		lv_obj_set_size(x, bp_pick(30, 44), bp_pick(30, 44));
+		lv_obj_set_style_bg_opa(x, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(x, 0, 0);
+		lv_obj_set_style_shadow_width(x, 0, 0);
+		lv_obj_set_style_pad_all(x, 0, 0);
+		lv_obj_add_event_cb(x, history_forget_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		lv_obj_t *glyph = lv_image_create(x);
+		lv_image_set_src(glyph, &icon_clear);
+		lv_obj_add_style(glyph, &theme_style_icon, 0);
+		lv_obj_set_style_image_opa(glyph, LV_OPA_60, 0);
+		lv_obj_center(glyph);
+	}
+}
+
+static void search_loaded_cb(lv_event_t *e) {
+	(void)e;
+	refresh_search_clear();
+	// Back from the results, the keyboard that was sent away stays away and the
+	// history takes the space it left.
+	if (!keyboard_is_visible(search_keyboard)) {
+		search_history_rebuild();
+	}
 }
 
 // Copied line for line from Tidal's, deliberately: search in this player has
@@ -2851,8 +3095,14 @@ static void search_accept_cb(lv_event_t *e) {
 // shared regular/compact keyboard below. A page that invents another is
 // instantly not of this house.
 static void build_search_page(gui_config_t *cfg) {
+	const bool compact = cfg->screen_width < 320;
+	const int field_h = compact ? 44 : 62;
+	const int gap = compact ? 6 : 10;
+	const int clear_side = compact ? 40 : 56;
+
 	search_screen = lv_obj_create(NULL);
 	lv_obj_add_style(search_screen, &theme_style_screen, 0);
+	lv_obj_add_event_cb(search_screen, search_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 
 	settingsrow_title(search_screen, cfg, "podcast_search_for_a_podcast");
 	int top = settingsrow_content_top(cfg);
@@ -2860,23 +3110,26 @@ static void build_search_page(gui_config_t *cfg) {
 	search_field = lv_textarea_create(search_screen);
 	lv_textarea_set_one_line(search_field, true);
 	lv_textarea_set_placeholder_text(search_field, tr("podcast_name"));
-	lv_obj_set_size(search_field, cfg->screen_width - 2 * cfg->padding, 62);
+	lv_obj_set_size(search_field, cfg->screen_width - 2 * cfg->padding, field_h);
 	lv_obj_set_scrollbar_mode(search_field, LV_SCROLLBAR_MODE_OFF);
 	lv_obj_align(search_field, LV_ALIGN_TOP_LEFT, cfg->padding, top);
 	lv_obj_add_style(search_field, &theme_style_card, 0);
-	lv_obj_set_style_radius(search_field, 12, 0);
+	lv_obj_set_style_radius(search_field, compact ? 10 : 12, 0);
 	lv_obj_set_style_border_width(search_field, 0, 0);
 	lv_obj_set_style_shadow_width(search_field, 0, 0);
-	lv_obj_set_style_pad_all(search_field, 14, 0);
-	lv_obj_set_style_text_font(search_field, &font_ui_24, 0);
+	lv_obj_set_style_pad_all(search_field, compact ? 8 : 14, 0);
+	lv_obj_set_style_text_font(search_field, compact ? &font_ui_18 : &font_ui_24, 0);
 	keyboard_style_caret(search_field);
 	lv_obj_add_event_cb(search_field, search_field_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+	// Tapping it brings the keyboard, and the history steps aside for it.
+	lv_obj_add_event_cb(search_field, search_field_clicked_cb, LV_EVENT_CLICKED, NULL);
 
 	// The x on the field's right edge: clears the query with one tap. Hidden
 	// while the field is empty.
 	search_clear_btn = lv_btn_create(search_screen);
-	lv_obj_set_size(search_clear_btn, 56, 56);
-	lv_obj_align(search_clear_btn, LV_ALIGN_TOP_RIGHT, -cfg->padding - 4, top + (62 - 56) / 2);
+	lv_obj_set_size(search_clear_btn, clear_side, clear_side);
+	lv_obj_align(search_clear_btn, LV_ALIGN_TOP_RIGHT, -cfg->padding - (compact ? 0 : 4),
+				 top + (field_h - clear_side) / 2);
 	lv_obj_set_style_bg_opa(search_clear_btn, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_shadow_width(search_clear_btn, 0, 0);
 	lv_obj_set_style_border_width(search_clear_btn, 0, 0);
@@ -2891,12 +3144,49 @@ static void build_search_page(gui_config_t *cfg) {
 	lv_obj_center(search_clear_icon);
 
 	// Room for it, so a long query does not run underneath.
-	lv_obj_set_style_pad_right(search_field, 60, 0);
+	lv_obj_set_style_pad_right(search_field, compact ? 42 : 60, 0);
 
 	// No search-type pills, unlike Qobuz and Tidal: there the search runs over
 	// tracks, albums and artists, here there is one thing only to search for.
+	// Their place under the field is taken by the history.
+	const int history_top = top + field_h + gap;
+	int history_h = cfg->screen_height - history_top - cfg->padding;
+	if (history_h < 40) {
+		history_h = 40;
+	}
+
+	search_history_list = lv_obj_create(search_screen);
+	lv_obj_set_size(search_history_list, cfg->screen_width - 2 * cfg->padding, history_h);
+	lv_obj_align(search_history_list, LV_ALIGN_TOP_LEFT, cfg->padding, history_top);
+	lv_obj_set_style_bg_opa(search_history_list, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(search_history_list, 0, 0);
+	lv_obj_set_style_radius(search_history_list, 0, 0);
+	lv_obj_set_style_pad_all(search_history_list, 0, 0);
+	lv_obj_set_style_pad_gap(search_history_list, compact ? 4 : 8, 0);
+	lv_obj_set_scroll_dir(search_history_list, LV_DIR_VER);
+	lv_obj_set_scrollbar_mode(search_history_list, LV_SCROLLBAR_MODE_AUTO);
+	lv_obj_set_event_bubble(search_history_list, true);
+	lv_obj_set_flex_flow(search_history_list, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_flex_align(search_history_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+	search_history_empty = lv_label_create(search_screen);
+	lv_label_set_text(search_history_empty, tr("no_searches_yet"));
+	lv_obj_add_style(search_history_empty, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(search_history_empty, &font_ui_18, 0);
+	lv_obj_set_width(search_history_empty, cfg->screen_width - 2 * cfg->padding);
+	lv_label_set_long_mode(search_history_empty, LV_LABEL_LONG_WRAP);
+	// Level with where the first history row would be, not a gap under the
+	// field: with nothing searched yet this label is the whole history.
+	lv_obj_align(search_history_empty, LV_ALIGN_TOP_LEFT, cfg->padding, history_top + 2);
+	lv_obj_set_hidden(search_history_empty, true);
+
 	search_keyboard =
-		keyboard_create(search_screen, cfg->screen_width, cfg->screen_width < 320 ? 144 : 316, search_field, NULL, "ok", search_accept_cb, NULL);
+		keyboard_create(search_screen, cfg->screen_width, compact ? 144 : 316, search_field, NULL, "ok", search_accept_cb, NULL);
+
+	// The history is what the page opens on; the keyboard arrives with the
+	// first tap in the field.
+	search_keyboard_show(false);
+
 	switcher_attach_back_gesture(search_screen);
 }
 
@@ -2969,6 +3259,14 @@ static void pill_clicked_cb(lv_event_t *e) {
 
 static void open_search_cb(lv_event_t *e) {
 	(void)e;
+	lv_textarea_set_text(search_field, "");
+	keyboard_reset(search_keyboard);
+	refresh_search_clear();
+	// The history first, unless there is none to show: then the keyboard is
+	// what the page opens on, and the first tap has something to do -- the same
+	// rule as Tidal's search page.
+	history_load();
+	search_keyboard_show(history_count == 0);
 	switch_screen(search_screen);
 }
 
@@ -3196,8 +3494,10 @@ static void pick_skip_forward_cb(lv_event_t *e) {
 
 static lv_obj_t *make_skip_choice(lv_obj_t *parent, const char *text, int seconds, lv_event_cb_t cb) {
 	lv_obj_t *btn = lv_btn_create(parent);
-	lv_obj_set_size(btn, LV_SIZE_CONTENT, 64);
-	lv_obj_set_style_pad_hor(btn, 22, 0);
+	// Two cards of three pills, and the V1's 320 px has to hold both without a
+	// scrollbar: the pills are sized to the panel there.
+	lv_obj_set_size(btn, LV_SIZE_CONTENT, bp_pick(44, 64));
+	lv_obj_set_style_pad_hor(btn, bp_pick(14, 22), 0);
 	lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_shadow_width(btn, 0, 0);
 	lv_obj_set_style_border_width(btn, 0, 0);
@@ -3217,11 +3517,11 @@ static lv_obj_t *make_skip_card(lv_obj_t *parent, const char *title) {
 	lv_obj_set_width(card, lv_pct(100));
 	lv_obj_set_height(card, LV_SIZE_CONTENT);
 	lv_obj_add_style(card, &theme_style_card, 0);
-	lv_obj_set_style_radius(card, 12, 0);
+	lv_obj_set_style_radius(card, bp_pick(10, 12), 0);
 	lv_obj_set_style_border_width(card, 0, 0);
 	lv_obj_set_style_shadow_width(card, 0, 0);
-	lv_obj_set_style_pad_all(card, 20, 0);
-	lv_obj_set_style_pad_gap(card, 18, 0);
+	lv_obj_set_style_pad_all(card, bp_pick(10, 20), 0);
+	lv_obj_set_style_pad_gap(card, bp_pick(8, 18), 0);
 	lv_obj_set_scrollable(card, false);
 	lv_obj_set_event_bubble(card, true);
 	lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
