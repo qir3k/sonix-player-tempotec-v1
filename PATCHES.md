@@ -1213,3 +1213,114 @@ mask in the same section of the configuration, so a row the user never wants to
 see is gone rather than merely last. A configuration written before this (or
 edited by hand) is read as the default order plus whatever it does name, so a row
 the page gains later is never lost.
+
+## Lists that open at once, an order for podcasts, and choosing several rows
+
+Four small things that were missing from the streaming tabs, and the sleeve that
+was still a square.
+
+**The lists are kept on the card.** Tidal and Podcasts rebuilt every list from the
+network each time a tab was opened -- the names, the artists, the ids, the cover
+addresses, the whole page of them -- for an answer that had not changed since the
+last visit. The first page of a list is now written to
+`<card>/.local/listcache` when it arrives and read back the next time, so the rows
+are there at once and the spinner belongs to a list that is actually new. What is
+stored is the page's own record array exactly as it lay in memory: a header
+carries the version and the record size, so a build that changes either reads the
+old file as a miss rather than filling the page with nonsense, and the write is a
+temporary file renamed, so a power cut leaves the previous list rather than half
+of one. A copy is trusted for half a day (Tidal) or six hours (the podcast chart
+and a podcast's episodes), because what it is waiting for is not the next visit
+but a change made elsewhere -- and every write on these pages drops the file it
+made wrong: adding or removing a favourite, removing a track from a playlist,
+creating or deleting one. Searches are never kept: every query is its own answer.
+The covers were already on the card (`.local/qobuz-art`, named by the MD5 of the
+URL), which is why they never needed fetching twice.
+
+**Podcasts in the order they are listened to.** The followed list used to be
+"most recently followed first", which says nothing useful about a hundred
+subscriptions. It is now ordered by how many of each podcast's episodes have been
+started on this device, most first, with A-Z and Z-A beside that under Podcast
+settings -> Order. The count is a row in `podcast.db` beside the subscription
+(`PODCAST_SUBS.plays`, added to existing databases by a one-off ALTER), written
+when an episode starts -- a podcast listened to in ten-minute pieces still ranks
+above one that was tried once -- and the list falls back to the alphabet when two
+are level, so the order is never arbitrary. Counting the heard marks instead was
+not possible: `PODCAST_PLAYED` stores episode ids and nothing else, so it cannot
+say which podcast an episode belonged to.
+
+**Choosing several rows.** Both tabs have the file browser's selection mode now:
+a long press starts it (through the row's own menu on Podcasts, on the row itself
+on Tidal), a tap then picks a row or lets it go, letting go of the last one ends
+it, and the corner trades its buttons for the action and the way out. On Podcasts,
+a podcast's row offers **Select** in its three-dot menu beside follow/unfollow,
+an episode's long press beside mark-listened and download; a selection of podcasts
+is followed or unfollowed as a group, and a selection of episodes is ticked off
+(or unticked) as a group. Bulk downloads are deliberately not offered: `podcastdl`
+runs one download at a time for the whole device, so a queue of them is a
+different feature and not a faster version of this one.
+
+On Tidal a long press starts the selection on the favourites, an album's tracks,
+an artist's albums and search results, and the corner button is the same action
+the row's three dots offer -- favourite or unfavourite, tracks, albums or artists.
+Two things are left out on purpose: a playlist's tracks are removed by position,
+and each removal renumbers the ones after it; a playlist itself is deleted
+outright. `tidalsync` also takes one job at a time and the newest submission
+replaces the one already waiting, so the chosen ids are walked one after another,
+each starting when the previous answer comes back -- firing them all at once would
+have performed exactly one of them.
+
+**Poster's sleeve is the panel, not a square in it.** Held to the largest square
+the room above the deck would take, the picture left a strip of page down either
+side of the record on a 240-px panel -- 195 px of sleeve inside 240 -- and a sleeve
+with bars beside it is not what a sleeve looks like. It is now the full width of
+the screen and every row the deck leaves, decoded at exactly that rectangle and
+filled from the middle, so a square cover gives up a little of its top and bottom
+rather than its sides. The deck still stands under it on its own opaque ground,
+which is what keeps this different from Immersive.
+
+**The screensaver's field melts further up, and from a darker start.** The
+translucent field over the foot of the artwork now begins about a quarter of the
+panel above its edge instead of a twelfth, and its top stop is two thirds of the
+field's own weight rather than nothing -- a shade that is plainly darker than the
+picture, and still short of the film the words sit on, which is where a photograph
+would stop reading as one and read as a black bar instead.
+
+## A hesitant interface: what the log now names
+
+The report was "it lags for a while, then I just have to wait" -- sometimes on the
+power key, sometimes on a track change, sometimes on a page. The log said nothing
+at all: the watchdog only writes its thread dump once the interface has stopped
+for five seconds, and what was being described is a third of a second repeated.
+
+**Every pass of the event loop is timed.** `lv_timer_handler()` is what reads the
+touch, runs the timers and draws the frame, and on this device it runs on one
+thread: a pass that takes 300 ms is the hesitation itself. A pass that takes
+`UI_SLOW_PASS_MS` (120 ms, well below what a hand notices) now writes one line
+saying how long it took and what ran inside it:
+
+```
+ui: a pass of the event loop took 342 ms (next wake in 0 ms), screen 0x2f1c8 240x320
+ui:   timer period 120 ms, callback 0x4a1b90, user (nil), ran 3 ms ago
+ui:   timer period 1000 ms, callback 0x4c05e4, user (nil), ran 340 ms ago
+```
+
+The screen, the period and the callback are the three things that place a slow
+pass: a 120 ms timer on the list pages is the artwork poll, a 500 ms one on the
+player is a cover, and a pass whose timers are all quick still names the one that
+was in the middle of a card read. The callback addresses are in the unstripped
+`sonix_player_debug` the build leaves beside the stripped binary, so
+`addr2line -f -e sonix_player_debug 0x4a1b90` names the function. One line a
+second at most: a page that is slow for a while must not turn the log, and the
+card it may be written to, into the reason it is slow. The watchdog's dump now
+also carries `ui: N slow event-loop passes so far, the last took Y ms`, which
+separates a device that had been hesitating for a while from one that went from
+fine to stopped in a single pass.
+
+**The card sync after a podcast delete is no longer the interface's to wait for.**
+`sync()` returns only when every pending write in the filesystem has reached the
+card -- including whatever a download in progress is in the middle of -- and it
+was called on the interface thread from the delete handler, so deleting a
+downloaded episode could freeze the page for as long as the card took. It runs on
+a thread of its own at background priority now; the file is already gone, and the
+rest is bookkeeping the card gets round to on its own.

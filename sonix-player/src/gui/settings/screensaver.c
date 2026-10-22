@@ -66,11 +66,13 @@ static lv_grad_dsc_t strip_fade_grad;
 // The field over the sleeve is a translucent square, and a square laid over a
 // photograph has an edge: a straight line across the record at the height the
 // words begin, which the eye reads as the picture being cut. This is the band
-// above that line over which the field's opacity climbs from nothing to the
-// full weight the strip itself wears -- the same melt the player gives the
-// foot of its Poster sleeve -- so the sleeve shows through the top of the
-// field and the two grounds meet without a seam.
-#define STRIP_FADE_H bp_pick(28, 52)
+// above that line over which the field's opacity climbs to the full weight the
+// strip itself wears -- the same melt the player gives the foot of its Poster
+// sleeve -- so the sleeve shows through the top of the field and the two grounds
+// meet without a seam. Taller than the 28 px it was drawn at first: on the V1
+// the band now runs over a quarter of the panel, which gives the eye somewhere
+// to travel instead of a two-row step.
+#define STRIP_FADE_H bp_pick(56, 88)
 
 // How far the clock is lifted out of its line in the strip. It is the strip's
 // last line and the swipe-up sign hangs over the strip's foot, and the room
@@ -498,7 +500,7 @@ static void promote_next(void) {
 // copy, or plain black when there is no artwork to blur.
 //
 // The field's top edge is the one thing about it that is not flat: over the
-// strip's upper band (strip_fade) the same colour climbs from nothing to the
+// strip's upper band (strip_fade) the same colour climbs from a shade to the
 // weight the strip wears, so the sleeve is not met by a straight line drawn
 // across the record.
 static void strip_fade_paint(lv_color_t fill, lv_opa_t weight) {
@@ -507,6 +509,16 @@ static void strip_fade_paint(lv_color_t fill, lv_opa_t weight) {
 	}
 	strip_fade_grad.stops[0].color = fill;
 	strip_fade_grad.stops[1].color = fill;
+	// The band starts dark, not clear. Climbing from nothing left the foot of
+	// the sleeve outside it as bright as the middle of the cover, so the band's
+	// top edge was a step in the picture -- and the step is what this exists to
+	// remove. Two thirds of the strip's weight is shade laid over the
+	// photograph: darker than the old transparent start by a distance the eye
+	// can see, and still short of the strip's own film, which is where the
+	// picture would stop reading as a picture and read as black instead. The
+	// strip itself is untouched, so the words keep the ground they were tuned
+	// for.
+	strip_fade_grad.stops[0].opa = (lv_opa_t)(weight * 2 / 3);
 	strip_fade_grad.stops[1].opa = weight; // the strip's own, where the two meet
 	lv_obj_report_style_change(&strip_fade_style);
 }

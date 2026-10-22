@@ -1,4 +1,9 @@
 #include "lvgl/lvgl.h"
+// The event loop's timers, reached the way power.c reaches them: this file
+// measures passes of lv_timer_handler() and has to name the timers that ran in
+// a slow one (see ui_note_slow_pass() below), and a period and a callback are
+// not in the public API.
+#include "lvgl/src/misc/lv_timer_private.h"
 
 #include <dirent.h>
 #include <malloc.h>
@@ -663,6 +668,13 @@ static void set_oom_priority(const char *value) {
 
 static volatile uint32_t ui_heartbeat;
 
+// How the interface has been keeping up: every pass of the event loop that
+// overran (see ui_note_slow_pass()) is counted here, so a stall report can say
+// whether the device had been hesitating for a while or went from fine to
+// stopped in one pass.
+static volatile uint32_t ui_slow_passes;
+static volatile uint32_t ui_last_slow_ms;
+
 #define WATCHDOG_STALL_SECONDS 5
 
 // And how long a play request may sit unclaimed before the same dump is taken
@@ -709,6 +721,10 @@ static void watchdog_dump_threads(void) {
 	}
 	if (crumb_artwork()[0]) {
 		fprintf(stderr, "watchdog:   decoding artwork of: %s\n", crumb_artwork());
+	}
+	if (ui_slow_passes > 0) {
+		fprintf(stderr, "watchdog:   ui: %u slow event-loop passes so far, the last took %u ms\n", ui_slow_passes,
+				ui_last_slow_ms);
 	}
 
 	DIR *tasks = opendir("/proc/self/task");
@@ -843,6 +859,74 @@ static void watchdog_start(void) {
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, watchdog_thread, NULL) == 0) {
 		pthread_detach(thread);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Slow passes of the event loop
+//
+// "It lags and then I just have to wait" had no line in the log to point at:
+// the watchdog only speaks once the interface has stopped for five seconds,
+// and the hesitation being reported is a fraction of that. A pass of
+// lv_timer_handler() that takes a third of a second IS the lag -- the touch
+// being read, the frame being drawn and the key that was pressed are all in
+// that pass -- so every pass is timed here, and one that overruns writes down
+// what ran in it.
+//
+// The timers are named by the only things the loop knows about them: the
+// period they were created with, their callback and their user data. The
+// screen on show goes with them, which is usually the whole answer already --
+// a 120 ms timer on the podcast list is the artwork, a 500 ms one on the
+// player is a cover, and a pass with no timer in it at all waited on the card
+// inside the one that did run.
+//
+// One line a second at most. A page that is slow for a while must not turn the
+// log -- and the card it may be written to -- into the reason it is slow.
+// ---------------------------------------------------------------------------
+
+#define UI_SLOW_PASS_MS 120
+#define UI_SLOW_PASS_QUIET_MS 1000
+#define UI_SLOW_PASS_TIMERS 5
+
+static uint32_t ui_slow_pass_quiet_until;
+
+static void ui_note_slow_pass(uint32_t took, uint32_t next_in, uint32_t pass_start) {
+	ui_slow_passes++;
+	ui_last_slow_ms = took;
+
+	uint32_t now = lv_tick_get();
+	// Signed difference, so the tick wrapping every seven weeks does not read
+	// as "this timer ran a month ago".
+	if ((int32_t)(now - ui_slow_pass_quiet_until) < 0) {
+		return;
+	}
+	ui_slow_pass_quiet_until = now + UI_SLOW_PASS_QUIET_MS;
+
+	lv_obj_t *screen = lv_screen_active();
+	fprintf(stderr, "ui: a pass of the event loop took %u ms (next wake in %u ms), screen %p %dx%d\n", took, next_in,
+			(void *)screen, screen ? (int)lv_obj_get_width(screen) : 0, screen ? (int)lv_obj_get_height(screen) : 0);
+
+	int shown = 0;
+	int more = 0;
+	for (lv_timer_t *timer = lv_timer_get_next(NULL); timer; timer = lv_timer_get_next(timer)) {
+		// last_run is stamped as each timer is executed, so a timer that ran in
+		// this pass has a stamp at or after the tick the pass started on. The
+		// ones that ran in the pass before it are a whole loop turn earlier
+		// and are left out -- otherwise every fast pass would name its
+		// predecessor's timers as well.
+		if ((int32_t)(timer->last_run - pass_start) < 0) {
+			continue;
+		}
+		if (shown == UI_SLOW_PASS_TIMERS) {
+			more++;
+			continue;
+		}
+		fprintf(stderr, "ui:   timer period %u ms, callback %p, user %p, ran %u ms ago%s\n", timer->period,
+				(void *)timer->timer_cb, timer->user_data, lv_tick_elaps(timer->last_run), timer->paused ? " (paused)" : "");
+		shown++;
+	}
+	if (more > 0) {
+		fprintf(stderr, "ui:   ... and %d more timer%s in the same pass\n", more, more == 1 ? "" : "s");
 	}
 }
 
@@ -2441,7 +2525,14 @@ int main(int argc, char **argv) {
 	printf("Entering main event loop...\n");
 	while (running) {
 		ui_heartbeat++;
+		uint32_t pass_start = lv_tick_get();
 		uint32_t time_till_next = lv_timer_handler();
+		// Timed before the sleep is capped, so the number in the log is what the
+		// pass itself cost and not what the loop then waited.
+		uint32_t pass_ms = lv_tick_elaps(pass_start);
+		if (pass_ms >= UI_SLOW_PASS_MS) {
+			ui_note_slow_pass(pass_ms, time_till_next, pass_start);
+		}
 		if (time_till_next > MAIN_LOOP_MAX_SLEEP_MS) {
 			time_till_next = MAIN_LOOP_MAX_SLEEP_MS; // also catches LV_NO_TIMER_READY
 		}
