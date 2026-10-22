@@ -1,13 +1,16 @@
 #include "dacpage.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "src/gui/shell/confirm.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
+#include "src/gui/settings/musicsettings.h"
 #include "src/gui/shell/theme.h"
+#include "src/system/audio/eq.h"
 #include "src/system/core/lang.h"
 #include "src/system/audio/usbdac.h"
 
@@ -19,9 +22,97 @@ static lv_obj_t *format_label;
 static lv_obj_t *status_label;
 static lv_obj_t *charge_btn;
 static lv_obj_t *charge_glyph;
+static lv_obj_t *eq_pill;
+static lv_obj_t *peq_pill;
+static lv_obj_t *mseb_pill;
 static lv_timer_t *poll_timer;
 static unsigned last_serial = (unsigned)-1;
+// The compact panel hides the rate line while there is no rate: see
+// set_format() and dacpage_init().
+static bool hide_empty_format;
 static lv_color_t status_normal_color; // the theme's colour, captured at build time
+
+// The pills follow the equalisers, not the finger: they are the same three
+// settings the control centre switches, and either place may have changed them
+// since this page was last looked at.
+static void paint_equaliser_pills(void) {
+	settingsrow_pill_active(eq_pill, eq_get_enabled());
+	settingsrow_pill_active(peq_pill, peq_get_enabled());
+	settingsrow_pill_active(mseb_pill, mseb_get_enabled());
+}
+
+// ---------------------------------------------------------------------------
+// the equalisers
+//
+// The control centre cannot be pulled down while DAC mode holds the screen, so
+// the circles that switch the equaliser, PEQ and MSEB are out of reach exactly
+// when they matter -- a curve set before the cable went in is heard, and a
+// listener who wants to compare it should not have to unplug.
+//
+// Pills rather than three switches, and that is the V1 talking: its panel is
+// 240x320, so the page has 248 px under the heading, and four switch rows at
+// the V1's 56 px row height plus the gaps between them are 236 of it. The mode
+// switch, the equalisers and the host's sample rate -- the one number this page
+// exists to show -- would not then fit together. A titled card of three pills
+// is about 76, and on the V1 the decorative mark below it goes too: that leaves
+// the rate and the status on the same screen as the switches.
+//
+// The same three settings, through the same calls the circles make, so the
+// settings pages and the control centre stay in step with a tap here.
+// ---------------------------------------------------------------------------
+
+static void eq_cb(lv_event_t *e) {
+	(void)e;
+	musicsettings_set_eq_enabled(!eq_get_enabled());
+	paint_equaliser_pills();
+}
+
+static void peq_cb(lv_event_t *e) {
+	(void)e;
+	peq_set_enabled(!peq_get_enabled());
+	paint_equaliser_pills();
+}
+
+static void mseb_cb(lv_event_t *e) {
+	(void)e;
+	musicsettings_set_mseb_enabled(!mseb_get_enabled());
+	paint_equaliser_pills();
+}
+
+// The host's rate, or nothing at all.
+//
+// Set, never removed, and the words only when they really changed:
+// lv_label_set_text() re-lays the label out even for the same string, and the
+// column around it with it. On the compact panel an empty rate is hidden rather
+// than drawn as a blank line, so that it takes no space in the block the words
+// are centred in (see dacpage_init).
+// A transparent, growing nothing: what centres the words on the compact panel
+// (see dacpage_init). Base 0 height, so flex grow is all it ever takes.
+static void spacer(lv_obj_t *parent) {
+	lv_obj_t *obj = lv_obj_create(parent);
+	lv_obj_set_size(obj, lv_pct(100), 0);
+	lv_obj_set_flex_grow(obj, 1);
+	lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(obj, 0, 0);
+	lv_obj_set_style_radius(obj, 0, 0);
+	lv_obj_set_style_pad_all(obj, 0, 0);
+	lv_obj_set_scrollable(obj, false);
+	// Empty space has to behave like empty space: a press here belongs to the
+	// page, which is what the swipe back -- and the scroll of a long page -- is
+	// attached to. A clickable box on top of it would swallow both.
+	lv_obj_set_clickable(obj, false);
+}
+
+static void set_format(const char *text) {
+	// Hiding before the text: a label that starts empty is already equal to
+	// "", so the comparison below cannot be what decides whether it is drawn.
+	if (hide_empty_format) {
+		lv_obj_set_hidden(format_label, text[0] == '\0');
+	}
+	if (strcmp(lv_label_get_text(format_label), text) != 0) {
+		lv_label_set_text(format_label, text);
+	}
+}
 
 static void refresh_charge_glyph(void) {
 	if (!charge_glyph) {
@@ -49,6 +140,7 @@ static void refresh(void) {
 	// and explains itself instead of silently doing nothing.
 	lv_obj_set_style_opa(charge_glyph, st.active ? LV_OPA_COVER : LV_OPA_40, 0);
 	refresh_charge_glyph();
+	paint_equaliser_pills();
 
 	// Back to the theme's colour unless the checks below make it red. Set, never
 	// removed: lv_obj_remove_style(obj, NULL, ...) drops every local style on
@@ -57,26 +149,26 @@ static void refresh(void) {
 	lv_obj_set_style_text_color(status_label, status_normal_color, 0);
 
 	if (st.error[0]) {
-		lv_label_set_text(format_label, "");
+		set_format("");
 		lv_label_set_text(status_label, st.error);
 		lv_obj_set_style_text_color(status_label, lv_color_make(224, 27, 36), 0);
 		return;
 	}
 
 	if (st.starting) {
-		lv_label_set_text(format_label, "");
+		set_format("");
 		lv_label_set_text(status_label, tr("dac_turning_on_2"));
 		return;
 	}
 
 	if (!st.active) {
-		lv_label_set_text(format_label, "");
+		set_format("");
 		lv_label_set_text(status_label, tr("dac_note"));
 		return;
 	}
 
 	if (!st.streaming) {
-		lv_label_set_text(format_label, "");
+		set_format("");
 		lv_label_set_text(status_label, tr("dac_waiting"));
 		return;
 	}
@@ -94,7 +186,7 @@ static void refresh(void) {
 	} else {
 		snprintf(text, sizeof(text), "%.1f kHz", st.sample_rate / 1000.0);
 	}
-	lv_label_set_text(format_label, text);
+	set_format(text);
 	lv_label_set_text(status_label, tr("dac_playing"));
 }
 
@@ -238,23 +330,62 @@ void dacpage_init(gui_config_t *cfg) {
 	lv_obj_set_clickable(mode_row, true);
 	lv_obj_add_event_cb(mode_row, mode_row_cb, LV_EVENT_CLICKED, NULL);
 
+	// The equalisers the control centre cannot be asked for here (see the block
+	// above). Straight under the mode switch, ahead of the artwork, so on the
+	// V1's 320 px panel they are on screen without a scroll.
+	lv_obj_t *equaliser_pills;
+	settingsrow_pills(container, "dac_equalisers", &equaliser_pills);
+	eq_pill = settingsrow_pill(equaliser_pills, "eq_short", 0, eq_cb);
+	peq_pill = settingsrow_pill(equaliser_pills, "peq", 1, peq_cb);
+	mseb_pill = settingsrow_pill(equaliser_pills, "mseb", 2, mseb_cb);
+	paint_equaliser_pills();
+
 	// Straight into the flex flow, with no alignment of its own: the container
 	// settingsrow_page() builds already centres its children on the cross axis,
 	// and an object positioned by alignment leaves the flow and is measured as
 	// taking no space, so it would overlap the row above and steal its presses.
-	// The original 200 px mark nearly fills the V1's 240 px panel and pushes the
-	// status copy below the fold. Give the image a compact layout box as well as
-	// a smaller draw scale so it takes only the space it visibly occupies.
-	big_icon = lv_image_create(container);
-	lv_image_set_src(big_icon, &icon_dac_page);
-	int icon_size = compact ? 96 : 200;
-	int source_side = LV_MAX((int)icon_dac_page.header.w, (int)icon_dac_page.header.h);
-	lv_obj_set_size(big_icon, icon_size, icon_size);
-	lv_image_set_inner_align(big_icon, LV_IMAGE_ALIGN_CENTER);
-	if (source_side > 0) {
-		lv_image_set_scale(big_icon, (uint32_t)(LV_SCALE_NONE * icon_size / source_side));
+	//
+	// The mark is the regular panel's illustration only. The V1's 240x320 panel
+	// has to hold the mode switch, the equaliser card, the host's sample rate and
+	// the status copy in 248 px -- measured on the real layout engine, the last
+	// line of the note lands past the foot of the screen with even a 48 px mark
+	// in between. So on the compact panel the picture goes and the words stay:
+	// the switch and the status already say what the page is for, and a page
+	// whose status is half cut looks broken rather than decorative.
+	if (!compact) {
+		big_icon = lv_image_create(container);
+		lv_image_set_src(big_icon, &icon_dac_page);
+		const int icon_size = 200;
+		int source_side = LV_MAX((int)icon_dac_page.header.w, (int)icon_dac_page.header.h);
+		lv_obj_set_size(big_icon, icon_size, icon_size);
+		lv_image_set_inner_align(big_icon, LV_IMAGE_ALIGN_CENTER);
+		if (source_side > 0) {
+			lv_image_set_scale(big_icon, (uint32_t)(LV_SCALE_NONE * icon_size / source_side));
+		}
+		lv_obj_set_style_margin_top(big_icon, 24, 0);
 	}
-	lv_obj_set_style_margin_top(big_icon, compact ? 8 : 40, 0);
+
+	// The words themselves: the host's rate, then the status copy.
+	//
+	// On this panel they are centred in whatever is left under the equalisers, by
+	// a spacer on either side of them. With the mark gone there is about a
+	// hundred pixels of nothing below the pills, and two lines hanging from the
+	// top of it read as a page that stopped drawing halfway down. The rate line
+	// is hidden while nothing streams, so the status sits in the middle when idle
+	// and steps down one line when a stream starts -- rather than standing still
+	// while a line appears over it, which is what it looked like before.
+	//
+	// Spacers and not a box around the two labels: a box would be a clipped
+	// container, and a long error message is allowed to scroll the page. A
+	// spacer shrinks to nothing instead, and the two labels stay direct children
+	// of the page's own scrolling column.
+	//
+	// The regular panel keeps its stack under the mark: there the mark is what
+	// fills the page, and the words belong directly beneath it.
+	if (compact) {
+		spacer(container);
+		hide_empty_format = true;
+	}
 
 	format_label = lv_label_create(container);
 	lv_obj_set_width(format_label, lv_pct(100));
@@ -264,7 +395,7 @@ void dacpage_init(gui_config_t *cfg) {
 	lv_obj_add_style(format_label, &theme_style_text, 0);
 	lv_obj_set_style_text_align(format_label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_set_style_text_font(format_label, compact ? &font_ui_20_bold : &font_ui_24_bold, 0);
-	lv_obj_set_style_margin_top(format_label, compact ? 6 : 20, 0);
+	lv_obj_set_style_margin_top(format_label, compact ? 0 : 20, 0);
 	lv_label_set_text(format_label, "");
 
 	status_label = lv_label_create(container);
@@ -273,9 +404,12 @@ void dacpage_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(status_label, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(status_label, compact ? &font_ui_14 : &font_ui_22, 0);
-	lv_obj_set_style_margin_top(status_label, compact ? 2 : 10, 0);
+	lv_obj_set_style_margin_top(status_label, compact ? 0 : 10, 0);
 	lv_label_set_text(status_label, "");
 	status_normal_color = lv_obj_get_style_text_color(status_label, LV_PART_MAIN);
+	if (compact) {
+		spacer(container);
+	}
 
 	charge_btn = corner_button(cfg, 0, &icon_zap, &charge_glyph);
 	lv_obj_add_event_cb(charge_btn, charge_cb, LV_EVENT_CLICKED, NULL);

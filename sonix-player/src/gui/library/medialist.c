@@ -3630,14 +3630,17 @@ static void build_panel(panel_t *p, gui_config_t *cfg, bool is_tracks, int slot_
 	// out of the favourites or of this playlist, and leave the mode.
 	// sel_buttons_show() picks four of them.
 	p->sel_queue_btn = corner_button(p->corner, &icon_list_queue, sel_queue_cb, p);
-	p->sel_fav_btn = corner_button(p->corner, &icon_star_plus, sel_fav_cb, p);
+	// The heart, outlined for "add to the favourites" and filled for "take them
+	// out": the same pair the player and the control centre draw, instead of a
+	// star the rest of the interface no longer uses.
+	p->sel_fav_btn = corner_button(p->corner, &icon_heart_outline, sel_fav_cb, p);
 	p->sel_add_btn = corner_button(p->corner, &icon_list_plus, sel_add_cb, p);
 	// Deleting from the card, when that is allowed. Between "add to a
 	// playlist" and the way out, where a destructive action belongs: not next
 	// to the way out, which a thumb looking for it should reach without
 	// passing over this.
 	p->sel_delete_btn = corner_button(p->corner, &icon_trash, sel_delete_cb, p);
-	p->sel_unfav_btn = corner_button(p->corner, &icon_star_x, sel_unfav_cb, p);
+	p->sel_unfav_btn = corner_button(p->corner, &icon_heart_filled, sel_unfav_cb, p);
 	p->sel_unlist_btn = corner_button(p->corner, &icon_list_x, sel_unlist_cb, p);
 	p->sel_close_btn = corner_button(p->corner, &icon_close, sel_close_cb, p);
 	lv_obj_set_hidden(p->sel_queue_btn, true);

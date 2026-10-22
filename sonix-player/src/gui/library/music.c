@@ -471,8 +471,10 @@ static void tokyo_music_populate(void) {
 		add_shortcut_row(tokyo_shortcut_card, spec.label, spec.icon, spec.tone, spec.wrap_shortcut, spec.callback,
 						 row_idx++);
 	}
-	add_shortcut_row(tokyo_shortcut_card, "favourites", &icon_star, THEME_SEMANTIC_RED, false, favourites_cb,
-					 row_idx++);
+	// The heart, not the star: one mark for favourites across the player, the
+	// control centre and the library.
+	add_shortcut_row(tokyo_shortcut_card, "favourites", &icon_heart_filled, THEME_SEMANTIC_RED, false,
+					 favourites_cb, row_idx++);
 	if (tokyo_music_panel) {
 		lv_obj_update_layout(tokyo_music_panel);
 	}
@@ -840,7 +842,7 @@ void music_init(gui_config_t *cfg) {
 		playlists_icon = lv_obj_get_child(playlists_btn, 0);
 		lv_obj_add_event_cb(playlists_btn, playlists_cb, LV_EVENT_CLICKED, NULL);
 
-		lv_obj_t *favourites_btn = corner_button(cfg, 2, &icon_star_corner);
+		lv_obj_t *favourites_btn = corner_button(cfg, 2, &icon_heart_filled);
 		lv_obj_add_event_cb(favourites_btn, favourites_cb, LV_EVENT_CLICKED, NULL);
 
 		lv_obj_t *search_btn = corner_button(cfg, 3, &icon_search);

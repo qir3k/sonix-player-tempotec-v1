@@ -34,6 +34,13 @@
   a file and the computer's stream is not the player's own, but what is tuned
   is for the headphones -- neither is an exception. DSD from the host passes
   through untouched, as DoP does on a track.
+- **The three equalisers on the DAC page** - the status bar cannot be pulled
+  down while DAC mode holds the screen, so the page carries its own EQ, PEQ and
+  MSEB buttons: one card of three pills under the mode switch, lit while that
+  equaliser is on. Pills rather than three switch rows because the V1's panel is
+  240x320 -- four 56 px switch rows fill almost all of the page's 248 px and
+  would push the host's sample rate off it. Same settings, same calls as the
+  control centre's circles, so either place shows what the other did.
 - **Soundfield** - mid/side width from mono to twice natural, starting at 1.50
   for an audible widening when switched on (1.00 is neutral).
 - **Channel balance** - ±20 dB in half-decibel steps.
@@ -65,6 +72,7 @@
 - **Years, Playlists and Most played** - tiles on the Music page alongside All tracks, Albums, Artists, Album artists, Genres and Browse. Every local track play is counted in the library database, and Most played lists your most-listened tracks in descending play-count order. The Music page tiles can be reordered or hidden via **Music → Settings → Library → Rearrange main page**.
 - **Picture viewer** - JPEG (`.jpg`, `.jpeg`) and PNG (`.png`) images can be opened directly from the File Manager.
 - **Playlists** - create, rename, reorder, delete. A long press on a row of All tracks, Albums, Artists or Album artists starts a selection, and the chosen tracks, albums or artists go into the queue, the favourites or a playlist together. Inside a playlist or the favourites the selection also takes the chosen tracks out, after asking. In the file browser the same works on tracks and folders, a folder bringing everything under it. A backup writes an extended M3U to the card that other players can read; import reads one back, resolves missing entries by file name, and reports what it found.
+- **Favourites** - the heart marks a favourite everywhere it is seen or set: the player's marker in every layout, the control centre's button in the status bar, the Music page's tile and its corner button, and selection mode's two buttons. The one that adds is an outlined heart and the one that takes out is a filled one - the same pair the player draws - and the take-out button only appears inside the favourites, where a filled heart is what the rows already are.
 - **Deleting tracks from the card** - with **Music → Settings → Library → Allow deleting tracks** on, a selection on a track list offers a trash button, and the chosen files are deleted from the microSD card after a confirmation that names how many there are. The index, the favourites and the play counts let go of them at once instead of waiting for the next scan.
 - **Playback modes** - normal, repeat all, repeat one, shuffle, and a continuous shuffle that deals a fresh order each round.
 - **Album and folder chaining** - the next album starts when one ends, or the next folder in a depth-first walk when you came in through the browser. With **Play albums back to back** on, the circle-play menu of an album list also offers **Play albums in random order**: one record is drawn and played through, and the ones that follow are drawn at random too.
@@ -76,7 +84,7 @@
 - Artwork edge to edge across the top, and the same picture flipped, blurred and dimmed behind the controls.
 - **Alternative layout** - the progress bar becomes a **waveform**
 - **Immersive layout** - the picture itself, edge to edge across the whole panel: the sleeve fills the screen and is centre-cropped, at its own brightness, with nothing laid over it. The controls stand on a frosted band: the foot of the same photograph, lightly blurred, dimmed to the darkness the type reads on and tinted so the sleeve's colour survives in it, cut to the deck's rectangle - so the artwork is still seen through the glass, softly, while the names, the bar, the clocks and the transport are read on top; the chevron and the source marks take their chance in white over the sharp part. Anything holding artwork gets one - local files, podcasts, audiobooks, Subsonic and the streaming services alike - and without a picture the page falls back to its own colour with the controls in the theme's ink.
-- **Poster layout** - the sleeve scaled to the edges of the screen without the crop Immersive takes: the whole picture from side to side at the width of the panel, held at the top with square corners and nothing stretched, and the deck below it on its own opaque ground rather than over the artwork - as much of the sleeve as the deck leaves room for, at the largest size the screen allows. Anything holding artwork gets one, and without a picture the empty sleeve stands edge to edge in the cover's colour with the controls in the theme's ink; the favourite marker is a heart on this deck, kept a step smaller than the star it stands in for; and the foot of the sleeve fades into the deck over its last pixels instead of meeting the controls at a line.
+- **Poster layout** - the sleeve scaled to the edges of the screen without the crop Immersive takes: the whole picture from side to side at the width of the panel, held at the top with square corners and nothing stretched, and the deck below it on its own opaque ground rather than over the artwork - as much of the sleeve as the deck leaves room for, at the largest size the screen allows. Anything holding artwork gets one, and without a picture the empty sleeve stands edge to edge in the cover's colour with the controls in the theme's ink; the favourite marker is the same heart the player, the control centre and the library all draw, kept a step smaller on this deck; and the foot of the sleeve fades into the deck over its last pixels instead of meeting the controls at a line.
 - **Album Art Max layout** - the sleeve instead of the controls: the picture at the width of the panel with the status bar kept above it, the format, the shuffle mode, the menu and the heart in one row under that bar, and a minimal scrub bar along the foot of the artwork, with the artist, the track name and the place in the queue on a black strip below. There is no transport on the page - the physical keys are the transport, which the status bar's play/pause mark confirms - and double-tapping the left or right side of the picture is the previous or next track. Nothing is written over the photograph and the strip carries everything that names the track: the artist first, in the record's colour, then the title in the theme's ink, each given the width of its own words so that neither scrolls unless it has to. The scrub bar, the heart, the format line and the queue count are all drawn in the colour of the album art, so the page belongs to the record rather than to the theme. The bar is a thin band of colour that deepens towards the playhead, which is a tab rather than a knob. The two clocks appear in the middle of the picture, large, only while a track is being scrubbed (a finger on the bar or a held skip key), with the artwork dimmed behind them. *Scrub bar on the left* moves the bar up the left edge instead, where the thumb travels vertically. The V1's panel only, where every number in it is measured; the other boards keep the standard arrangement.
 - **Player layout** - Standard, Waveform, Alternative, Immersive, Poster or Album Art Max, in Settings → Music → Display options; the choice is remembered across restarts.
 - **Tint controls from album art** - optional, off by default, in the same Display options: the play/pause button and the played part of the progress bar take the main colour of the playing track's artwork, in every layout, while previous and next keep their colour. The colour is the one already worked out from the decoded artwork, so nothing extra is decoded and playback is untouched; a track with no artwork keeps the theme's colours.
@@ -92,6 +100,12 @@
 shows kept on the device. Downloaded episodes land in the card's `Podcast`
 folder, which also takes podcasts copied there by hand — see
 [Podcasts on the card](#podcasts-on-the-card).
+- **Episodes heard and unheard** - an episode played to its end is ticked and
+dimmed in the list, kept in `podcast.db` by episode id, so it reads the same
+whether it was streamed or downloaded. A long press marks one heard (or heard
+and-not) by hand, for what was finished somewhere else or marked by mistake.
+The order button in the heading turns an episode list round: newest first, or
+oldest first, remembered in the config and shared with the card's list.
 - **Radio** - the radio-browser.info directory by language, country or genre,
 plus search, favourites, recently played, and **My stations** read from a
 `radio.txt` you write yourself in the card root. MP3 and AAC, HTTPS with real
@@ -143,6 +157,11 @@ a self-signed certificate), and HLS.
   the artwork embedded in the episode files' own tags.
 - **Played as podcasts** - the now-playing page marks an episode from this
   folder as a podcast, with its own skip buttons and sleep timer.
+- **Heard marks and order here too** - a downloaded episode carries the same
+  tick and the same dimming as the streamed one, and the long press marks it
+  heard or unheard. A file copied onto the card by hand has no catalogue id, so
+  it offers only Delete. The heading's order button turns this list round, and
+  the setting is the one the online episode list uses.
 
 ## Audiobooks
 

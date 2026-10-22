@@ -17,7 +17,7 @@ A clear and concise description of what you want to happen.
 **Describe alternatives you've considered**
 A clear and concise description of any alternative solutions or features you've considered.
 
-**Does the stock HiBy player have it?**
+**Does the stock TempoTec player have it?**
 [Yes / No / Don't know] If yes, describe how it works there.
 
 **Additional context**

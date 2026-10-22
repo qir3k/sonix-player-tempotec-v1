@@ -35,7 +35,8 @@ If applicable, add screenshots to help explain your problem.
 
 **Sonix Player info**
  - Operating system version: [e.g. 1.1.0]
- - Device: [TempoTec Variations V1 / R1 / R3 Pro II]
+ - Device: TempoTec Variations V1
+ - Build: the commit in `BUILD-REPORT.txt` of the firmware artifact, and the branch it was built from if it was not `main`
 
 **Additional context**
 Add any other context about the problem here.

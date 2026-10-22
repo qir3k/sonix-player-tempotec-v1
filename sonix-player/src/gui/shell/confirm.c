@@ -116,6 +116,13 @@ static lv_obj_t *make_button(lv_obj_t *parent, const char *text, bool accent, lv
 	lv_label_set_text(label, tr(text));
 	lv_obj_set_style_text_font(label, &font_ui_24, 0);
 	lv_obj_set_style_text_color(label, accent ? theme_on_accent() : theme()->text_primary, 0);
+	// The label is as wide as the button's inside, so centring the object is not
+	// enough: the words inside it are laid out separately, and their default
+	// alignment is the left edge. A two-line word would still start there, and
+	// "Leave" sat 13 px from one edge and 30 from the other. The title and the
+	// message above the buttons already say this; the buttons were the one place
+	// that did not.
+	lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_center(label);
 
 	if (label_out) {

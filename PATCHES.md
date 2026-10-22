@@ -138,12 +138,10 @@ deck. The split of the panel is the standard arrangement's own
 (`compact_deck_height()`), so the sleeve is as large as the deck allows and no
 larger; the chrome on the deck keeps the theme's colours while the chevron and
 the source marks take their chance in white over the sharp part, as they do
-over every sleeve in the player. The favourite marker is the heart rather than
-the star here, as it is in Immersive, but drawn a step under the star's size
-(`POSTER_HEART_SCALE`, 22 px against 26 on the V1): the heart fills more of its
-32 px canvas than the star does, and on a deck that is a row of type rather
-than a picture to stand over, the smaller mark reads as a marker and not as a
-second headline.
+over every sleeve in the player. The favourite marker is the same heart every
+layout draws, a step under the usual size here (`POSTER_HEART_SCALE`, 22 px
+against 26 on the V1): on a deck that is a row of type rather than a picture to
+stand over, the smaller mark reads as a marker and not as a second headline.
 
 The one edge the arrangement leaves -- where the foot of the sleeve meets the
 top of the deck -- is softened rather than drawn: a gradient from nothing to
@@ -417,7 +415,7 @@ grid starts directly under the status bar, the six tiles sharing the height the
 header took. It is single-hue like Amber, so the places that kept Amber
 monochrome — the status glyphs, the codec colours, the balanced-output gold,
 the Now Playing deck, the screensaver's field — ask `theme_is_monochrome()`
-now, and the deck's roles come back as steps of grey: `#888888` for the star
+now, and the deck's roles come back as steps of grey: `#888888` for the heart
 and the overflow, `#606060` for the idle shuffle. A white accent is also the
 first one white type does not read on, so whatever is drawn on an accent fill —
 a selected pill, a confirm button, the keyboard's accept key, the knob of a
@@ -894,8 +892,8 @@ The confirmation comes first and carries the count. A row is deletable when it
 names a path under the card root and is not one track of a cue sheet --
 `sheet.cue?track=3` is not something to `unlink()`, and the sheet is somebody
 else's selection. Files that go are handed to `library_remove_tracks()`
-(`src/system/library/library.c`), which forgets the media rows, the star, the
-play count and the saved position for exactly those paths, then prunes the links
+(`src/system/library/library.c`), which forgets the media rows, the favourite,
+the play count and the saved position for exactly those paths, then prunes the links
 and the names left empty and bumps `GEN_MEDIA`. Nothing waits for the next
 scan: the list the user just cleaned would otherwise keep answering with rows
 for files that are no longer there.
@@ -1014,3 +1012,114 @@ The two strings are appended to all eleven `.ini` files in
 block. Everything else this screen says -- `podcast_one_episode`,
 `podcast_episodes_2`, `podcast_delete_download`, the month names -- was
 already translated.
+
+## Podcasts: heard marks
+
+An episode that has been heard to its end is marked in the database, ticked in
+the list and drawn dimmed, and the mark survives a card swap and a reboot. The
+hard part is not the mark but the moment: the player is a **sheet on
+`lv_layer_top()`**, not a screen, so an episode that ends while it is up leaves
+the list underneath loaded the whole time. No `SCREEN_LOADED` ever arrives to
+re-read the row, and the tick was only visible after leaving the podcast
+section and coming back. The manual long press was the case that worked,
+because it redraws the row it changed.
+
+### The store
+
+`PODCAST_PLAYED(episode_id INTEGER PRIMARY KEY)` lives in the same
+`<card>/.local/podcast.db` as the followed podcasts, in a table of its own: a
+followed show is per podcast, a heard episode is per episode, and an episode
+belongs to a show the listener may never have followed. Separate tables also
+mean the follow mark and the heard marks cannot break each other's writes.
+
+The key is the catalogue's 64-bit episode id, not a path: the same episode is a
+URL when streamed, a file in the cache for a while, and a file under `Podcast`
+when kept -- only the id is shared by all three. A file copied onto the card by
+hand has no id, so it is never marked and its menu offers only Delete.
+
+`podcastplayed.c` holds the whole set in memory, sorted, because an episode
+list asks about it on every row it binds and a scroll binds a dozen: a query
+per row would put SQLite in the middle of a finger's movement. Lookups are a
+binary search, an insert is one `memmove`, and the ceiling is ten thousand
+episodes -- several years of listening -- past which the read stops rather than
+the playback. Each change writes its one row immediately (`INSERT OR IGNORE` /
+`DELETE`), so switching the player off right after the last episode ends cannot
+lose the mark. The file's identity is remembered, and a database replaced under
+the player is noticed and read again.
+
+### Who marks, and who redraws
+
+`handle_track_finished()` in `player.c` marks the episode when `audio.c`'s
+completion says the file itself ran out -- a stop or a skip is not an ending --
+and it does so before the "stop at the end of the episode" return, so an
+episode that ends with that option on is counted too. The long press on a row
+marks one by hand, for what was finished somewhere else or marked by mistake.
+
+The end-of-episode hook then tells the two lists, each only if it is the one on
+screen: `podcastpage_episode_heard()` rebinds the single row that shows that
+episode, and `podcastsaved_episode_heard()` redraws its rows only when the mark
+of that episode actually changed. Both do nothing when the list is elsewhere --
+opening it reads the mark from the database anyway. That is one string compare
+and one row bind per finished episode, with no timer and no polling.
+
+The order button in the heading (newest first / oldest first) is the same
+setting on both lists, because the order is a property of the reader rather
+than of one screen.
+
+## The DAC page on a 240 px panel
+
+The control centre cannot be pulled down while DAC mode holds the screen, so
+the page now carries the three equalisers itself: one card of three pills --
+EQ, PEQ and MSEB -- under the mode switch, lit in the accent colour while that
+equaliser is on, calling the same functions the control centre's circles call.
+A tap here and a tap there leave the same setting and the same picture.
+
+They are pills and not three switch rows because of the arithmetic: the V1's
+panel is 240x320, the page has 248 px under the heading, and a full-width
+switch row is 56 px. The mode switch plus three of them is 236 px before the
+sample rate -- the one number the page exists to show -- is drawn. The card is
+about 81 px, and on the compact panel the decorative mark is dropped as well:
+with even a 48 px mark between the card and the words, the second line of the
+note fell past the foot of the screen, and a half-cut status line reads as a
+bug rather than as decoration.
+
+### The words under the equalisers
+
+The host's rate and the status copy used to hang from the top of whatever was
+left, over an empty rate line that still held its 20 px even when there was no
+rate, so the status never moved when a stream started -- and the two lines sat
+in the upper third of the empty space. Now two transparent spacers, one above
+and one below, grow to share it, and the rate line is hidden while it is
+blank. Measured on the real LVGL layout engine with the V1 profile:
+
+| state | before | after |
+|---|---|---|
+| off (2-line note) | 169 | 169 |
+| waiting for the computer | 169 | 178 |
+| 384 kHz / 44.1 kHz / DSD | rate 145, status 169 | rate 166, status 190 |
+
+So the status now steps down a line when the host starts streaming, instead of
+standing still while a line appears above it. Spacers and not a box: a box
+would clip, and a long error message is still allowed to scroll the page. The
+480x720 layout keeps its stack under the mark, which is what fills that page.
+
+The bit depth is deliberately absent. The driver hands up 32-bit words whatever
+the host negotiated, so a "24 bit" badge would be a lie on the one page that
+exists to report the stream; DSD is already named as DSD.
+
+The "leave DAC mode?" guard now centres its button labels: the label was as
+wide as the button's inside and its text was still laid out from the left edge,
+which left "Leave" 13 px from one side and 30 from the other.
+
+## One favourite mark
+
+The heart is the favourite mark everywhere the player draws one: the player in
+**every** layout (it was Immersive and Poster only, with the star left in the
+Standard, Waveform and Alternative decks), the control centre's button in the
+status bar, the Music page's favourites tile and its corner button, the home
+grid's tile, selection mode's add and take-out buttons, and the radio page's
+favourites button.
+
+The star survives only as unused images in `icons.c`; no `.c` file refers to
+it. Nothing else had to change: the corner buttons already recolour their
+glyph from the theme, and `fonts_choices()` was untouched.

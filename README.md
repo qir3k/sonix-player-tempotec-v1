@@ -1,15 +1,22 @@
 ![Sonix Player for TempoTec Variations V1 with the Tokyo Night main menu](screenshots/readme-banner.png)
 
-This repository is a community port of the original **[Sonix Player](https://github.com/Jepl4r/sonix-player)** project by **[Jepl4r](https://github.com/Jepl4r)** — a replacement music player for the HiBy R3 Pro II and HiBy R1 — to the **TempoTec Variations V1**. The player and the firmware packer come from that project; this fork adds the V1 board profile, the V1 packaging path and the V1 documentation. See [Credits](#credits).
+**Sonix Player for the TempoTec Variations V1.** This repository is **[qir3k](https://github.com/qir3k)'s fork** of the V1 port by **[mr-f0xx](https://github.com/mr-f0xx/sonix-player-tempotec-v1)**, which carried **[Jepl4r](https://github.com/Jepl4r)'s Sonix Player** — a replacement music player for the HiBy R3 Pro II and HiBy R1 — to the **TempoTec Variations V1**. The player, the packer and the interface are that work; this fork follows it upstream and adds what its owner wanted on the device.
+
+**What this fork adds on top of the port:**
+
+- **The equalisers on the DAC page** — EQ, PEQ and MSEB as one card of pills, reachable while DAC mode holds the screen.
+- **Podcasts: heard marks and the order of the list** — an episode played to its end is ticked and dimmed, kept by episode id in `podcast.db`; a long press marks one by hand; the heading's order button turns the list round, and both episode lists share the setting.
+- **One favourite mark** — the heart, everywhere: the player in every layout, the control centre, the Music page and selection mode.
+- **A trimmed personal build** — a branch that ships English and Polish with MiSans only, and builds its own image. [How it is kept apart from the upstream tree](https://github.com/qir3k/sonix-player-tempotec-v1/blob/personal/docs/PERSONAL-BUILD.md).
 
 The firmware builder starts with an official V1 update package, replaces the stock music player and its interface with Sonix, then repackages the update as `v1.upt`.
 
-This is not an official TempoTec or HiBy release. **The port has been tested on physical TempoTec Variations V1 hardware and works perfectly on the tested device.** It targets the **TempoTec Variations V1 only**; compatibility with the V1-A or other players in the Variations family is not established.
+This is not an official TempoTec or HiBy release. **It has been tested on physical TempoTec Variations V1 hardware and works on the tested device.** It targets the **TempoTec Variations V1 only**; compatibility with the V1-A or other players in the Variations family is not established.
 
 
 ## Previews
 
-Interface previews of the stock UI of Sonix, rendered at the V1's native 240 × 320 resolution. Click any picture to open it full size. (This is not the default font neither the color)
+Interface previews of the stock UI of Sonix, rendered at the V1's native 240 × 320 resolution. Click any picture to open it full size. The font and the colours shown are not the defaults.
 
 <table>
   <tr>
@@ -183,9 +190,9 @@ Showcase of **OLED** appearance: true black backgrounds with white as the accent
 
 - [Target device](#target-device)
 - [Features](#features)
-- [Screenshots](#screenshots)
+- [Previews](#previews)
   - [Tokyo Night theme](#tokyo-night-theme)
-  - [Ember theme](#ember-theme)
+  - [Amber on black theme](#amber-on-black-theme)
   - [OLED theme](#oled-theme)
 - [Build a firmware image](#build-a-firmware-image)
 - [Install or restore firmware](#install-or-restore-firmware)
@@ -215,7 +222,7 @@ The player UI is built with LVGL 9.6 and adapted for the V1's small display. The
 
 ## Features
 
-The project includes a local music library and file browser, album artwork, playlists, lyrics, audiobooks, DSP controls, an EPUB reader, and a Gearboy Game Boy / Game Boy Color emulator. The player also contains code for streaming and network features such as Bluetooth audio, AirPlay, DLNA and Wi-Fi file transfer.
+It is a local music library and file browser with album artwork, playlists, lyrics, audiobooks, **podcasts** (the Podcast Index catalogue and the episodes kept on the card), DSP controls, an EPUB reader and a Gearboy Game Boy / Game Boy Color emulator. It also runs as a **USB DAC** for a computer, with the graphic EQ, PEQ and MSEB applied to what the computer sends, and carries the streaming and network side: Tidal, Qobuz, Subsonic/Gonic, internet radio, Bluetooth audio in and out, AirPlay, DLNA and Wi-Fi file transfer.
 
 Local audio decoder inputs include WAV, FLAC, MP3, Ogg Vorbis, Opus, M4A/M4B/MP4, AAC, ALAC, WavPack, APE, AIFF/AIFC, CAF and DSD (DSF/DFF) files. DSP features include a 10-band graphic equalizer, parametric EQ, MSEB, crossfeed, channel balance and ReplayGain. The graphic EQ, PEQ and MSEB also run on internet radio stations.
 
@@ -226,6 +233,24 @@ The boot screen is a setting too (Settings → Appearance → Boot screen): **Re
 Rounded screen corners are optional (Settings → Appearance → Rounded corners), off by default. On the V1 the arc is 16 px, sized to the 2" 240×320 panel's glass.
 
 See [FEATURES.md](FEATURES.md) for a longer feature list. Streaming services also require valid credentials and may depend on third-party service availability.
+
+## Build a firmware image
+
+The image is built by GitHub Actions, not on the machine holding this checkout: the device binary needs a MIPS toolchain this repository builds from `sonix-player/rockboxdev/`, plus `7z`, `squashfs-tools` and `genisoimage`.
+
+1. **Actions → Build TempoTec V1 firmware → Run workflow.**
+2. Fill it in:
+   - `stock_firmware_url` — an official TempoTec V1 update. Leave the default, or give a link or file of your own.
+   - `acknowledge_community_build` — tick it; the run stops without it.
+   - `build_ref` — a branch, tag or commit to build. Empty builds the ref the dialog was opened on.
+   - `publish_release_tag` — empty unless a release is being cut; it uploads `v1.upt` and `v1_md5.txt` onto that release.
+3. The first run compiles and caches the toolchain and takes 30–90 minutes; later runs are far quicker.
+
+The workflow downloads the stock image, checks that its kernel is untouched, builds the player with `make target`, packs the image with `sonix-packer/sonix_firmware_packer.sh`, validates the result, and uploads an artifact named after the commit it really holds — `sonix-tempotec-v1-<sha>`, kept for 14 days. Inside are `v1.upt` and `v1_md5.txt`, `BUILD-REPORT.txt` (the commit and both checksums), `OUTPUT-VALIDATION.txt`, `STOCK-VALIDATION.txt`, `BOOT-SCRIPT-REPORT.txt` when the packer wrote one, and the three binaries.
+
+Pushes to `main`, to `arena/**` and to tags build by themselves; any other branch is built from the dialog with `build_ref` naming it.
+
+The trimmed image is built from this fork's `personal` branch, and none of it is in `main` or `dev`: that branch carries `sonix-packer/personal_trim.sh`, names itself in its own copy of the workflow's push triggers, and calls the script from the packer just before the filesystem is built. The languages and fonts are pruned from the staged image, never from the tree, so a merge from upstream never meets a deleted file. [The three branches, and the trim](https://github.com/qir3k/sonix-player-tempotec-v1/blob/personal/docs/PERSONAL-BUILD.md).
 
 ## Install or restore firmware
 
@@ -273,7 +298,7 @@ tls_verify = relaxed
 
 **Relaxed** forgives a certificate whose issuer is not in the trust store, and nothing else: the certificate still has to name the server being contacted, and its dates still have to cover the current date, so an expired certificate or one issued to a different name fails and says so. A certificate error that names a date usually means the player's clock is wrong, not that the mode is missing.
 
-The setting is global — it applies to every `https://` connection the player opens, radio stations included — because one TLS context serves them all. Anyone using a public network should leave it at the default, `strict`. A private certificate authority is better handled with `[network] ca_bundle` above, which keeps checking on: export the CA's own certificate, copy that file to the card, and point `ca_bundle` at it.
+The setting is global — it applies to every `https://` connection the player opens, radio stations included — because one TLS context serves them all. Anyone using a public network should leave it at the default, `strict`. A private certificate authority is better handled with the `[network] ca_bundle` setting, which keeps checking on: export the CA's own certificate, copy that file to the card, and point `ca_bundle` at it.
 
 For a private development build, `sonix-player/tools/seal_streamkeys.py` can place a sealed credentials file in the assets before compilation. This format is **obfuscation, not secure encryption**: the key is compiled into the player binary and can be recovered by someone who analyzes it. Never publish a binary containing credentials you do not intend to disclose.
 
@@ -287,6 +312,36 @@ No application API key is needed. Prefer HTTPS; credentials stay in memory unles
 
 See [setup, design, limitations and the V1 validation checklist](docs/subsonic.md), and [host integration tests](sonix-player/tests/README.md).
 
+## Build from source
+
+**The simulator (host).** LVGL plus SDL2, FreeType and the system's opusfile and WavPack; no device and no cross-compiler.
+
+```bash
+sudo apt install build-essential pkg-config libsdl2-dev libfreetype-dev \
+    libopusfile-dev libwavpack-dev libasound2-dev
+cd sonix-player
+make host                                  # ./sonix_player_host, 480x720
+SONIX_PANEL=240x320 ./sonix_player_host    # the V1's layout and fonts
+```
+
+**The device binary (target).** Needs the MIPS toolchain built from `sonix-player/rockboxdev/`; the workflow caches it, and building it by hand is a long first run.
+
+```bash
+cd sonix-player
+make target        # sonix_player, sonix_player_debug and sonix_launch
+```
+
+**Headless suites.** Each one has its own target and runs on the host, against the real database or the real LVGL layout rather than a mock:
+
+```bash
+make -C sonix-player/tests podcastplayed
+make -C sonix-player/tests mostplayed
+make -C sonix-player/tests eq
+make -C sonix-player/tests ui
+```
+
+[sonix-player/tests/README.md](sonix-player/tests/README.md) lists every suite and what it pins.
+
 ## Project files and documentation
 
 - `sonix-player/` — player sources, LVGL configuration, launcher and build system.
@@ -295,6 +350,8 @@ See [setup, design, limitations and the V1 validation checklist](docs/subsonic.m
 - `docs/subsonic.md` — Subsonic/Gonic setup, RAM transport and hardware validation.
 - `docs/sgm31324-led-control.md` — driving the RGB status LED directly over I²C.
 - `sonix-player/tools/sonix-bugreport.sh` — one-file diagnostic bundle, run on the device over ADB.
+- `sonix-player/tests/README.md` — the headless suites, and what each one pins.
+- `.github/workflows/build-tempotec-v1.yml` — the firmware build described above.
 - `FEATURES.md` — detailed feature notes.
 - `PATCHES.md` — device-porting and implementation notes.
 - `LICENSE` — GNU General Public License, version 3. Third-party components retain their own licenses.
@@ -303,9 +360,10 @@ For bug reports, include the exact model, the firmware build/commit and relevant
 
 ## Credits
 
-This port exists because of the original **[Sonix Player](https://github.com/Jepl4r/sonix-player)** project. Almost everything in `sonix-player/` and `sonix-packer/` is that project's work, carried here and adapted; what this fork adds is the TempoTec V1 support and the documentation for it. The original is licensed under the GPL-3.0, and so is this fork.
+This player exists because of the original **[Sonix Player](https://github.com/Jepl4r/sonix-player)** project: almost everything in `sonix-player/` and `sonix-packer/` is that work, carried here and adapted. The TempoTec V1 port is mr-f0xx's; this fork follows it upstream and adds what is listed at the top of this file. The original is licensed under the GPL-3.0, and so is this fork.
 
 - **[Jepl4r](https://github.com/Jepl4r)** — author and maintainer of Sonix Player, and the source of the player, the packer and the interface this port is built on.
+- **[mr-f0xx](https://github.com/mr-f0xx)** — the TempoTec Variations V1 port this fork is built on: the V1 board profile, the V1 packaging path, and the documentation this README grew from.
 - **[Tartarus6](https://github.com/Tartarus6)**, **[noisetta](https://github.com/noisetta)**, **[endgame47](https://github.com/endgame47)**, **[hkhrithik007](https://github.com/hkhrithik007)** — the people named in the original project's own "Special thanks" list.
 - **[Hinatai](https://github.com/Hinatai)**, **[KrajzegaX](https://github.com/KrajzegaX)**, **[noemdespertis](https://github.com/noemdespertis)** and everyone else on the upstream [contributor list](https://github.com/Jepl4r/sonix-player/graphs/contributors), whose commits this fork inherits.
 - The HiBy and TempoTec communities — the people who test, report, translate and explain both projects — who do the work no commit log shows.

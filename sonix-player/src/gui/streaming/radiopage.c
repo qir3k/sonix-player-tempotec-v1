@@ -1381,10 +1381,10 @@ void radiopage_init(gui_config_t *cfg) {
 	player_sheet_attach_drag(hub_container, true);
 
 	// Top right, in the corner every page of this player keeps its shortcuts:
-	// the starred stations, the ones played most recently to their left, and
-	// the search to the left of those. Same buttons, same order and the same
-	// spacing as the Music page.
-	hub_favourites_btn = corner_button(cfg, 0, &icon_star_corner);
+	// the favourite stations, the ones played most recently to their left, and
+	// the search to the left of those. Same buttons, same order, the same
+	// spacing and the same heart as the Music page.
+	hub_favourites_btn = corner_button(cfg, 0, &icon_heart_filled);
 	lv_obj_add_event_cb(hub_favourites_btn, favourites_cb, LV_EVENT_CLICKED, NULL);
 
 	hub_recent_btn = corner_button(cfg, 1, &icon_radio_recent);
