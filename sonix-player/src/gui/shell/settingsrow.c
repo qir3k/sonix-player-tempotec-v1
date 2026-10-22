@@ -116,8 +116,12 @@ lv_obj_t *settingsrow_title(lv_obj_t *screen, gui_config_t *cfg, const char *tex
 	// instead.
 	lv_obj_set_height(label, lv_font_get_line_height(&font_ui_32));
 	fit_title(label, cfg->screen_width - left - cfg->padding - button - air);
+	// Four pixels higher than it used to sit: the title's line box carries more
+	// air above the capitals than the chevron does above its own, so aligning
+	// their tops put the words a few pixels low against the "<". The header is
+	// one row, and the words belong on the chevron's middle.
 	lv_obj_align(label, LV_ALIGN_TOP_LEFT, left,
-				 cfg->top_bar_height + cfg->padding + (cfg->screen_width < 320 ? 6 : 10));
+				 cfg->top_bar_height + cfg->padding + (cfg->screen_width < 320 ? 2 : 6));
 
 	if (title_count == 0) {
 		fonts_register_change(refit_titles);
