@@ -98,8 +98,8 @@
 
 // The band at the bottom of the main menu where the opening pull has to start,
 // and the travel that hands the sheet over to the finger.
-#define CF_EDGE_H 56
-#define CF_EDGE_COMMIT_PX 12
+#define CF_EDGE_H 80
+#define CF_EDGE_COMMIT_PX 8
 
 // The grip at the top: how far down it sits and how big a target it is.
 #define CF_BAR_TOP 2
