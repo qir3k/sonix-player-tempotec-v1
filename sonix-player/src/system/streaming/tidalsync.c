@@ -6,6 +6,7 @@
 
 #include "src/system/core/utils.h"
 #include "src/system/core/lang.h"
+#include "src/system/streaming/listcache.h"
 
 // How many favourites fit in the local mirror. Beyond this the oldest show an
 // empty star until touched: the price of not asking Tidal whether each track is
@@ -173,8 +174,20 @@ static void do_playlists_load(const job_t *job) {
 	}
 }
 
+// A playlist's rows and the account's list of playlists are both on the card
+// from a visit to the Tidal page; a write here makes them wrong.
+static void forget_playlist_caches(const char *playlist_id) {
+	char key[64];
+	listcache_tidal_playlist_key(playlist_id, key, sizeof(key));
+	listcache_drop(key);
+	listcache_drop(LISTCACHE_TIDAL_PLAYLISTS);
+}
+
 static void do_playlist_add(const job_t *job) {
 	bool ok = tidal_playlist_add_track(job->playlist_id, job->track_id);
+	if (ok) {
+		forget_playlist_caches(job->playlist_id);
+	}
 	if (job->done) {
 		job->done(ok, ok ? NULL : tidal_last_error(), job->user);
 	}
@@ -190,10 +203,12 @@ static void do_playlist_create(const job_t *job) {
 	}
 	if (ok) {
 		// The cached list is one playlist out of date; force a reload so the
-		// picker shows the new one next time it opens.
+		// picker shows the new one next time it opens -- and the copy on the
+		// card, which the Tidal page reads.
 		pthread_mutex_lock(&lock);
 		playlists_loaded = false;
 		pthread_mutex_unlock(&lock);
+		forget_playlist_caches(id);
 	}
 	if (job->done) {
 		job->done(ok, ok ? NULL : tidal_last_error(), job->user);
@@ -215,6 +230,7 @@ static void do_playlist_track_remove(const job_t *job) {
 		pthread_mutex_lock(&lock);
 		playlists_loaded = false;
 		pthread_mutex_unlock(&lock);
+		forget_playlist_caches(job->playlist_id);
 	}
 	if (job->done) {
 		job->done(ok, ok ? NULL : tidal_last_error(), job->user);
@@ -234,6 +250,7 @@ static void do_playlist_remove(const job_t *job) {
 		pthread_mutex_lock(&lock);
 		playlists_loaded = false; // the cached list still holds the deleted one
 		pthread_mutex_unlock(&lock);
+		forget_playlist_caches(job->playlist_id);
 	}
 	if (job->done) {
 		job->done(ok, ok ? NULL : tidal_last_error(), job->user);

@@ -29,6 +29,7 @@
 #include "src/system/playback/playlist.h"
 #include "src/system/device/system.h"
 #include "src/system/streaming/tidal.h"
+#include "src/system/streaming/listcache.h"
 #include "src/system/streaming/tidalcache.h"
 #include "src/system/streaming/streamturn.h"
 #include "src/system/streaming/tidalsync.h"
@@ -371,6 +372,7 @@ static void do_track_add(void *user) {
 		return;
 	}
 	long id = result_tracks[menu_index].id;
+	listcache_drop(LISTCACHE_TIDAL_FAV_TRACKS); // the favourites list just changed
 	tidalsync_favorite_toggle(id, true, row_added_done, NULL);
 }
 
@@ -379,6 +381,7 @@ static void do_track_remove(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
+	listcache_drop(LISTCACHE_TIDAL_FAV_TRACKS);
 	tidalsync_favorite_toggle(result_tracks[menu_index].id, false, row_sync_done, (void *)(intptr_t)1);
 }
 
@@ -387,6 +390,7 @@ static void do_album_add(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
+	listcache_drop(LISTCACHE_TIDAL_FAV_ALBUMS);
 	tidalsync_album_favorite(result_albums[menu_index].id_text, true, row_added_done, NULL);
 }
 
@@ -395,6 +399,7 @@ static void do_album_remove(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
+	listcache_drop(LISTCACHE_TIDAL_FAV_ALBUMS);
 	tidalsync_album_favorite(result_albums[menu_index].id_text, false, row_sync_done, (void *)(intptr_t)1);
 }
 
@@ -403,6 +408,7 @@ static void do_artist_add(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
+	listcache_drop(LISTCACHE_TIDAL_FAV_ARTISTS);
 	tidalsync_artist_favorite(result_artists[menu_index].id, true, row_added_done, NULL);
 }
 
@@ -411,6 +417,7 @@ static void do_artist_remove(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
+	listcache_drop(LISTCACHE_TIDAL_FAV_ARTISTS);
 	tidalsync_artist_favorite(result_artists[menu_index].id, false, row_sync_done, (void *)(intptr_t)1);
 }
 
@@ -421,6 +428,14 @@ static void do_playlist_track_remove(void *user) {
 	if (menu_index < 0 || menu_index >= result_count || !list_playlist_id[0]) {
 		return;
 	}
+	{
+		// Both files the write made wrong: this playlist's rows, and the
+		// account's list with its track count.
+		char key[64];
+		listcache_tidal_playlist_key(list_playlist_id, key, sizeof(key));
+		listcache_drop(key);
+		listcache_drop(LISTCACHE_TIDAL_PLAYLISTS);
+	}
 	tidalsync_playlist_track_remove(list_playlist_id, menu_index, row_sync_done, (void *)(intptr_t)1);
 }
 
@@ -429,7 +444,315 @@ static void do_playlist_delete(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
+	listcache_drop(LISTCACHE_TIDAL_PLAYLISTS);
 	tidalsync_playlist_remove(result_playlists[menu_index].id, row_sync_done, (void *)(intptr_t)1);
+}
+
+// ---------------------------------------------------------------------------
+// choosing several rows
+//
+// A long press starts it, as on the Music page: a tap then chooses a row or lets
+// it go, letting go of the last one ends it, and the list's corner trades its
+// two buttons for the action this kind of list can take in bulk and the way out.
+//
+// What can be done in bulk is exactly what the row's own three dots do, with two
+// exceptions that are not bulk operations in disguise: a playlist's tracks are
+// removed by position (each removal renumbers the ones after it) and a playlist
+// itself is deleted outright, so both stay single-row actions. Lists with no
+// row action at all -- a search's albums, the showcases -- take no selection.
+//
+// tidalsync takes one job at a time and the newest submission replaces the one
+// waiting, so the chosen ids are walked one after another, each starting when the
+// previous answer comes back. Firing them all at once would perform exactly one
+// of them.
+// ---------------------------------------------------------------------------
+
+static bool selecting;
+// One flag per row of the list on screen, or NULL outside the mode.
+static unsigned char *chosen;
+static int chosen_count;
+
+// The row objects of the current fill, so a tick can be put on one without
+// rebuilding the list (which would lose the scroll position under the finger).
+static lv_obj_t *row_objs[TIDAL_MAX_HELD];
+static lv_obj_t *row_checks[TIDAL_MAX_HELD];
+
+static lv_obj_t *sel_action_btn;
+static lv_obj_t *sel_close_btn;
+// The layout numbers the list page's heading needs when the corner is taken.
+static gui_config_t *page_cfg;
+
+static void update_corner_buttons(void);
+
+static void selection_stop(void);
+
+static void row_tick_put(int index, bool on) {
+	if (index < 0 || index >= TIDAL_MAX_HELD || !row_objs[index]) {
+		return;
+	}
+	lv_obj_t *check = row_checks[index];
+	if (!check) {
+		check = lv_image_create(row_objs[index]);
+		lv_obj_set_size(check, 32, 32);
+		lv_image_set_src(check, &icon_circle_check);
+		lv_obj_add_style(check, &theme_style_icon, 0);
+		lv_obj_set_style_image_recolor(check, theme()->accent, 0);
+		lv_obj_set_style_image_recolor_opa(check, LV_OPA_COVER, 0);
+		lv_image_set_scale(check, 156); // 36 px source -> about 22 px
+		lv_obj_set_event_bubble(check, true);
+		row_checks[index] = check;
+	}
+	lv_obj_set_hidden(check, !on);
+}
+
+static void selection_stop(void) {
+	if (!selecting) {
+		return;
+	}
+	selecting = false;
+	for (int i = 0; i < TIDAL_MAX_HELD; i++) {
+		if (row_checks[i]) {
+			lv_obj_set_hidden(row_checks[i], true);
+		}
+	}
+	free(chosen);
+	chosen = NULL;
+	chosen_count = 0;
+	update_corner_buttons();
+}
+
+// What the list on screen can do in bulk, or BULK_NONE when it can do nothing.
+typedef enum {
+	BULK_NONE,
+	BULK_TRACK_ADD,
+	BULK_TRACK_REMOVE,
+	BULK_ALBUM_ADD,
+	BULK_ALBUM_REMOVE,
+	BULK_ARTIST_ADD,
+	BULK_ARTIST_REMOVE,
+} bulk_kind_t;
+
+static bulk_kind_t bulk_kind_for(job_kind_t kind) {
+	switch (row_menu_kind(kind)) {
+	case ROW_MENU_TRACK_ADD:
+		return BULK_TRACK_ADD;
+	case ROW_MENU_TRACK_REMOVE:
+		return BULK_TRACK_REMOVE;
+	case ROW_MENU_ALBUM_ADD:
+		return BULK_ALBUM_ADD;
+	case ROW_MENU_ALBUM_REMOVE:
+		return BULK_ALBUM_REMOVE;
+	case ROW_MENU_ARTIST_ADD:
+		return BULK_ARTIST_ADD;
+	case ROW_MENU_ARTIST_REMOVE:
+		return BULK_ARTIST_REMOVE;
+	default:
+		return BULK_NONE;
+	}
+}
+
+static bool selection_start(void) {
+	if (selecting) {
+		return true;
+	}
+	if (result_count <= 0 || bulk_kind_for(list_kind) == BULK_NONE) {
+		return false;
+	}
+	chosen = calloc((size_t)result_count, 1);
+	if (!chosen) {
+		return false;
+	}
+	selecting = true;
+	chosen_count = 0;
+	update_corner_buttons();
+	return true;
+}
+
+// Chooses the row, or lets it go. Letting go of the last one leaves the mode.
+static void selection_toggle(int index) {
+	if (!selecting || !chosen || index < 0 || index >= result_count) {
+		return;
+	}
+	chosen[index] = !chosen[index];
+	if (chosen[index]) {
+		chosen_count++;
+	} else if (--chosen_count == 0) {
+		selection_stop();
+		return;
+	}
+	row_tick_put(index, chosen[index]);
+}
+
+// The ids of the chosen rows, gathered in the order they appear on screen.
+static bulk_kind_t bulk_kind;
+static bool bulk_running;
+static bool bulk_failed;
+static int bulk_at;
+static int bulk_count;
+static long bulk_track_ids[TIDAL_MAX_HELD];
+static long bulk_artist_ids[TIDAL_MAX_HELD];
+static char bulk_album_ids[TIDAL_MAX_HELD][TIDAL_ID_MAX];
+static char bulk_message[192];
+
+static void bulk_finish(void) {
+	bulk_running = false;
+	// The list these writes touched is now wrong on the card.
+	switch (bulk_kind) {
+	case BULK_TRACK_ADD:
+	case BULK_TRACK_REMOVE:
+		listcache_drop(LISTCACHE_TIDAL_FAV_TRACKS);
+		break;
+	case BULK_ALBUM_ADD:
+	case BULK_ALBUM_REMOVE:
+		listcache_drop(LISTCACHE_TIDAL_FAV_ALBUMS);
+		break;
+	case BULK_ARTIST_ADD:
+	case BULK_ARTIST_REMOVE:
+		listcache_drop(LISTCACHE_TIDAL_FAV_ARTISTS);
+		break;
+	default:
+		break;
+	}
+	bool added = bulk_kind == BULK_TRACK_ADD || bulk_kind == BULK_ALBUM_ADD || bulk_kind == BULK_ARTIST_ADD;
+	selection_stop();
+	if (bulk_failed) {
+		toast_error(bulk_message[0] ? bulk_message : tr("tidal_change_refused"));
+	} else if (added) {
+		// The omissions change nothing on screen when adding, so without a word
+		// the action would look like it did nothing.
+		toast_success("added_to_favourites");
+	}
+	// Removals leave the list, additions leave it as it was: either way what is
+	// on screen is a list of favourites that has moved on.
+	reload_current_list();
+}
+
+static void bulk_step(void);
+
+static void bulk_continue_async(void *user) {
+	(void)user;
+	bulk_at++;
+	bulk_step();
+}
+
+static void bulk_one_done(bool ok, const char *error, void *user) {
+	(void)user;
+	if (!ok) {
+		bulk_failed = true;
+		if (error && error[0]) {
+			snprintf(bulk_message, sizeof(bulk_message), "%s", error);
+		}
+	}
+	gui_post(bulk_continue_async, NULL);
+}
+
+static void bulk_step(void) {
+	if (bulk_at >= bulk_count) {
+		bulk_finish();
+		return;
+	}
+	switch (bulk_kind) {
+	case BULK_TRACK_ADD:
+		tidalsync_favorite_toggle(bulk_track_ids[bulk_at], true, bulk_one_done, NULL);
+		break;
+	case BULK_TRACK_REMOVE:
+		tidalsync_favorite_toggle(bulk_track_ids[bulk_at], false, bulk_one_done, NULL);
+		break;
+	case BULK_ALBUM_ADD:
+		tidalsync_album_favorite(bulk_album_ids[bulk_at], true, bulk_one_done, NULL);
+		break;
+	case BULK_ALBUM_REMOVE:
+		tidalsync_album_favorite(bulk_album_ids[bulk_at], false, bulk_one_done, NULL);
+		break;
+	case BULK_ARTIST_ADD:
+		tidalsync_artist_favorite(bulk_artist_ids[bulk_at], true, bulk_one_done, NULL);
+		break;
+	case BULK_ARTIST_REMOVE:
+		tidalsync_artist_favorite(bulk_artist_ids[bulk_at], false, bulk_one_done, NULL);
+		break;
+	default:
+		bulk_finish();
+		break;
+	}
+}
+
+static void bulk_action_cb(lv_event_t *e) {
+	(void)e;
+	if (!selecting || !chosen || bulk_running) {
+		return;
+	}
+	bulk_kind = bulk_kind_for(list_kind);
+	bulk_at = 0;
+	bulk_count = 0;
+	bulk_failed = false;
+	bulk_message[0] = '\0';
+
+	for (int i = 0; i < result_count && bulk_count < TIDAL_MAX_HELD; i++) {
+		if (!chosen[i]) {
+			continue;
+		}
+		switch (bulk_kind) {
+		case BULK_TRACK_ADD:
+		case BULK_TRACK_REMOVE:
+			if (result_tracks[i].id > 0) {
+				bulk_track_ids[bulk_count++] = result_tracks[i].id;
+			}
+			break;
+		case BULK_ALBUM_ADD:
+		case BULK_ALBUM_REMOVE:
+			if (result_albums[i].id_text[0]) {
+				snprintf(bulk_album_ids[bulk_count], TIDAL_ID_MAX, "%s", result_albums[i].id_text);
+				bulk_count++;
+			}
+			break;
+		case BULK_ARTIST_ADD:
+		case BULK_ARTIST_REMOVE:
+			if (result_artists[i].id > 0) {
+				bulk_artist_ids[bulk_count++] = result_artists[i].id;
+			}
+			break;
+		default:
+			selection_stop();
+			return;
+		}
+	}
+
+	if (bulk_count == 0) {
+		selection_stop();
+		return;
+	}
+	bulk_running = true;
+	bulk_step();
+}
+
+static void bulk_cancel_cb(lv_event_t *e) {
+	(void)e;
+	selection_stop();
+}
+
+// A long press on a row of a list that can act in bulk. The lift that ends the
+// press would otherwise arrive as a click and take the row straight back out.
+static void row_long_cb(lv_event_t *e) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= result_count) {
+		return;
+	}
+	if (bulk_kind_for(list_kind) == BULK_NONE) {
+		return; // nothing to do to this list in bulk
+	}
+	lv_indev_t *indev = lv_indev_active();
+	if (indev) {
+		lv_indev_wait_release(indev);
+	}
+	if (!selection_start()) {
+		return;
+	}
+	if (!chosen[index]) {
+		selection_toggle(index);
+	}
 }
 
 // The two destructive actions ask first: an accidental tap on the three dots
@@ -853,6 +1176,14 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 	// the lists.
 	lv_obj_set_event_bubble(row, true);
 	lv_obj_add_event_cb(row, row_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)index);
+	// The long press starts a selection, where the list has something to do to
+	// several rows at once (see "choosing several rows").
+	lv_obj_add_event_cb(row, row_long_cb, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)index);
+	// Kept so a tick can be put on the row when it is chosen, without rebuilding
+	// the list and losing the scroll position.
+	if (index >= 0 && index < TIDAL_MAX_HELD) {
+		row_objs[index] = row;
+	}
 
 	// The cover, where there is a URL for it. Starts as the grey note and
 	// becomes the real image once the thread has downloaded it, so the list is
@@ -930,8 +1261,16 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 // what keeps the scroll position steady when the next page arrives.
 static void fill_list(int from) {
 	if (from == 0) {
+		// The flags describe rows that are about to go: entry 3 of this list is
+		// not entry 3 of the next. Ended before the widgets are cleaned, so the
+		// ticks it hides are still real objects.
+		selection_stop();
 		art_forget_rows();
 		lv_obj_clean(list_container);
+		for (int i = 0; i < TIDAL_MAX_HELD; i++) {
+			row_objs[i] = NULL;
+			row_checks[i] = NULL;
+		}
 	}
 	list_kind = result_kind;
 
@@ -1740,6 +2079,108 @@ static void *prefetch_main(void *arg) {
 static tidal_login_t login;
 static tidal_login_state_t login_result;
 
+// ---------------------------------------------------------------------------
+// the lists kept on the card
+//
+// Every tab rebuilt its list from the network when it was opened: the first page
+// of favourites, of a playlist, of an album's tracks, of the showcases -- a
+// request and a spinner for an answer that had not changed since the last visit.
+// The page is written to the card when it arrives and read back the next time,
+// so a tab opens with its names in place.
+//
+// A file is trusted for half a day, and every write on these pages drops the one
+// it made wrong (favourite added, track taken out of a playlist, playlist
+// created or deleted), so what is read is either the list or a list from another
+// device that has since moved on -- and neither is worth a request on every
+// visit, which is what half an hour meant in practice. A search is never kept:
+// every query is its own answer.
+// ---------------------------------------------------------------------------
+
+#define TIDAL_CACHE_TTL_SECS (12 * 60 * 60)
+
+static void tidal_cache_key(const job_t *job, char *out, size_t size) {
+	out[0] = '\0';
+	switch (job->kind) {
+	case JOB_FAV_TRACKS:
+		snprintf(out, size, LISTCACHE_TIDAL_FAV_TRACKS);
+		break;
+	case JOB_FAV_ALBUMS:
+		snprintf(out, size, LISTCACHE_TIDAL_FAV_ALBUMS);
+		break;
+	case JOB_FAV_ARTISTS:
+		snprintf(out, size, LISTCACHE_TIDAL_FAV_ARTISTS);
+		break;
+	case JOB_USER_PLAYLISTS:
+		snprintf(out, size, LISTCACHE_TIDAL_PLAYLISTS);
+		break;
+	case JOB_ALBUM_TRACKS:
+		snprintf(out, size, "tidal_album_%.24s", job->id_text);
+		break;
+	case JOB_ARTIST_ALBUMS:
+		snprintf(out, size, "tidal_artist_%ld", job->id);
+		break;
+	case JOB_PLAYLIST_TRACKS:
+		listcache_tidal_playlist_key(job->id_text, out, size);
+		break;
+	case JOB_FEATURED:
+		snprintf(out, size, "tidal_show_%.8s", job->text2);
+		break;
+	default:
+		break; // a search: not kept
+	}
+}
+
+// The heading a cached list wears. The network path sets it while fetching; this
+// is the same answer without the request.
+static void tidal_cache_title(const job_t *job) {
+	switch (job->kind) {
+	case JOB_FAV_TRACKS:
+		snprintf(result_title, sizeof(result_title), "%s", tr("favourite_tracks"));
+		break;
+	case JOB_FAV_ALBUMS:
+		snprintf(result_title, sizeof(result_title), "%s", tr("favourite_albums"));
+		break;
+	case JOB_FAV_ARTISTS:
+		snprintf(result_title, sizeof(result_title), "%s", tr("favourite_artists"));
+		break;
+	case JOB_USER_PLAYLISTS:
+		snprintf(result_title, sizeof(result_title), "%s", tr("my_playlists"));
+		break;
+	default:
+		snprintf(result_title, sizeof(result_title), "%.150s", job->text);
+		break;
+	}
+}
+
+// The array a job's rows live in, as one of the four buffers. Returns false for a
+// kind whose answer is not a list of records.
+static bool tidal_cache_array(job_kind_t kind, void **out, size_t *item_size) {
+	switch (kind) {
+	case JOB_FAV_TRACKS:
+	case JOB_ALBUM_TRACKS:
+	case JOB_PLAYLIST_TRACKS:
+		*out = result_tracks;
+		*item_size = sizeof(result_tracks[0]);
+		return true;
+	case JOB_FAV_ALBUMS:
+	case JOB_ARTIST_ALBUMS:
+	case JOB_FEATURED:
+		*out = result_albums;
+		*item_size = sizeof(result_albums[0]);
+		return true;
+	case JOB_FAV_ARTISTS:
+		*out = result_artists;
+		*item_size = sizeof(result_artists[0]);
+		return true;
+	case JOB_USER_PLAYLISTS:
+		*out = result_playlists;
+		*item_size = sizeof(result_playlists[0]);
+		return true;
+	default:
+		return false;
+	}
+}
+
 static void *worker_main(void *arg) {
 	(void)arg;
 
@@ -1810,9 +2251,34 @@ static void *worker_main(void *arg) {
 			result_title[0] = '\0';
 		}
 
+		// A list that is already on the card and still young is not asked for
+		// again: this is the whole of the caching, and it is why a tab opens
+		// without a spinner.
+		char cache_key[64];
+		tidal_cache_key(&job, cache_key, sizeof(cache_key));
+		bool from_cache = false;
 		int n = 0;
-		switch (job.kind) {
-		case JOB_LOGIN_BEGIN:
+		if (off == 0 && cache_key[0]) {
+			int age = listcache_age(cache_key);
+			void *rows = NULL;
+			size_t item = 0;
+			if (age >= 0 && age <= TIDAL_CACHE_TTL_SECS && tidal_cache_array(job.kind, &rows, &item)) {
+				n = listcache_load(cache_key, rows, item, want);
+				from_cache = n > 0;
+				if (from_cache) {
+					tidal_cache_title(&job);
+					if (job.kind == JOB_PLAYLIST_TRACKS) {
+						snprintf(result_playlist_id, sizeof(result_playlist_id), "%s", job.id_text);
+					}
+				} else {
+					n = 0; // a miss is not an error: the request below decides
+				}
+			}
+		}
+
+		if (!from_cache) {
+			switch (job.kind) {
+			case JOB_LOGIN_BEGIN:
 			memset(&login, 0, sizeof(login));
 			if (!tidal_login_begin(&login)) {
 				snprintf(result_error, sizeof(result_error), "%s", tidal_last_error());
@@ -1886,12 +2352,24 @@ static void *worker_main(void *arg) {
 			snprintf(result_title, sizeof(result_title), "%.150s", job.text);
 			break;
 
-		case JOB_PLAY:
-			do_play(job.index);
-			break;
+			case JOB_PLAY:
+				do_play(job.index);
+				break;
 
-		default:
-			break;
+			default:
+				break;
+			}
+
+			// The first page of a list is written down for the next visit. Only
+			// the first: it is the page a tab opens on, and the ones after it
+			// are scrolled to on purpose.
+			if (n > 0 && off == 0 && cache_key[0]) {
+				void *rows = NULL;
+				size_t item = 0;
+				if (tidal_cache_array(job.kind, &rows, &item)) {
+					listcache_save(cache_key, rows, item, n);
+				}
+			}
 		}
 
 		if (n < 0) {
@@ -2010,6 +2488,12 @@ static void list_nav_commit(void) {
 static bool list_back_has_step(void) { return list_history_len > 0; }
 
 static bool list_back_guard(void) {
+	// A selection is one step of its own: back leaves the mode before it
+	// leaves the list.
+	if (selecting) {
+		selection_stop();
+		return true;
+	}
 	if (list_history_len == 0) {
 		have_current_list = false;
 		return false; // nothing underneath: leave the page
@@ -2095,6 +2579,16 @@ static void row_clicked_cb(lv_event_t *e) {
 	}
 	int index = (int)(intptr_t)lv_event_get_user_data(e);
 	if (index < 0 || index >= result_count) {
+		return;
+	}
+
+	// In selection mode a tap picks the row and nothing else: playing a track
+	// or opening an album is a different thing from what the tick said, and for
+	// a moment the list is being used as a set.
+	if (selecting) {
+		if (!bulk_running) {
+			selection_toggle(index);
+		}
 		return;
 	}
 
@@ -3063,18 +3557,40 @@ static void update_corner_buttons(void) {
 		if (!buttons[i]) {
 			continue;
 		}
-		if (visible) {
+		if (visible && !selecting) {
 			lv_obj_set_hidden(buttons[i], false);
 		} else {
 			lv_obj_set_hidden(buttons[i], true);
 		}
 	}
+
+	// The list's own corner, which has no buttons of its own: while rows are
+	// being chosen it holds the action for this kind of list and the way out,
+	// and its heading gets the width those two are not using.
+	if (sel_action_btn) {
+		lv_obj_set_hidden(sel_action_btn, !selecting);
+	}
+	if (sel_close_btn) {
+		lv_obj_set_hidden(sel_close_btn, !selecting);
+	}
+	if (selecting && sel_action_btn) {
+		bulk_kind_t kind = bulk_kind_for(list_kind);
+		bool removes = kind == BULK_TRACK_REMOVE || kind == BULK_ALBUM_REMOVE || kind == BULK_ARTIST_REMOVE;
+		lv_obj_t *icon = lv_obj_get_child(sel_action_btn, 0);
+		if (icon) {
+			lv_image_set_src(icon, removes ? &icon_star_x : &icon_star_plus);
+		}
+	}
+	if (list_title && page_cfg) {
+		settingsrow_title_corner_slots(list_title, page_cfg, selecting ? 2 : 0);
+	}
 }
 
 // Same shape as the Music page corner buttons: transparent, aligned top right
 // and stepped leftwards through the shared regular/compact slots.
-static lv_obj_t *corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph, lv_event_cb_t cb) {
-	lv_obj_t *button = lv_btn_create(tidal_screen);
+static lv_obj_t *corner_button_on(lv_obj_t *parent, gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph,
+								 lv_event_cb_t cb) {
+	lv_obj_t *button = lv_btn_create(parent);
 	settingsrow_place_corner_button(button, cfg, slot);
 	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(button, 0, 0);
@@ -3089,6 +3605,10 @@ static lv_obj_t *corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t
 
 	lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, NULL);
 	return button;
+}
+
+static lv_obj_t *corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph, lv_event_cb_t cb) {
+	return corner_button_on(tidal_screen, cfg, slot, glyph, cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -3552,6 +4072,7 @@ static void home_loaded_cb(lv_event_t *e) {
 	// without a card there is nowhere to download to.
 	tidalcache_set_root(storage_sd_root());
 	qobuzart_set_root(storage_sd_root());
+	listcache_set_root(storage_sd_root());
 
 	// Every showcase is tried again: the one that did not answer last time may
 	// well have been a one-second disconnection.
@@ -3567,11 +4088,19 @@ static void home_loaded_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 
 static void build_list_page(gui_config_t *cfg) {
+	page_cfg = cfg;
 	list_screen = lv_obj_create(NULL);
 	lv_obj_add_event_cb(list_screen, list_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	lv_obj_add_event_cb(list_screen, list_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 	list_container = settingsrow_page(list_screen, cfg, "tidal");
 	list_title = settingsrow_page_title(list_screen);
+
+	// The list's corner, empty until rows are chosen: the bulk action and the
+	// way out of the mode. Placed and shown by update_corner_buttons().
+	sel_action_btn = corner_button_on(list_screen, cfg, 0, &icon_star_plus, bulk_action_cb);
+	sel_close_btn = corner_button_on(list_screen, cfg, 1, &icon_close, bulk_cancel_cb);
+	lv_obj_set_hidden(sel_action_btn, true);
+	lv_obj_set_hidden(sel_close_btn, true);
 
 	list_empty = lv_label_create(list_screen);
 	lv_label_set_text(list_empty, tr("no_results"));
@@ -3624,6 +4153,7 @@ void tidalpage_init(gui_config_t *cfg) {
 	art_drop_timer = lv_timer_create(art_drop_cb, ART_DROP_DELAY_MS, NULL);
 	lv_timer_pause(art_drop_timer);
 	qobuzart_set_root(storage_sd_root());
+	listcache_set_root(storage_sd_root());
 
 	tidalcache_set_root(storage_sd_root());
 	rebuild_home();

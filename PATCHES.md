@@ -1213,3 +1213,75 @@ mask in the same section of the configuration, so a row the user never wants to
 see is gone rather than merely last. A configuration written before this (or
 edited by hand) is read as the default order plus whatever it does name, so a row
 the page gains later is never lost.
+
+## Lists that open at once, an order for podcasts, and choosing several rows
+
+Four small things that were missing from the streaming tabs, and the sleeve that
+was still a square.
+
+**The lists are kept on the card.** Tidal and Podcasts rebuilt every list from the
+network each time a tab was opened -- the names, the artists, the ids, the cover
+addresses, the whole page of them -- for an answer that had not changed since the
+last visit. The first page of a list is now written to
+`<card>/.local/listcache` when it arrives and read back the next time, so the rows
+are there at once and the spinner belongs to a list that is actually new. What is
+stored is the page's own record array exactly as it lay in memory: a header
+carries the version and the record size, so a build that changes either reads the
+old file as a miss rather than filling the page with nonsense, and the write is a
+temporary file renamed, so a power cut leaves the previous list rather than half
+of one. A copy is trusted for half a day (Tidal) or six hours (the podcast chart
+and a podcast's episodes), because what it is waiting for is not the next visit
+but a change made elsewhere -- and every write on these pages drops the file it
+made wrong: adding or removing a favourite, removing a track from a playlist,
+creating or deleting one. Searches are never kept: every query is its own answer.
+The covers were already on the card (`.local/qobuz-art`, named by the MD5 of the
+URL), which is why they never needed fetching twice.
+
+**Podcasts in the order they are listened to.** The followed list used to be
+"most recently followed first", which says nothing useful about a hundred
+subscriptions. It is now ordered by how many of each podcast's episodes have been
+started on this device, most first, with A-Z and Z-A beside that under Podcast
+settings -> Order. The count is a row in `podcast.db` beside the subscription
+(`PODCAST_SUBS.plays`, added to existing databases by a one-off ALTER), written
+when an episode starts -- a podcast listened to in ten-minute pieces still ranks
+above one that was tried once -- and the list falls back to the alphabet when two
+are level, so the order is never arbitrary. Counting the heard marks instead was
+not possible: `PODCAST_PLAYED` stores episode ids and nothing else, so it cannot
+say which podcast an episode belonged to.
+
+**Choosing several rows.** Both tabs have the file browser's selection mode now:
+a long press starts it (through the row's own menu on Podcasts, on the row itself
+on Tidal), a tap then picks a row or lets it go, letting go of the last one ends
+it, and the corner trades its buttons for the action and the way out. On Podcasts,
+a podcast's row offers **Select** in its three-dot menu beside follow/unfollow,
+an episode's long press beside mark-listened and download; a selection of podcasts
+is followed or unfollowed as a group, and a selection of episodes is ticked off
+(or unticked) as a group. Bulk downloads are deliberately not offered: `podcastdl`
+runs one download at a time for the whole device, so a queue of them is a
+different feature and not a faster version of this one.
+
+On Tidal a long press starts the selection on the favourites, an album's tracks,
+an artist's albums and search results, and the corner button is the same action
+the row's three dots offer -- favourite or unfavourite, tracks, albums or artists.
+Two things are left out on purpose: a playlist's tracks are removed by position,
+and each removal renumbers the ones after it; a playlist itself is deleted
+outright. `tidalsync` also takes one job at a time and the newest submission
+replaces the one already waiting, so the chosen ids are walked one after another,
+each starting when the previous answer comes back -- firing them all at once would
+have performed exactly one of them.
+
+**Poster's sleeve is the panel, not a square in it.** Held to the largest square
+the room above the deck would take, the picture left a strip of page down either
+side of the record on a 240-px panel -- 195 px of sleeve inside 240 -- and a sleeve
+with bars beside it is not what a sleeve looks like. It is now the full width of
+the screen and every row the deck leaves, decoded at exactly that rectangle and
+filled from the middle, so a square cover gives up a little of its top and bottom
+rather than its sides. The deck still stands under it on its own opaque ground,
+which is what keeps this different from Immersive.
+
+**The screensaver's field melts further up, and from a darker start.** The
+translucent field over the foot of the artwork now begins about a quarter of the
+panel above its edge instead of a twelfth, and its top stop is two thirds of the
+field's own weight rather than nothing -- a shade that is plainly darker than the
+picture, and still short of the film the words sit on, which is where a photograph
+would stop reading as one and read as a black bar instead.
