@@ -1648,7 +1648,9 @@ void browser_init(gui_config_t *cfg) {
 	// right: close, a playlist, the favourites, the queue.
 	sel_close_btn = corner_button(cfg, 0, &icon_close, sel_close_cb);
 	sel_add_btn = corner_button(cfg, 1, &icon_list_plus, sel_add_cb);
-	sel_fav_btn = corner_button(cfg, 2, &icon_star_plus, sel_fav_cb);
+	// The outline heart the rest of the interface uses for "not a favourite
+	// yet": tapping it fills them in.
+	sel_fav_btn = corner_button(cfg, 2, &icon_heart_outline, sel_fav_cb);
 	sel_queue_btn = corner_button(cfg, 3, &icon_list_queue, sel_queue_cb);
 	lv_obj_add_event_cb(browser_screen, screen_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 

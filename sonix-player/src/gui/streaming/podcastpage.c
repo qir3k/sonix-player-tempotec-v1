@@ -709,6 +709,22 @@ static void refresh_row(int index) {
 	window_update();
 }
 
+void podcastpage_episode_heard(long long episode_id) {
+	// Only the list that draws the mark, and only while it is the one on
+	// screen: coming back to a list binds every row again, so a page that is
+	// not showing needs nothing done to it.
+	if (episode_id <= 0 || !list_container || list_kind != JOB_EPISODES ||
+		lv_screen_active() != list_screen) {
+		return;
+	}
+	for (int i = 0; i < list_count; i++) {
+		if (result_episodes[i].id == episode_id) {
+			refresh_row(i);
+			return;
+		}
+	}
+}
+
 static void art_forget_rows(void) {
 	for (int slot = 0; slot < QOBUZART_SLOTS; slot++) {
 		art_release_slot(slot);

@@ -24,6 +24,8 @@
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
 #include "src/gui/shell/topbar.h"
+#include "src/gui/streaming/podcastpage.h"
+#include "src/gui/streaming/podcastsaved.h"
 #include "src/system/device/power.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/gearboy/gearboy.h"
@@ -65,7 +67,7 @@ static lv_obj_t *song_artist_label;
 static lv_obj_t *format_label; // "16/44.1 FLAC", right of the artist line
 static lv_obj_t *fav_btn_obj;  // the button it sits on, hidden on a book
 static lv_obj_t *controls_row; // transport row: where the ellipsis lives, and the favourite button in Studio
-static lv_obj_t *fav_btn_icon; // the star, or the heart in Immersive and Poster
+static lv_obj_t *fav_btn_icon; // the heart, in every layout
 
 static void update_fav_button(void);
 static void update_speed_button(void);
@@ -168,12 +170,12 @@ static int polls_since_stop = POLLS_FAST_AFTER_STOP;
 #define COMPACT_DECK_GAP 4
 #define COMPACT_DECK_SLACK 2 // Large text draws a size up; keep the last row on screen
 #define COMPACT_FAV_BTN_H 26
-// The favourite marker's scale out of 256, from its 32 px source: the star at
-// 26 px on the V1's deck and at its native size on the wide panels, and the
-// heart Poster draws in its place a step under that -- update_fav_button()
-// owns the choice between them.
-#define FAV_STAR_SCALE 208
-#define FAV_STAR_SCALE_WIDE 256
+// The favourite marker's scale out of 256, from its 32 px source: the heart at
+// 26 px on the V1's deck and at its native size on the wide panels, and a step
+// under that in Poster, where the deck is a row of type rather than a picture
+// to stand over -- update_fav_button() owns the choice between them.
+#define FAV_HEART_SCALE 208
+#define FAV_HEART_SCALE_WIDE 256
 #define POSTER_HEART_SCALE 176
 #define POSTER_HEART_SCALE_WIDE 208
 // How much of the sleeve's foot melts into the deck in Poster: a gradient from
@@ -4020,9 +4022,10 @@ static void update_qobuz_badge(void) {
 	}
 }
 
-// Repaints the favourite marker: filled when the loaded track is a favourite,
-// outlined otherwise, in the theme-specific colour (a heart in Immersive and
-// Poster).
+// Repaints the favourite marker: a filled heart when the loaded track is a
+// favourite, an outlined one otherwise, in the theme-specific colour. The same
+// pair the control centre and the library's favourite controls draw: the star
+// these layouts replaced is gone from the player entirely.
 static void update_fav_button(void) {
 	if (!fav_btn_icon) {
 		return;
@@ -4082,19 +4085,14 @@ static void update_fav_button(void) {
 		favorite_color = layout_alt_now ? alt_ink() : lv_color_make(150, 150, 150);
 	}
 
-	const bool heart = layout_immersive_now || layout_poster_now;
-	const lv_image_dsc_t *favorite_icon = heart
-			? (starred ? &icon_heart_filled : &icon_heart_outline)
-			: (starred ? &icon_star_filled : &icon_star);
-	lv_image_set_src(fav_btn_icon, favorite_icon);
-	// The heart fills more of its 32 px canvas than the star does, and
+	lv_image_set_src(fav_btn_icon, starred ? &icon_heart_filled : &icon_heart_outline);
 	// Poster's deck is a row of type rather than a picture to stand over:
-	// there the heart is drawn a step under the star's size, so it marks
-	// the row without leading it. Immersive keeps the star's size -- over
-	// the photograph the heart is the one mark on it, and a small one is a
-	// lost one. Leaving Poster puts the star's size back.
+	// there the heart is drawn a step under the usual size, so it marks the
+	// row without leading it. The other layouts keep the full size -- over
+	// the photograph it is the one mark on it, and a small one is a lost
+	// one. Leaving Poster puts the larger size back.
 	lv_image_set_scale(fav_btn_icon, layout_poster_now ? bp_pick(POSTER_HEART_SCALE, POSTER_HEART_SCALE_WIDE)
-														: bp_pick(FAV_STAR_SCALE, FAV_STAR_SCALE_WIDE));
+														: bp_pick(FAV_HEART_SCALE, FAV_HEART_SCALE_WIDE));
 	lv_obj_set_style_image_recolor(fav_btn_icon, favorite_color, 0);
 	lv_obj_set_style_image_recolor_opa(fav_btn_icon, LV_OPA_COVER, 0);
 }
@@ -4442,6 +4440,12 @@ static void handle_track_finished(void) {
 	if (podcastcache_is_episode(path)) {
 		long long episode = podcastcache_episode_id(path);
 		podcastplayed_set(episode, true);
+		// The lists that carry the mark are behind this sheet, not unloaded:
+		// closing it reloads no screen, so the rows are told now. Each does
+		// nothing unless it is the list on screen, and only rebinds the row
+		// that shows this episode.
+		podcastpage_episode_heard(episode);
+		podcastsaved_episode_heard(episode);
 	}
 
 	if (podcast_stop_at_episode_end() && podcastcache_is_episode(path)) {

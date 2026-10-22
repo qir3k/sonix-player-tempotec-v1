@@ -406,7 +406,7 @@ static void refresh_now_playing_card(void) {
 	lv_obj_set_style_image_recolor(np_play_icon, theme()->accent, 0);
 	lv_obj_set_style_image_recolor_opa(np_play_icon, LV_OPA_COVER, 0);
 
-	// On a radio the star is about the station and lives in the radio database:
+	// On a radio the heart is about the station and lives in the radio database:
 	// there is no file to look up in the music library.
 	radio_station_t station;
 	bool fav;
@@ -415,29 +415,29 @@ static void refresh_now_playing_card(void) {
 	if (radio_current_station(&station)) {
 		fav = radio_fav_contains(station.uuid);
 	} else if (podcast) {
-		// On a podcast the star reports whether the feed is followed, exactly as
-		// the player's star does.
+		// On a podcast the heart reports whether the feed is followed, exactly
+		// as the player's heart does.
 		fav = podcastsubs_is_followed(podcast_feed_id);
 	} else if (state.current_file[0] && (tidal_id = tidalcache_track_id(state.current_file)) > 0) {
-		// Same reasoning as the Qobuz case below: the star must report what is on
-		// the account, not what is in the local database.
+		// Same reasoning as the Qobuz case below: the heart must report what is
+		// on the account, not what is in the local database.
 		//
 		// The local mirror is also refreshed, because it may not be populated
 		// yet: the control centre can be opened on a Tidal track without the
-		// player ever having been visited, and an empty star on a track that is
+		// player ever having been visited, and an empty heart on a track that is
 		// a favourite turns the next tap into an "add" for something already
 		// added.
 		fav = tidalsync_is_favorite(tidal_id);
 		tidalsync_favorites_refresh(NULL);
 	} else if (state.current_file[0] && (qobuz_id = qobuzcache_track_id(state.current_file)) > 0) {
-		// A Qobuz track: the star reports the account state, like the player's.
-		// Reading the local database here would draw a star that disagrees with
+		// A Qobuz track: the heart reports the account state, like the player's.
+		// Reading the local database here would draw a heart that disagrees with
 		// the one a tap fills.
 		fav = qobuzsync_is_favorite(qobuz_id);
 	} else {
 		fav = state.current_file[0] && library_fav_contains(state.current_file);
 	}
-	lv_image_set_src(np_star_icon, fav ? &icon_star_filled : &icon_star);
+	lv_image_set_src(np_star_icon, fav ? &icon_heart_filled : &icon_heart_outline);
 	lv_obj_set_style_image_recolor(np_star_icon, fav ? lv_color_make(246, 211, 45) : lv_color_make(150, 150, 150), 0);
 	lv_obj_set_style_image_recolor_opa(np_star_icon, LV_OPA_COVER, 0);
 

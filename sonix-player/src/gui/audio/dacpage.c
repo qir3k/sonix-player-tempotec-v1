@@ -1,6 +1,7 @@
 #include "dacpage.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "src/gui/shell/confirm.h"
 #include "src/gui/fonts/fonts.h"
@@ -26,6 +27,9 @@ static lv_obj_t *peq_pill;
 static lv_obj_t *mseb_pill;
 static lv_timer_t *poll_timer;
 static unsigned last_serial = (unsigned)-1;
+// The compact panel hides the rate line while there is no rate: see
+// set_format() and dacpage_init().
+static bool hide_empty_format;
 static lv_color_t status_normal_color; // the theme's colour, captured at build time
 
 // The pills follow the equalisers, not the finger: they are the same three
@@ -75,6 +79,41 @@ static void mseb_cb(lv_event_t *e) {
 	paint_equaliser_pills();
 }
 
+// The host's rate, or nothing at all.
+//
+// Set, never removed, and the words only when they really changed:
+// lv_label_set_text() re-lays the label out even for the same string, and the
+// column around it with it. On the compact panel an empty rate is hidden rather
+// than drawn as a blank line, so that it takes no space in the block the words
+// are centred in (see dacpage_init).
+// A transparent, growing nothing: what centres the words on the compact panel
+// (see dacpage_init). Base 0 height, so flex grow is all it ever takes.
+static void spacer(lv_obj_t *parent) {
+	lv_obj_t *obj = lv_obj_create(parent);
+	lv_obj_set_size(obj, lv_pct(100), 0);
+	lv_obj_set_flex_grow(obj, 1);
+	lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(obj, 0, 0);
+	lv_obj_set_style_radius(obj, 0, 0);
+	lv_obj_set_style_pad_all(obj, 0, 0);
+	lv_obj_set_scrollable(obj, false);
+	// Empty space has to behave like empty space: a press here belongs to the
+	// page, which is what the swipe back -- and the scroll of a long page -- is
+	// attached to. A clickable box on top of it would swallow both.
+	lv_obj_set_clickable(obj, false);
+}
+
+static void set_format(const char *text) {
+	// Hiding before the text: a label that starts empty is already equal to
+	// "", so the comparison below cannot be what decides whether it is drawn.
+	if (hide_empty_format) {
+		lv_obj_set_hidden(format_label, text[0] == '\0');
+	}
+	if (strcmp(lv_label_get_text(format_label), text) != 0) {
+		lv_label_set_text(format_label, text);
+	}
+}
+
 static void refresh_charge_glyph(void) {
 	if (!charge_glyph) {
 		return;
@@ -110,26 +149,26 @@ static void refresh(void) {
 	lv_obj_set_style_text_color(status_label, status_normal_color, 0);
 
 	if (st.error[0]) {
-		lv_label_set_text(format_label, "");
+		set_format("");
 		lv_label_set_text(status_label, st.error);
 		lv_obj_set_style_text_color(status_label, lv_color_make(224, 27, 36), 0);
 		return;
 	}
 
 	if (st.starting) {
-		lv_label_set_text(format_label, "");
+		set_format("");
 		lv_label_set_text(status_label, tr("dac_turning_on_2"));
 		return;
 	}
 
 	if (!st.active) {
-		lv_label_set_text(format_label, "");
+		set_format("");
 		lv_label_set_text(status_label, tr("dac_note"));
 		return;
 	}
 
 	if (!st.streaming) {
-		lv_label_set_text(format_label, "");
+		set_format("");
 		lv_label_set_text(status_label, tr("dac_waiting"));
 		return;
 	}
@@ -147,7 +186,7 @@ static void refresh(void) {
 	} else {
 		snprintf(text, sizeof(text), "%.1f kHz", st.sample_rate / 1000.0);
 	}
-	lv_label_set_text(format_label, text);
+	set_format(text);
 	lv_label_set_text(status_label, tr("dac_playing"));
 }
 
@@ -326,6 +365,28 @@ void dacpage_init(gui_config_t *cfg) {
 		lv_obj_set_style_margin_top(big_icon, 24, 0);
 	}
 
+	// The words themselves: the host's rate, then the status copy.
+	//
+	// On this panel they are centred in whatever is left under the equalisers, by
+	// a spacer on either side of them. With the mark gone there is about a
+	// hundred pixels of nothing below the pills, and two lines hanging from the
+	// top of it read as a page that stopped drawing halfway down. The rate line
+	// is hidden while nothing streams, so the status sits in the middle when idle
+	// and steps down one line when a stream starts -- rather than standing still
+	// while a line appears over it, which is what it looked like before.
+	//
+	// Spacers and not a box around the two labels: a box would be a clipped
+	// container, and a long error message is allowed to scroll the page. A
+	// spacer shrinks to nothing instead, and the two labels stay direct children
+	// of the page's own scrolling column.
+	//
+	// The regular panel keeps its stack under the mark: there the mark is what
+	// fills the page, and the words belong directly beneath it.
+	if (compact) {
+		spacer(container);
+		hide_empty_format = true;
+	}
+
 	format_label = lv_label_create(container);
 	lv_obj_set_width(format_label, lv_pct(100));
 	lv_label_set_long_mode(format_label, LV_LABEL_LONG_WRAP);
@@ -346,6 +407,9 @@ void dacpage_init(gui_config_t *cfg) {
 	lv_obj_set_style_margin_top(status_label, compact ? 0 : 10, 0);
 	lv_label_set_text(status_label, "");
 	status_normal_color = lv_obj_get_style_text_color(status_label, LV_PART_MAIN);
+	if (compact) {
+		spacer(container);
+	}
 
 	charge_btn = corner_button(cfg, 0, &icon_zap, &charge_glyph);
 	lv_obj_add_event_cb(charge_btn, charge_cb, LV_EVENT_CLICKED, NULL);

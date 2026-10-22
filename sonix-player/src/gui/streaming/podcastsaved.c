@@ -587,6 +587,28 @@ static void episodes_fill(void) {
 	paint_order_button();
 }
 
+void podcastsaved_episode_heard(long long episode_id) {
+	// On the list that is showing, behind the player's sheet: the screen is not
+	// reloaded when the sheet closes, so this is the only chance to draw the
+	// mark. Anywhere else the mark is read when the folder is next opened.
+	if (episode_id <= 0 || episode_count <= 0 || lv_screen_active() != episodes_screen) {
+		return;
+	}
+	for (int i = 0; i < episode_count; i++) {
+		if (episodes[i].episode_id != episode_id) {
+			continue;
+		}
+		bool heard = podcastplayed_get(episode_id);
+		if (episodes[i].heard != heard) {
+			episodes[i].heard = heard;
+			// The rows only, no card: the same redraw a mark from the menu
+			// does, and cheap enough at the end of an episode.
+			episodes_rows();
+		}
+		return;
+	}
+}
+
 static void episodes_loaded_cb(lv_event_t *e) {
 	(void)e;
 	episodes_fill();
