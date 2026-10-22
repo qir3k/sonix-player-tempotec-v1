@@ -322,14 +322,45 @@ jobs:
             exit 1
           fi
 
+      # The body is written here from the commits themselves. GitHub's own
+      # generated notes came out empty when this fork cut its first release --
+      # the tag is on a branch the default branch does not contain -- and a
+      # list made with git log cannot come out blank.
+      - name: Write the release notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
+        env:
+          OLD_TAG: ${{ steps.version.outputs.old_tag }}
+          NEW_TAG: ${{ steps.version.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${OLD_TAG}" >/dev/null; then
+            range="${OLD_TAG}..${NEW_TAG}"
+          elif git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+            # The first release: what this branch carries and main does not.
+            range="origin/main..${NEW_TAG}"
+          else
+            range="${NEW_TAG} -n 20"
+          fi
+          {
+            echo '## What this build changes'
+            echo
+            # shellcheck disable=SC2086
+            git log --no-merges --invert-grep --grep='^ci:' --pretty='- %s (`%h`)' $range
+            echo
+            echo "Built from \`$(git rev-parse --short "${NEW_TAG}")\` on the \`personal\` branch."
+          } > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish the release
         if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.new_tag }}
-          # The body is GitHub's own generated notes: the commits and merged
-          # pull requests since the last release, from their messages.
-          generate_release_notes: true
+          # The commit the tag names, recorded on the release itself.
+          target_commitish: ${{ steps.source.outputs.sha }}
+          # The list written above, rather than a generated body that can come
+          # out empty.
+          body_path: ${{ runner.temp }}/release-notes.md
           # The image and its checksum: both are needed to flash it, and a
           # release missing either is caught here rather than after a download.
           files: |
