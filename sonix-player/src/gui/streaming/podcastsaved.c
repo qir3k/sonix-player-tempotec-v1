@@ -721,7 +721,10 @@ void podcastsaved_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_align(shows_empty, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(shows_empty, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(shows_empty, &font_ui_24, 0);
-	lv_obj_align(shows_empty, LV_ALIGN_TOP_MID, 0, settingsrow_content_top(cfg) + 140);
+	// Centred in the list's own area, both ways: the heading takes the top of
+	// the page, and a notice measured down from the top of the panel sat low
+	// under it rather than in the middle of the space left for the rows.
+	lv_obj_align_to(shows_empty, shows_list, LV_ALIGN_CENTER, 0, 0);
 	lv_obj_set_hidden(shows_empty, true);
 
 	episodes_screen = lv_obj_create(NULL);

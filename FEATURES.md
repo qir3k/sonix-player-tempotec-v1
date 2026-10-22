@@ -94,7 +94,7 @@
 ## Streaming
 
 - **Subsonic / Gonic** - a new Streaming destination for your own server. Test the connection, browse music folders or artists/albums in pages of 200, and play the page as a queue. MP3 256/320, Opus, or original FLAC/MP3/Opus; transcoding runs on the server. Two fixed 1 MiB RAM rings isolate HTTP/TLS from decoding, refill near 50%, and pre-cache 512 KiB of the upcoming track near 90%. No growing disk cache or playback seeking; compatible-format gapless uses the existing ALSA handoff. Remembering credentials is optional and stores an unencrypted private file. See [setup and limitations](docs/subsonic.md).
-- **Tidal** - sign in with the code on screen or with the QR-Code; Low, High, CD and Hi-res quality. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player. Search is a page of its own with a field under the pills (Tracks, Albums, Artists) and the last ten searches kept beneath it, and the rows, pills and titles follow the V1's 240 px panel rather than the 480 px one. A list's first page is kept on the card, so opening a tab shows its names at once instead of fetching them again; a change made on the page drops the copy it made wrong, and a copy nobody has touched is read for half a day. A long press on a row of the favourites, of an album's tracks or of search results starts a selection: tick as many rows as wanted, then favourite or unfavourite all of them from the corner. Playlist tracks and whole playlists stay single-row actions, since one is removed by position and the other deleted outright.
+- **Tidal** - sign in with the code on screen or with the QR-Code; Low, High, CD and Hi-res quality. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player. Search is a page of its own with a field under the pills (Tracks, Albums, Artists) and the last ten searches kept beneath it, and the rows, pills and titles follow the V1's 240 px panel rather than the 480 px one. A list's first page is kept on the card, so opening a tab shows its names at once instead of fetching them again; a change made on the page drops the copy it made wrong, and a copy nobody has touched is read for half a day. A long press on a row of the favourites, of an album's tracks, of search results or of a playlist's own tracks starts a selection: tick as many rows as wanted, then favourite, unfavourite or take out all of them from the corner — a playlist's tracks go by position, the last of them first, so the positions the rest are renumbered by are never the ones still to come. A whole playlist stays a single-row action, since it is deleted outright rather than changed.
 - **Qobuz** - sign in with the account; MP3 320, FLAC 16/44.1, 24/96 and 24/192. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player.
 - **Podcasts** - the Podcast Index catalogue: search, trending, follow up to 100
 shows kept on the device. Downloaded episodes land in the card's `Podcast`
@@ -103,8 +103,12 @@ folder, which also takes podcasts copied there by hand — see
 how much of each podcast has been listened to on this device, most first, with
 A–Z and Z–A beside it under Podcast settings → Order; the chart and a podcast's
 episodes are kept on the card, so a tab opens on the names it showed last time.
-A row's menu has **Select**: tick several podcasts (or episodes) and follow,
-unfollow or tick them off as a group from the corner. **Podcast settings →
+A long press on a podcast's row starts **Select**: tick several podcasts and
+follow or unfollow them as a group from the corner. An episode's row keeps its
+long press for download and mark-listened, and offers **Select** in the same
+menu: tick several episodes and mark them heard (or unheard) together.
+The search page keeps the last eight queries under the field, each with a tap
+to run it again and an x to forget it, as the Tidal tab's does. **Podcast settings →
 Region** picks the language the trending chart is asked for, so the pill shows
 what is trending where you are instead of the whole world's list (the
 catalogue has no country filter; the language is what it does have). The rows
