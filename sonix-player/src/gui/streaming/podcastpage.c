@@ -269,7 +269,7 @@ static void build_busy_layer(void) {
 // services cannot tread on each other even by accident (see qobuzart.h).
 // ---------------------------------------------------------------------------
 
-#define ROW_THUMB 60
+#define ROW_THUMB bp_pick(36, 60)
 
 static lv_obj_t *list_container;
 static lv_obj_t *list_title;
@@ -307,9 +307,14 @@ static int list_count;
 // Everything ABOUT an entry -- its cover, whether that cover failed, which row
 // lent it -- stays indexed by the entry, not by the widget. The widget is only
 // what draws it this second.
-#define ROW_HEIGHT 88
-#define ROW_GAP 12
+#define ROW_HEIGHT bp_pick(50, 88)
+#define ROW_GAP bp_pick(6, 12)
 #define ROW_PITCH (ROW_HEIGHT + ROW_GAP)
+// The two lines of a row, at the sizes the Tidal tab settled on for this panel
+// -- the row is the same thing on both pages, and two lines of 22/18 on a
+// 240-px screen leave room for two rows where three and a half would fit.
+#define ROW_TITLE_FONT (bp_is_tempotec_v1() ? &font_ui_18 : &font_ui_22)
+#define ROW_DETAIL_FONT (bp_is_tempotec_v1() ? &font_ui_14 : &font_ui_18)
 #define ROW_POOL 12
 
 typedef struct {
@@ -1026,12 +1031,12 @@ static void build_rows(int width) {
 		lv_obj_set_x(row->button, 0);
 		lv_obj_add_style(row->button, &theme_style_card, 0);
 		lv_obj_add_style(row->button, &theme_style_card_pressed, LV_STATE_PRESSED);
-		lv_obj_set_style_radius(row->button, 12, 0);
+		lv_obj_set_style_radius(row->button, bp_pick(10, 12), 0);
 		lv_obj_set_style_border_width(row->button, 0, 0);
 		lv_obj_set_style_shadow_width(row->button, 0, 0);
-		lv_obj_set_style_pad_hor(row->button, 16, 0);
+		lv_obj_set_style_pad_hor(row->button, bp_pick(6, 16), 0);
 		lv_obj_set_style_pad_ver(row->button, 0, 0);
-		lv_obj_set_style_pad_column(row->button, 8, 0);
+		lv_obj_set_style_pad_column(row->button, bp_pick(6, 8), 0);
 		lv_obj_set_scrollable(row->button, false);
 		lv_obj_set_hidden(row->button, true);
 		lv_obj_set_flex_flow(row->button, LV_FLEX_FLOW_ROW);
@@ -1059,7 +1064,7 @@ static void build_rows(int width) {
 		lv_obj_set_style_bg_opa(texts, 0, 0);
 		lv_obj_set_style_border_width(texts, 0, 0);
 		lv_obj_set_style_pad_all(texts, 0, 0);
-		lv_obj_set_style_pad_row(texts, 6, 0);
+		lv_obj_set_style_pad_row(texts, bp_pick(2, 6), 0);
 		lv_obj_set_scrollable(texts, false);
 		lv_obj_set_event_bubble(texts, true);
 		lv_obj_set_flex_flow(texts, LV_FLEX_FLOW_COLUMN);
@@ -1068,16 +1073,16 @@ static void build_rows(int width) {
 		row->title = lv_label_create(texts);
 		lv_label_set_long_mode(row->title, LV_LABEL_LONG_DOT);
 		lv_obj_set_width(row->title, lv_pct(100));
-		lv_obj_set_height(row->title, lv_font_get_line_height(&font_ui_22));
+		lv_obj_set_height(row->title, lv_font_get_line_height(ROW_TITLE_FONT));
 		lv_obj_add_style(row->title, &theme_style_text, 0);
-		lv_obj_set_style_text_font(row->title, &font_ui_22, 0);
+		lv_obj_set_style_text_font(row->title, ROW_TITLE_FONT, 0);
 
 		row->detail = lv_label_create(texts);
 		lv_label_set_long_mode(row->detail, LV_LABEL_LONG_DOT);
 		lv_obj_set_width(row->detail, lv_pct(100));
-		lv_obj_set_height(row->detail, lv_font_get_line_height(&font_ui_18));
+		lv_obj_set_height(row->detail, lv_font_get_line_height(ROW_DETAIL_FONT));
 		lv_obj_add_style(row->detail, &theme_style_text_dim, 0);
-		lv_obj_set_style_text_font(row->detail, &font_ui_18, 0);
+		lv_obj_set_style_text_font(row->detail, ROW_DETAIL_FONT, 0);
 
 		// The tick of an episode that has been heard. Between the text and the
 		// three dots, because a podcast row shows no dots and an episode row
@@ -1106,7 +1111,7 @@ static void build_rows(int width) {
 		lv_obj_set_hidden(row->check, true);
 
 		row->menu_btn = lv_btn_create(row->button);
-		lv_obj_set_size(row->menu_btn, 44, 44);
+		lv_obj_set_size(row->menu_btn, bp_pick(30, 44), bp_pick(30, 44));
 		lv_obj_set_style_bg_opa(row->menu_btn, LV_OPA_TRANSP, 0);
 		lv_obj_set_style_border_width(row->menu_btn, 0, 0);
 		lv_obj_set_style_shadow_width(row->menu_btn, 0, 0);
@@ -2756,7 +2761,11 @@ static void build_page(gui_config_t *cfg) {
 	lv_obj_set_style_text_align(list_empty, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(list_empty, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(list_empty, &font_ui_24, 0);
-	lv_obj_align(list_empty, LV_ALIGN_TOP_MID, 0, content_top + 140);
+	// Centred on the panel, with the position left to LVGL. A fixed offset below
+	// the heading put a two-line notice low enough to read as a footnote, and on
+	// the V1's 320 px it sat against the bottom edge -- which is not what
+	// "nothing here yet" should look like.
+	lv_obj_align(list_empty, LV_ALIGN_CENTER, 0, 0);
 	lv_obj_set_hidden(list_empty, true);
 
 	// The same spot, for when the section cannot work at all.
@@ -3348,10 +3357,107 @@ static void build_order_card(lv_obj_t *parent) {
 	order_choice[PODCAST_SORT_ZA] = make_order_pill(row, "podcast_order_za", PODCAST_SORT_ZA);
 }
 
+// ---------------------------------------------------------------------------
+// where the chart comes from
+//
+// The catalogue's trending list takes one filter that means "somewhere": a
+// language. There is no country parameter to ask for -- that was checked against
+// its documentation rather than assumed -- so the region offered here is its
+// language, with the interface's own first: English, Italian, German and the
+// rest of the languages the player already speaks. Choosing one changes which
+// chart the Trending pill shows, and the copy on the card is dropped with it.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+	const char *code;  // ISO 639, "" for the interface's own language
+	const char *label; // a translation key, or a name that reads the same everywhere
+} region_t;
+
+static const region_t REGIONS[] = {
+	{"", "podcast_region_interface"}, {"en", "English"},   {"it", "Italiano"}, {"de", "Deutsch"},
+	{"es", "Español"},              {"fr", "Français"},  {"nl", "Nederlands"}, {"pl", "Polski"},
+	{"pt", "Português"},             {"ru", "Русский"}, {"zh", "中文"},     {"ja", "日本語"},
+};
+#define REGION_COUNT ((int)(sizeof(REGIONS) / sizeof(REGIONS[0])))
+
+static lv_obj_t *region_screen;
+static lv_obj_t *region_container;
+static lv_obj_t *region_value; // the row on the settings page, showing the choice
+
+static void region_pick_cb(lv_event_t *e);
+
+static int region_index_of(const char *code) {
+	for (int i = 0; i < REGION_COUNT; i++) {
+		if (strcmp(REGIONS[i].code, code ? code : "") == 0) {
+			return i;
+		}
+	}
+	return 0;
+}
+
+static void region_rows_rebuild(void) {
+	if (!region_container) {
+		return;
+	}
+	int keep_scroll = (int)lv_obj_get_scroll_y(region_container);
+	lv_obj_clean(region_container);
+
+	int active = region_index_of(podcast_trending_lang());
+	for (int i = 0; i < REGION_COUNT; i++) {
+		lv_obj_t *value = NULL;
+		lv_obj_t *row = settingsrow_add(region_container, REGIONS[i].label, &value, region_pick_cb,
+										(void *)(intptr_t)i);
+		if (i == active) {
+			// The chosen one, and only it: a tick says which of twelve rows the
+			// chart is coming from without a second word on every row.
+			settingsrow_add_icon(row, &icon_check, THEME_SEMANTIC_GREEN);
+		}
+	}
+	lv_obj_update_layout(region_container);
+	lv_obj_scroll_to_y(region_container, keep_scroll, LV_ANIM_OFF);
+}
+
+static void region_pick_cb(lv_event_t *e) {
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= REGION_COUNT) {
+		return;
+	}
+	podcast_set_trending_lang(REGIONS[index].code);
+	// The chart on the card is from the region that was chosen a moment ago.
+	listcache_drop("pod_trending");
+	if (region_value) {
+		lv_label_set_text(region_value, tr(REGIONS[index].label));
+	}
+	region_rows_rebuild();
+}
+
+static void region_loaded_cb(lv_event_t *e) {
+	(void)e;
+	region_rows_rebuild();
+}
+
+static void open_region_cb(lv_event_t *e) {
+	(void)e;
+	switch_screen(region_screen);
+}
+
+static void build_region_page(gui_config_t *cfg) {
+	region_screen = lv_obj_create(NULL);
+	region_container = settingsrow_page(region_screen, cfg, "podcast_region");
+	lv_obj_add_event_cb(region_screen, region_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	switcher_attach_back_gesture(region_screen);
+}
+
 static lv_obj_t *stop_episode_switch;
 static settingsrow_duration_t sleep_row;
 
 static void refresh_settings_rows(void) {
+	if (region_value) {
+		lv_label_set_text(region_value, tr(REGIONS[region_index_of(podcast_trending_lang())].label));
+	}
 	if (stop_episode_switch) {
 		if (podcast_stop_at_episode_end()) {
 			lv_obj_add_state(stop_episode_switch, LV_STATE_CHECKED);
@@ -3389,11 +3495,13 @@ static void sleep_wheel_cb(lv_event_t *e) {
 
 static void build_settings_page(gui_config_t *cfg) {
 	build_controls_page(cfg);
+	build_region_page(cfg);
 
 	settings_screen = lv_obj_create(NULL);
 	lv_obj_t *container = settingsrow_page(settings_screen, cfg, "podcast_settings");
 
 	settingsrow_add(container, "change_controls", NULL, switch_screen_cb, controls_screen);
+	settingsrow_add(container, "podcast_region", &region_value, open_region_cb, NULL);
 	build_order_card(container);
 	settingsrow_toggle(container, "podcast_stop_at_end_of_episode", &stop_episode_switch, stop_episode_cb);
 	// Its own, and not the music one: a stretch set for falling asleep to a

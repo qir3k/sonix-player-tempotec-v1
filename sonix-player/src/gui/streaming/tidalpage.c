@@ -3010,9 +3010,16 @@ static void build_search_page(gui_config_t *cfg) {
 	// They used to be three 140-px buttons stepping 150 px, which put the third
 	// at x=320 on a 240-px panel: the row has to scroll, and each pill has to be
 	// as wide as its own word, or "Albums" alone would fill the screen.
+	//
+	// One gap for both sides of the row, and a tight one: the pair is what the eye
+	// compares, and the field's own box, the pill's circle and the history's
+	// first card each contribute a little air of their own on top of it. The
+	// pills sat low enough beside the field that the two gaps read as different
+	// sizes.
+	const int pill_gap = compact ? 4 : 8;
 	lv_obj_t *pill_row = lv_obj_create(search_screen);
 	lv_obj_set_size(pill_row, cfg->screen_width - 2 * cfg->padding, pill_h);
-	lv_obj_align(pill_row, LV_ALIGN_TOP_LEFT, cfg->padding, top + field_h + gap);
+	lv_obj_align(pill_row, LV_ALIGN_TOP_LEFT, cfg->padding, top + field_h + pill_gap);
 	lv_obj_set_style_bg_opa(pill_row, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(pill_row, 0, 0);
 	lv_obj_set_style_pad_all(pill_row, 0, 0);
@@ -3023,7 +3030,9 @@ static void build_search_page(gui_config_t *cfg) {
 	lv_obj_set_flex_flow(pill_row, LV_FLEX_FLOW_ROW);
 	lv_obj_set_flex_align(pill_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-	static const char *const KINDS[] = {"tracks_2", "albums", "artists"};
+	// The keys the language files actually carry: "tracks_2" alone was an
+	// untranslated tag, and the pill read as one.
+	static const char *const KINDS[] = {"search_tracks_2", "albums", "artists"};
 	for (int i = 0; i < 3; i++) {
 		lv_obj_t *pill = lv_btn_create(pill_row);
 		lv_obj_set_size(pill, LV_SIZE_CONTENT, pill_h);
@@ -3043,7 +3052,7 @@ static void build_search_page(gui_config_t *cfg) {
 
 	// What is under the pills: the history while nothing is typed, the keyboard
 	// while something is.
-	int history_top = top + field_h + gap + pill_h + gap;
+	int history_top = top + field_h + pill_gap + pill_h + pill_gap;
 	int history_h = cfg->screen_height - history_top - cfg->padding;
 	if (history_h < 40) {
 		history_h = 40;
@@ -3070,7 +3079,10 @@ static void build_search_page(gui_config_t *cfg) {
 	lv_obj_set_style_text_font(search_history_empty, &font_ui_18, 0);
 	lv_obj_set_width(search_history_empty, cfg->screen_width - 2 * cfg->padding);
 	lv_label_set_long_mode(search_history_empty, LV_LABEL_LONG_WRAP);
-	lv_obj_align(search_history_empty, LV_ALIGN_TOP_LEFT, cfg->padding, history_top + 10);
+	// Level with where the first history row would be, not ten pixels under the
+	// pills: with nothing searched yet this label is the whole history, and the
+	// gap above it is the one the eye measures.
+	lv_obj_align(search_history_empty, LV_ALIGN_TOP_LEFT, cfg->padding, history_top + 2);
 	lv_obj_set_hidden(search_history_empty, true);
 
 	search_keyboard = keyboard_create(search_screen, cfg->screen_width, compact ? 144 : 316, search_field, NULL, "ok",
@@ -3779,6 +3791,12 @@ static void home_settings_rebuild(void) {
 		return;
 	}
 	home_layout_load();
+	// Where the page was scrolled to. Cleaning the container takes its content
+	// height to nothing for an instant, and LVGL clamps the offset to that: the
+	// page jumped to the top every time an arrow or a switch was touched, which
+	// on a 320-px panel is most of the list. It is put back once the rows exist
+	// again.
+	int keep_scroll = (int)lv_obj_get_scroll_y(home_settings_container);
 	lv_obj_clean(home_settings_container);
 
 	lv_obj_t *note = lv_label_create(home_settings_container);
@@ -3792,6 +3810,9 @@ static void home_settings_rebuild(void) {
 	for (int slot = 0; slot < HOME_ROWS; slot++) {
 		home_setting_row(home_settings_container, home_order[slot], slot);
 	}
+
+	lv_obj_update_layout(home_settings_container);
+	lv_obj_scroll_to_y(home_settings_container, keep_scroll, LV_ANIM_OFF);
 }
 
 static void home_settings_loaded_cb(lv_event_t *e) {
