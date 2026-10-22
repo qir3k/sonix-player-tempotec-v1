@@ -1156,3 +1156,60 @@ library, authors, scan). Both now ask the palette again from their page's own
 refresh callback, the way the rest of the interface does, so a change of accent
 reaches them -- and a set built under a white OLED accent no longer goes on
 looking grey after a colour is chosen.
+
+## The Tidal tab on a 240 px panel
+
+Most of the Tidal page was written at the 480-px size and never revisited for the
+V1, where a 240x320 panel makes every one of those numbers wrong.
+
+**The rows** were 88 px high with a 60 px sleeve, so a screen showed two and a
+half tracks and cut the artist's name off at the first word. They are now
+`bp_pick(52, 88)` high with a `bp_pick(38, 60)` sleeve and the title/detail pair
+at 18/14 instead of 22/18 -- the same density the music tab's own rows settled
+on (44 px, 36 px sleeve, 18/14).
+
+**The audio-quality pills** in Tidal settings were hand-built at the 480-px size
+(56 px tall, 22 px of side padding) whatever the panel, which made them nearly
+twice the height of every other pill in the interface and wide enough to spill
+off the card. They are the shared `settingsrow_pills()` card and
+`settingsrow_pill()` now, so the V1 gets its 36 px pills and a theme change
+repaints them through the same call every other settings page uses.
+
+**The "Leave" row** signed the Tidal account out but said only "Leave", and the
+confirmation's own button said it again. The row is now "Sign out of Tidal" and
+the confirmation's action "Sign out"; nothing else about the flow changed.
+
+**The search page** was laid out for a 480-px screen: three 140-px pills stepping
+150 px to the right, so on the V1 the third one was off the panel entirely, and
+they sat at y=154 while the 144-px keyboard started at y=176 -- the two overlapped
+and neither could be used. The page is now built from panel-sized pieces: a 44 px
+field, a pill row that scrolls sideways with each pill as wide as its own word,
+and, under them, the space one of two things takes turns in -- the keyboard while
+something is being typed, the search history while nothing is.
+
+**The history** is new: the last eight queries, newest first, kept in
+`device_config.ini` under `[tidal]`. A row runs its query again with one tap, the
+x at its right forgets just that one, and Tidal settings has a "Clear search
+history" row for all of them. When there is no history yet the page opens on the
+keyboard instead, as before.
+
+**Removing a track from a playlist** is new. The row menu of a playlist's tracks
+now offers two things instead of one: favourite/unfavourite, and "Remove from
+playlist", behind the same confirmation the favourites removal uses.
+`tidal_playlist_remove_track()` deletes by position (`DELETE
+/playlists/{uuid}/items/{index}`), because the same track can be in a playlist
+twice and the entry that goes is the one that was tapped. The list is re-read
+afterwards, so the rows close the gap.
+
+**Favourite artists** is new, and uses Tidal's own favourites collection under
+`artists`: a row on the main page beside favourite tracks and albums, the same
+add/remove menu on an artist in search results, and remove on the favourites
+list. Artist rows in that list open the artist's albums, like search results do.
+
+**The main page's rows** can now be hidden and reordered, from Tidal settings ->
+Tidal home: seven rows, each with a switch and a pair of arrows to move it one
+step up or down. The order is stored as `home_order` and the hidden set as a bit
+mask in the same section of the configuration, so a row the user never wants to
+see is gone rather than merely last. A configuration written before this (or
+edited by hand) is read as the default order plus whatever it does name, so a row
+the page gains later is never lost.

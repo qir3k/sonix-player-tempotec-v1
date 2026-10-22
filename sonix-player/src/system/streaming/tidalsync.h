@@ -53,6 +53,14 @@ void tidalsync_album_favorite(const char *album_id, bool want, tidalsync_done_cb
 
 void tidalsync_playlist_remove(const char *playlist_id, tidalsync_done_cb done, void *user);
 
+// Takes one entry out of a playlist, by the position it has in the playlist
+// (the row's index on the page).
+void tidalsync_playlist_track_remove(const char *playlist_id, int index, tidalsync_done_cb done, void *user);
+
+// Follows or unfollows an artist. Like albums, artists have no mirror: the
+// list says which way the menu will go.
+void tidalsync_artist_favorite(long artist_id, bool want, tidalsync_done_cb done, void *user);
+
 // --- the account's playlists -----------------------------------------------
 
 #define TIDALSYNC_PLAYLISTS_MAX 60
