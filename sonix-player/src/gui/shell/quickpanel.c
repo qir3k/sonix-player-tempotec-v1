@@ -2137,7 +2137,9 @@ void quickpanel_init(gui_config_t *cfg) {
 	}
 
 	brightness_slider = lv_slider_create(bright_row);
-	lv_obj_set_height(brightness_slider, 10);
+	// Give the brightness control a larger touch target: the original 10 px
+	// rail is awkward to grab with a fingertip, especially with a case fitted.
+	lv_obj_set_height(brightness_slider, qp_compact ? 16 : 18);
 	lv_obj_set_flex_grow(brightness_slider, 1);
 	lv_slider_set_range(brightness_slider, 1, 100);
 	lv_obj_set_style_radius(brightness_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);

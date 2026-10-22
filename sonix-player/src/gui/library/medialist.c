@@ -21,6 +21,7 @@
 #include "src/gui/library/playlistpage.h"
 #include "src/gui/shell/popover.h"
 #include "src/gui/shell/settingsrow.h"
+#include "src/gui/shell/scrolltext.h"
 #include "src/gui/nowplaying/trackmenu.h"
 #include "src/system/core/config.h"
 #include "src/system/playback/device_state.h"
@@ -3701,9 +3702,10 @@ static void build_panel(panel_t *p, gui_config_t *cfg, bool is_tracks, int slot_
 		row->label = lv_label_create(row->text);
 		lv_label_set_long_mode(row->label, LV_LABEL_LONG_DOT);
 		lv_obj_set_width(row->label, LV_PCT(100));
-		// One line, always. LV_LABEL_LONG_DOT wraps before it truncates, and a
-		// title on two lines pushes the badge under it out of the row.
-		lv_obj_set_height(row->label, lv_font_get_line_height(ROW_TITLE_FONT));
+		// Album names in the Album Artist view often need a second line. Keep
+		// the artist/track rows on one line so their detail rows retain space.
+		lv_obj_set_height(row->label, lv_font_get_line_height(ROW_TITLE_FONT) *
+						 (p == &panel_artist_albums ? 2 : 1));
 		lv_obj_add_style(row->label, &theme_style_text, 0);
 		lv_obj_set_style_text_font(row->label, ROW_TITLE_FONT, 0);
 
@@ -3915,6 +3917,11 @@ void medialist_open(const char *title, library_list_t kind, library_filter_t fil
 	snprintf(p->signature, sizeof(p->signature), "%s", signature);
 
 	lv_label_set_text(p->title_label, p->title);
+	// Album names can be much longer than the compact page heading. Keep the
+	// whole title readable instead of silently clipping it at the screen edge.
+	if (kind == LIBRARY_LIST_TRACKS && filter == LIBRARY_FILTER_ALBUM) {
+		scrolltext_apply(p->title_label);
+	}
 
 	// The empty note names the thing this list is short of. The generic one
 	// tells the user to scan the library, which is the wrong instruction for
