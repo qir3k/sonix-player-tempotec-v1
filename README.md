@@ -246,9 +246,9 @@ The image is built by GitHub Actions, not on the machine holding this checkout: 
    - `publish_release_tag` — empty unless a release is being cut; it uploads `v1.upt` and `v1_md5.txt` onto that release.
 3. The first run compiles and caches the toolchain and takes 30–90 minutes; later runs are far quicker.
 
-The workflow downloads the stock image, checks that its kernel is untouched, builds the player with `make target`, packs the image with `sonix-packer/sonix_firmware_packer.sh`, validates the result, and uploads an artifact named after the commit it really holds — `sonix-tempotec-v1-<sha>`, kept for 14 days. Inside are `v1.upt` and `v1_md5.txt`, `BUILD-REPORT.txt` (the commit and both checksums), `OUTPUT-VALIDATION.txt`, `STOCK-VALIDATION.txt` and the three binaries.
+The workflow downloads the stock image, checks that its kernel is untouched, builds the player with `make target`, packs the image with `sonix-packer/sonix_firmware_packer.sh`, validates the result, and uploads an artifact named after the commit it really holds — `sonix-tempotec-v1-<sha>`, kept for 14 days. Inside are `v1.upt` and `v1_md5.txt`, `BUILD-REPORT.txt` (the commit and both checksums), `OUTPUT-VALIDATION.txt`, `STOCK-VALIDATION.txt`, `BOOT-SCRIPT-REPORT.txt` when the packer wrote one, and the three binaries.
 
-Pushes to `main` and to `arena/**` build by themselves; any other branch is built from the dialog with `build_ref` naming it.
+Pushes to `main`, to `arena/**` and to tags build by themselves; any other branch is built from the dialog with `build_ref` naming it.
 
 The trimmed image is built from this fork's `personal` branch, and none of it is in `main` or `dev`: that branch carries `sonix-packer/personal_trim.sh`, names itself in its own copy of the workflow's push triggers, and calls the script from the packer just before the filesystem is built. The languages and fonts are pruned from the staged image, never from the tree, so a merge from upstream never meets a deleted file. [The three branches, and the trim](https://github.com/qir3k/sonix-player-tempotec-v1/blob/personal/docs/PERSONAL-BUILD.md).
 
