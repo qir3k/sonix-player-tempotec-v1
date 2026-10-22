@@ -3,14 +3,15 @@
 This fork keeps upstream's tree intact and does the trimming at build time, so
 you can keep working with mr-f0xx on the full thing and still carry a lean
 image of your own. Nothing in `main` is ever deleted for your convenience; the
-only branch that differs is `personal`, and it differs by one script and one
-line of workflow.
+only branch that differs is `personal`, and it differs by one script, a stamp
+of the version it is released as, and the line of workflow that makes a push
+to it cut a release.
 
 | Branch      | What it is                                                       | Builds an image?                     |
 | ----------- | ---------------------------------------------------------------- | ------------------------------------ |
 | `main`      | Upstream's `main` merged with your finished features. The only branch a pull request to mr-f0xx comes from. | Yes, on every push (already set up). |
 | `dev`       | Where features are written and tried before they are good enough for `main`. | On demand: Actions → Run workflow, `build_ref = dev`. |
-| `personal`  | `dev` plus `personal_trim.sh`: Polish and English only, MiSans only. What you actually flash. | Yes, on every push (this branch adds itself to the workflow's push list). |
+| `personal`  | `dev` plus `personal_trim.sh`: Polish and English only, MiSans only, its own version and update source. What you actually flash. | Yes, on every push (this branch adds itself to the workflow's push list). |
 
 The flow is one direction:
 
@@ -96,10 +97,12 @@ git push -u origin topic/dac-status
 ```bash
 git switch personal
 git merge dev               # or main, if you only want what you have proposed
-git push origin personal    # the workflow builds v1.upt by itself
+git push origin personal    # tags v1.0.x, builds v1.upt, publishes the release
 ```
 
-That is the whole loop: merge, push, wait for the green run, flash.
+That is the whole loop: merge, push, wait for the green run, flash. The patch
+number goes up by one every push, and the image carries that same number, so
+the device knows when it is already on the newest release.
 
 ### What it takes out, and why it is safe
 
@@ -122,6 +125,28 @@ repository:
 What you lose: track or podcast titles in Japanese, Korean, Chinese, Arabic or
 Thai will draw as boxes, because their fallback faces are gone. If that ever
 matters, put the file back (see below) or drop that line from the script.
+
+### What the image says about itself
+
+The walkie-talkie between the image and the release page is
+`sonix-packer/assets/V1/usr/resource/sonix/components/system-info.json`. The
+workflow copies the version into it before the packer runs, and only on
+`personal`:
+
+| Key          | Written by the personal build                        | What it does |
+| ------------ | ---------------------------------------------------- | ------------ |
+| `OS_version` | the tag the push is released as, e.g. `1.0.5`        | Settings → System → About shows it, and the update check compares release tags against it. |
+| `ota-repo`   | `qir3k/sonix-player-tempotec-v1`                      | Settings → System → Update firmware looks here, so it finds your releases and not upstream's. |
+| `forked-by`  | `qirke (github.com/qir3k)`                           | The credit line under About. |
+
+Nothing stamps those keys on `main` or `dev`: their images keep the asset
+file's values — upstream's repository and the upstream fork's credit — so a
+build you hand upstream behaves exactly as upstream's does.
+
+The tag has to exist before the image is packed, which is why the workflow
+makes it first and builds second. Without that the image could only say
+`beta`, which reads as version 0.0.0 to the update check and makes every
+release on the page look newer than the one already on the card.
 
 ### Getting something back
 
