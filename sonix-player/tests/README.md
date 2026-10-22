@@ -195,6 +195,9 @@ and saved:
 - The frame is centred in the area above the strip, with the margins, the
   player's rounded corners and no strip backdrop.
 - The page behind the frame is right in all five themes.
+- The time is white in every one of them, whatever accent the palette carries.
+- A podcast episode is named by its own title with the podcast's author under
+  it, and a file with nothing behind it falls back to the artist tag.
 - Small pictures are shown at their own size.
 - Track changes, abandoned decodes, switching back to Fill, switching to
   Pictures, dismissing and switching off release every borrowed and owned
