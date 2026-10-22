@@ -270,6 +270,20 @@ a self-signed certificate), and HLS.
   upscale the 480-px HiBy panels use and are not offered on the V1; palettes
   and GBC color correction apply on every board.
 
+## Keyboard
+
+- **Swipe typing** - drag a finger from letter to letter and the word it spells
+  is typed, with a space after it. Turned on and off in Settings → More, beside
+  **Swipe language** (English, Polish, both). The dictionaries are plain text on
+  the card, `<card>/Dictionaries/en.txt` and `pl.txt`, one word per line; the
+  player ships none, and a missing list simply types nothing. Polish words are
+  matched without their tails and typed with them. The same language decides
+  which accent a held key offers first (ę before é in Polish, é before ę in
+  English); every accent stays in the strip either way.
+- **Layouts** - which alphabets are within reach, in the order they are offered
+  (Settings → More → Keyboard layout). Holding the "123" key switches a
+  keyboard to another of them for that keyboard only.
+
 ## Settings
 
 - **Appearance** - dark and light, plus the V1 palettes Tokyo Night, Amber on Black and OLED (true black with no grey cards, white as its accent, and a main menu without the title and tagline); twelve accent colors, clock position, a dynamic tint that borrows the accent's hue for backgrounds and cards, a toggle to show/hide the battery percentage, and **rounded screen corners** (off by default). On the V1 the arc is 16 px, sized to the 2" 240×320 panel's glass rather than scaled down from the 28 px HiBy mask.
