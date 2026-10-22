@@ -401,10 +401,9 @@ static void build_sysinfo_page(gui_config_t *cfg) {
 	lv_obj_t *os_row = system_value_row(container, "system_operating_system_version", &os_value, NULL, NULL, true);
 	const char *os = sysinfo_os_version();
 	const char *build = sysinfo_build_version();
-	char os_display[128];
-	// The V1 release channel is stored as "beta" in system-info.json.
-	snprintf(os_display, sizeof(os_display), "%s", os);
-	lv_label_set_text(os_value, os_display[0] ? os_display : "\xE2\x80\x94"); // em dash
+	// Verbatim: whatever version the image was built as, which is also the
+	// one the update check measures releases against (ota.h).
+	lv_label_set_text(os_value, os[0] ? os : "\xE2\x80\x94"); // em dash
 	easteregg_attach(os_row);
 
 	// Five taps reveal the developer options.
@@ -415,7 +414,9 @@ static void build_sysinfo_page(gui_config_t *cfg) {
 	// --- the credits ---
 	// Proper names, the same in every language, so they come in as written and
 	// never go through tr(): Jepl4r wrote the original Sonix Player for the
-	// HiBy players, and this fork carries it to the TempoTec V1.
+	// HiBy players, and this fork carries it to the TempoTec V1. The fork credit
+	// is the image's own business: system-info.json may name whoever built it
+	// ("forked-by"), and the upstream fork's name stands in when it does not.
 	//
 	// How wide a value line on this page can be: the screen, the page padding
 	// on both sides and the row's own. Only the V1 needs it.
@@ -430,7 +431,8 @@ static void build_sysinfo_page(gui_config_t *cfg) {
 
 	lv_obj_t *forked_by_value = NULL;
 	info_row(container, "system_forked_by", &forked_by_value);
-	lv_label_set_text(forked_by_value, "Imre Ferenczi (mr-f0xx)");
+	const char *forked_by = sysinfo_forked_by();
+	lv_label_set_text(forked_by_value, forked_by[0] ? forked_by : "Imre Ferenczi (mr-f0xx)");
 	if (compact) {
 		credit_value_fit(forked_by_value, value_width);
 	}
