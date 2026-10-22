@@ -1123,3 +1123,36 @@ favourites button.
 The star survives only as unused images in `icons.c`; no `.c` file refers to
 it. Nothing else had to change: the corner buttons already recolour their
 glyph from the theme, and `fonts_choices()` was untouched.
+
+## Poster's sleeve, the screensaver's field, and two stale glyph sets
+
+Three things the V1's small square panel made visible.
+
+**Poster** scaled the sleeve to the width of the screen and held it at the top of
+the panel. The screen is 240x320 and the deck takes about a third of it, so a
+square 240 px wide is taller than the room above the controls: the picture ran
+behind the deck and only its top was ever on screen, which reads as the record
+being cut across its middle, with the fade over what was left. The square is now
+the smaller of the panel's width and the height above the deck
+(`poster_sleeve_side()`), even so that it lands on whole pixels, and it rests on
+the deck instead of hanging from the chevron. The whole picture is on screen,
+nothing is cropped, and the only part of it under anything is the band the fade
+melts into -- which is now 26 px rather than 36, since it is no longer covering
+what was left of a half-hidden sleeve.
+
+**The screensaver's metadata field** -- the translucent square the V1 palettes
+lay over the foot of the artwork -- had a straight top edge, a line drawn across
+the record at the height the words begin. It is now melted the way the player
+melts Poster's sleeve into its deck: a band above the strip, in the field's own
+colour, whose opacity climbs from nothing to the weight the strip wears over its
+last row (`strip_fade`). The strip itself is untouched, so the words keep the
+ground they were tuned for, and the sleeve shows through the top of the field
+instead of meeting it.
+
+**Two glyph sets** were coloured once, when their page was built, and kept that
+snapshot through every later change of theme or accent: the Wi-Fi and Bluetooth
+cards' glyphs on the Wireless page, and the Audiobooks section card's (continue,
+library, authors, scan). Both now ask the palette again from their page's own
+refresh callback, the way the rest of the interface does, so a change of accent
+reaches them -- and a set built under a white OLED accent no longer goes on
+looking grey after a colour is chosen.

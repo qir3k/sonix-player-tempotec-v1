@@ -31,6 +31,7 @@ static lv_obj_t *saver;		 // the whole thing, full screen on the top layer
 static lv_obj_t *cover_img;	 // the artwork: above the strip, or the whole panel under a field
 static lv_obj_t *cover_placeholder; // the note, for a track that has none
 static lv_obj_t *info_strip; // metadata over blur, or a translucent panel in the V1 palettes
+static lv_obj_t *strip_fade; // the field's top edge, melting into the sleeve above it
 static lv_obj_t *cover_box;	 // the artwork's area: everything above the strip, or the screen
 static lv_obj_t *frame_box;	 // what cover_img sits in: all of cover_box, or the Framed sleeve
 static lv_obj_t *title_label;
@@ -42,6 +43,12 @@ static lv_timer_t *clock_timer;
 static bool enabled;
 static int screen_w, screen_h;
 static int strip_h;
+
+// strip_fade's own style and the two stops it is painted from: the field's
+// colour at nothing on top, the same colour at the strip's weight underneath
+// (see strip_fade_paint). Its stops are rewritten per palette, like the ink.
+static lv_style_t strip_fade_style;
+static lv_grad_dsc_t strip_fade_grad;
 
 // What the strip falls back to when there is no artwork to size it from, and
 // the height it always has over a picture from the folder -- there the block
@@ -55,6 +62,15 @@ static int strip_h;
 // violet, cyan and blue are dimmer inks, so its film is a step heavier.
 #define AMBER_STRIP_OPA LV_OPA_50
 #define TOKYO_STRIP_OPA LV_OPA_60
+
+// The field over the sleeve is a translucent square, and a square laid over a
+// photograph has an edge: a straight line across the record at the height the
+// words begin, which the eye reads as the picture being cut. This is the band
+// above that line over which the field's opacity climbs from nothing to the
+// full weight the strip itself wears -- the same melt the player gives the
+// foot of its Poster sleeve -- so the sleeve shows through the top of the
+// field and the two grounds meet without a seam.
+#define STRIP_FADE_H bp_pick(28, 52)
 
 // How far the clock is lifted out of its line in the strip. It is the strip's
 // last line and the swipe-up sign hangs over the strip's foot, and the room
@@ -194,6 +210,10 @@ static void set_strip_height(int height) {
 		strip_h = height;
 		lv_obj_set_height(info_strip, strip_h);
 		lv_obj_align(info_strip, LV_ALIGN_BOTTOM_MID, 0, 0);
+		if (strip_fade) {
+			// It hangs from the strip's own top edge, so it moves with it.
+			lv_obj_align(strip_fade, LV_ALIGN_BOTTOM_MID, 0, -strip_h);
+		}
 	}
 	bool over_art = !framed_now() && (source == SCREENSAVER_SOURCE_IMAGES || metadata_over_art());
 	int want = over_art ? screen_h : screen_h - strip_h;
@@ -476,6 +496,29 @@ static void promote_next(void) {
 // blue-black panel. Either keeps the palette's ink legible over every sleeve while still
 // letting the cover show through behind it. The other themes keep the blurred
 // copy, or plain black when there is no artwork to blur.
+//
+// The field's top edge is the one thing about it that is not flat: over the
+// strip's upper band (strip_fade) the same colour climbs from nothing to the
+// weight the strip wears, so the sleeve is not met by a straight line drawn
+// across the record.
+static void strip_fade_paint(lv_color_t fill, lv_opa_t weight) {
+	if (!strip_fade) {
+		return;
+	}
+	strip_fade_grad.stops[0].color = fill;
+	strip_fade_grad.stops[1].color = fill;
+	strip_fade_grad.stops[1].opa = weight; // the strip's own, where the two meet
+	lv_obj_report_style_change(&strip_fade_style);
+}
+
+// Shown only under the palettes' own field: over a blurred strip, or over the
+// plain black one, there is no edge for it to soften.
+static void strip_fade_apply(bool shown) {
+	if (strip_fade) {
+		lv_obj_set_hidden(strip_fade, !shown);
+	}
+}
+
 static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
 	if (framed_now()) {
 		// Framed keeps the words off the artwork altogether, so there is
@@ -483,6 +526,7 @@ static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
 		// itself, whichever page that is (see set_page_backdrop).
 		lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
 		lv_obj_set_style_bg_opa(info_strip, LV_OPA_TRANSP, 0);
+		strip_fade_apply(false);
 		return;
 	}
 
@@ -490,6 +534,8 @@ static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
 		lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
 		lv_obj_set_style_bg_color(info_strip, lv_color_black(), 0);
 		lv_obj_set_style_bg_opa(info_strip, AMBER_STRIP_OPA, 0);
+		strip_fade_paint(lv_color_black(), AMBER_STRIP_OPA);
+		strip_fade_apply(true);
 		return;
 	}
 
@@ -497,9 +543,12 @@ static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
 		lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
 		lv_obj_set_style_bg_color(info_strip, theme()->panel, 0);
 		lv_obj_set_style_bg_opa(info_strip, TOKYO_STRIP_OPA, 0);
+		strip_fade_paint(theme()->panel, TOKYO_STRIP_OPA);
+		strip_fade_apply(true);
 		return;
 	}
 
+	strip_fade_apply(false);
 	if (backdrop) {
 		lv_obj_set_style_bg_image_src(info_strip, backdrop, 0);
 		lv_obj_set_style_bg_opa(info_strip, LV_OPA_TRANSP, 0);
@@ -1083,6 +1132,32 @@ void screensaver_init(gui_config_t *cfg) {
 	cover_img = lv_image_create(frame_box);
 	lv_obj_center(cover_img);
 	lv_image_set_inner_align(cover_img, LV_IMAGE_ALIGN_CENTER);
+
+	// The field's top edge, melted: the palette's own colour at no weight on
+	// its first row and at the strip's weight on its last, so the sleeve shows
+	// through the top of the field and the words keep the ground they were
+	// tuned for underneath. Above the artwork and below the strip, because
+	// that is the order it is made in; only the palettes with a field of their
+	// own show it (set_info_strip_backdrop).
+	strip_fade = lv_obj_create(saver);
+	lv_obj_set_size(strip_fade, screen_w, STRIP_FADE_H);
+	lv_obj_align(strip_fade, LV_ALIGN_BOTTOM_MID, 0, -strip_h);
+	lv_obj_set_style_radius(strip_fade, 0, 0);
+	lv_obj_set_style_border_width(strip_fade, 0, 0);
+	lv_obj_set_style_shadow_width(strip_fade, 0, 0);
+	lv_obj_set_style_pad_all(strip_fade, 0, 0);
+	lv_obj_set_scrollable(strip_fade, false);
+	lv_obj_set_clickable(strip_fade, false);
+	lv_style_init(&strip_fade_style);
+	lv_style_set_bg_opa(&strip_fade_style, LV_OPA_COVER);
+	strip_fade_grad.stops_count = 2;
+	strip_fade_grad.dir = LV_GRAD_DIR_VER;
+	strip_fade_grad.stops[0].opa = LV_OPA_TRANSP;
+	strip_fade_grad.stops[0].frac = 0;
+	strip_fade_grad.stops[1].frac = 255; // its opacity is the palette's (strip_fade_paint)
+	lv_style_set_bg_grad(&strip_fade_style, &strip_fade_grad);
+	lv_obj_add_style(strip_fade, &strip_fade_style, 0);
+	lv_obj_set_hidden(strip_fade, true);
 
 	// Metadata field: the player's blurred artwork in Dark and Light, a
 	// translucent fill of the palette's own colour in the two V1 palettes (see

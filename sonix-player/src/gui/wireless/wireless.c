@@ -34,6 +34,10 @@ typedef struct {
 	lv_obj_t *detail;
 	lv_obj_t *options;
 	lv_obj_t *option_icon;
+	// The card's own glyph, kept so a later theme or accent change can repaint
+	// it: a colour set when the card was built is a snapshot, and it would go
+	// on wearing the accent the page was built under.
+	lv_obj_t *heading_icon;
 } radio_row_t;
 
 typedef struct {
@@ -237,6 +241,7 @@ static lv_obj_t *radio_card(lv_obj_t *parent, const char *label, const lv_image_
 	lv_image_set_scale(icon, (uint32_t)(LV_SCALE_NONE * 18 / LV_MAX((int)source->header.w, (int)source->header.h)));
 	lv_obj_set_style_image_recolor(icon, theme_semantic_color(tone), 0);
 	lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
+	row->heading_icon = icon;
 
 	lv_obj_t *copy = lv_obj_create(open);
 	lv_obj_remove_style_all(copy);
@@ -428,8 +433,14 @@ static void wireless_refresh_theme(void) {
 	radio_row_t *radio_rows[] = {&wifi_row, &bluetooth_row};
 	for (size_t i = 0; i < sizeof(radio_rows) / sizeof(radio_rows[0]); i++) {
 		radio_row_t *row = radio_rows[i];
+		theme_semantic_t tone = row->wifi ? THEME_SEMANTIC_BLUE : THEME_SEMANTIC_PURPLE;
+		// The card's glyph and the way through to its list, both asking the
+		// palette again rather than showing the accent they were built with.
+		if (row->heading_icon) {
+			lv_obj_set_style_image_recolor(row->heading_icon, theme_semantic_color(tone), 0);
+			lv_obj_set_style_image_recolor_opa(row->heading_icon, LV_OPA_COVER, 0);
+		}
 		if (row->option_icon) {
-			theme_semantic_t tone = row->wifi ? THEME_SEMANTIC_BLUE : THEME_SEMANTIC_PURPLE;
 			lv_obj_set_style_image_recolor(row->option_icon, theme_semantic_color(tone), 0);
 			lv_obj_set_style_image_recolor_opa(row->option_icon, LV_OPA_COVER, 0);
 		}

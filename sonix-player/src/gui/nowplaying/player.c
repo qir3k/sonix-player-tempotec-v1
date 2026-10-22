@@ -192,7 +192,10 @@ static int polls_since_stop = POLLS_FAST_AFTER_STOP;
 // How much of the sleeve's foot melts into the deck in Poster: a gradient from
 // nothing to the deck's own colour over this many pixels of the picture's
 // bottom, so the two grounds meet without a line between them (poster_fade).
-#define POSTER_FADE_HEIGHT 36
+// This is the only part of the picture the deck ever covers, so it is kept to
+// a band the sleeve can spare: over the whole width of the screen it would
+// read as the bottom of the artwork being cut away rather than melted.
+#define POSTER_FADE_HEIGHT 26
 #define COMPACT_PLAY_BTN 44
 #define COMPACT_SKIP_BTN 42
 // The repeat/speed and ellipsis buttons at the ends of that row. The centred
@@ -3160,21 +3163,34 @@ static bool immersive_take_back(void) {
 // ---------------------------------------------------------------------------
 // Poster: the sleeve at the width of the screen, the deck on its own ground
 //
-// The sleeve is scaled to the width of the screen and held at its top, with
-// square corners and no inset: the whole picture from side to side, nothing
-// cropped off its sides and nothing stretched -- which is the difference from
-// Immersive, where the photograph fills the screen and, the screen not being
-// square, takes its crop from the two sides. What Poster cannot show is the
-// part of the picture below the top of the deck: the deck stands in front of
-// the sleeve rather than over it, on its own opaque ground, so the foot of the
-// sleeve is behind the deck and not cut out of the picture. The split of the
-// panel is the standard one's (compact_deck_height), so what stands above the
-// deck is as much of the sleeve as the deck leaves room for, at the largest
-// size the screen allows.
+// The sleeve is square -- nothing stretched and nothing cropped -- and it is
+// held at the foot of the panel, so it finishes on the deck's top edge rather
+// than behind it: the whole picture is on screen, and the deck stands under it
+// on its own opaque ground rather than over the middle of it, which is the
+// difference from Immersive, where the photograph fills the screen and, the
+// screen not being square, takes its crop from the two sides. The screen is
+// not square either, so the two rules meet in the smaller of its two
+// measurements (poster_sleeve_side): on the V1 that is the height left above
+// the deck, and the sleeve keeps the side margins that follow, because a
+// square at the full width of the panel would be taller than the room the deck
+// leaves and would have to be cut across its middle. The split of the panel is
+// the standard one's (compact_deck_height).
 // ---------------------------------------------------------------------------
 
 static bool poster_up;
 static int poster_saved_art_h; // the sleeve's height before Poster moved it, see poster_take_back()
+
+// Poster's sleeve: the largest square the room above the deck holds, even so
+// that its centre lands on a whole pixel. The picture is square and so is the
+// sleeve; the panel is not, so the side is the smaller of the two -- on the V1
+// the height, which leaves a small margin either side, and on a panel shorter
+// than it is wide the width instead. Never larger than the room: a square that
+// overflowed the panel would be cut off where the deck begins, which reads as
+// half a record rather than as a sleeve.
+static int poster_sleeve_side(void) {
+	int side = LV_MIN(cover_box_w, cover_box_h);
+	return side & ~1;
+}
 
 // The foot of the sleeve, melted into the deck: a gradient from nothing to the
 // deck's own colour over the last pixels of the picture, so the photograph and
@@ -3220,14 +3236,13 @@ static void poster_put(void) {
 	}
 	poster_up = true;
 
-	// The sleeve at the width of the screen, and square: the picture was
-	// asked for at exactly that size (reload_cover), so it is drawn one
-	// pixel to one. Held at the top of the panel; what the deck leaves no
-	// room for falls under the panel's own clip.
-	cover_art_w = cover_box_w;
-	cover_art_h = cover_box_w;
+	// The largest square the room above the deck holds: the picture was asked
+	// for at exactly that size (reload_cover), so it is drawn one pixel to
+	// one. Held at the foot of the panel, so its last row is the deck's first
+	// one and the fade below is the only thing over the picture.
+	cover_art_w = cover_art_h = poster_sleeve_side();
 	lv_obj_set_size(cover_art_group, cover_art_w, cover_art_h);
-	lv_obj_align(cover_art_group, LV_ALIGN_TOP_MID, 0, 0);
+	lv_obj_align(cover_art_group, LV_ALIGN_BOTTOM_MID, 0, 0);
 	// Square corners: rounded ones would leave four arcs of the panel's
 	// colour inside the edges the picture is meant to reach.
 	lv_obj_set_style_radius(cover_art_group, 0, 0);
@@ -4401,9 +4416,9 @@ static void reload_cover(const char *filepath) {
 		// Immersive the box IS the screen -- immersive_put() has already put
 		// the panel at that shape -- so the picture comes back cropped to fill
 		// it and is drawn at one pixel to one. In Poster the box is the square
-		// of the screen's width -- poster_put() has already put the frame at
-		// that size -- so the whole picture comes back and is drawn at one
-		// pixel to one, held at the top of the panel.
+		// the room above the deck holds -- poster_put() has already put the
+		// frame at that size -- so the whole picture comes back and is drawn
+		// at one pixel to one, resting on the deck.
 		int cover_w = backdrop_is_studio ? studio_cover_geometry(NULL) : cover_art_w;
 		int cover_h = backdrop_is_studio ? cover_w : cover_art_h;
 		coverloader_request_player(filepath, cover_w, cover_h, backdrop_w,
@@ -6363,11 +6378,16 @@ static int compact_sleeve_side(void) {
 	return side & ~1;
 }
 
-// Both arrangements keep the sleeve centred side to side. Poster keeps it at
-// the top of the panel instead: the sleeve reaches the bezel there, and the
-// deck stands in front of its foot.
+// Both arrangements keep the sleeve centred side to side. Poster rests it on
+// the deck instead of hanging it from the chevron: the panel is the square of
+// the picture's own height there, so the foot of the sleeve is the deck's top
+// edge and nothing of the picture falls behind the controls.
 static void compact_place_sleeve(void) {
-	lv_obj_align(cover_art_group, LV_ALIGN_TOP_MID, 0, layout_poster_now ? 0 : compact_sleeve_top());
+	if (layout_poster_now) {
+		lv_obj_align(cover_art_group, LV_ALIGN_BOTTOM_MID, 0, 0);
+		return;
+	}
+	lv_obj_align(cover_art_group, LV_ALIGN_TOP_MID, 0, compact_sleeve_top());
 }
 
 // The height of the V1's deck for the arrangement on show: its rows at the
@@ -6529,10 +6549,10 @@ static void player_apply_geometry(bool force) {
 
 	int side = compact_sleeve_side();
 	if (layout_poster_now) {
-		// The sleeve is the whole width of the screen and stays square: the
-		// deck then stands in front of the foot of the picture rather than
-		// beside a smaller square of it.
-		side = cover_box_w;
+		// Square, and wholly above the deck: the sleeve is measured against
+		// the panel's height here rather than its width, since a square at
+		// the full width would be taller than the room the deck leaves.
+		side = poster_sleeve_side();
 	}
 	cover_art_w = side;
 	cover_art_h = side;
