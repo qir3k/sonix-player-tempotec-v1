@@ -38,6 +38,7 @@
 #include "src/system/device/screensaverpics.h"
 #include "src/system/library/metadata.h"
 #include "src/system/playback/device_state.h"
+#include "src/system/streaming/podcast.h"
 
 /* ---- fonts: every face is LVGL's built-in one ---------------------------- */
 
@@ -188,6 +189,23 @@ const lv_image_dsc_t *player_backdrop_image(void) { return player_backdrop.pixel
 const char *player_cover_path(void) { return player_cover.pixels && player_path[0] ? player_path : NULL; }
 void device_state_get(device_state_t *out) { *out = state; }
 
+// The podcast the playing file belongs to. A test says when one does, and what
+// its sidecar holds; nothing here reads a card.
+static podcast_feed_t playing_feed;
+static bool playing_feed_known;
+bool player_current_podcast_feed(long long *id_out, podcast_feed_t *feed_out) {
+	if (!playing_feed_known) {
+		return false;
+	}
+	if (id_out) {
+		*id_out = playing_feed.id;
+	}
+	if (feed_out) {
+		*feed_out = playing_feed;
+	}
+	return true;
+}
+
 // A track change, the way the player makes one: the release hook first, then
 // its own buffers freed, then -- for a track with artwork -- the new picture
 // once its decode lands, which the screensaver notices on its next tick.
@@ -292,6 +310,8 @@ static lv_obj_t *placeholder(void) { return lv_obj_get_child(cover_box(), 0); }
 static lv_obj_t *frame(void) { return lv_obj_get_child(cover_box(), 1); }
 static lv_obj_t *picture(void) { return lv_obj_get_child(frame(), 0); }
 static lv_obj_t *info_strip(void) { return lv_obj_get_child(saver_obj(), 1); }
+// The strip's three lines, in the order init() makes them: title, artist, time.
+static lv_obj_t *strip_label(int index) { return lv_obj_get_child(info_strip(), index); }
 // The swipe-up sign at the foot of the screen: the saver's last child, hung
 // over the strip's lower edge.
 static lv_obj_t *chevron_btn(void) { return lv_obj_get_child(saver_obj(), 2); }
@@ -901,6 +921,8 @@ int main(int argc, char **argv) {
 	for (int kind = 0; kind < THEME_KIND_COUNT; kind++) {
 		theme_set_kind((theme_kind_t)kind);
 		check_fill(&player_cover);
+		// The time is white in every palette, whatever accent it has.
+		assert(lv_color_eq(lv_obj_get_style_text_color(strip_label(2), 0), lv_color_white()));
 		char name[32];
 		snprintf(name, sizeof(name), "fill-theme%d", kind);
 		dump_snapshot(name);
@@ -942,6 +964,26 @@ int main(int argc, char **argv) {
 	assert(frame_job.requests == requests);
 	hide_now();
 	screensaver_set_source(SCREENSAVER_SOURCE_ALBUM);
+
+	/* A podcast episode: under the episode's name the strip names the podcast's
+	 * author, which only the sidecar carries, rather than the show's own name
+	 * the artist field holds. */
+	snprintf(playing_feed.author, sizeof(playing_feed.author), "Gimlet Media");
+	playing_feed_known = true;
+	player_change_track("/mnt/sd/Podcast/Reply All/12345678.flac", "Missing Hit");
+	snprintf(state.metadata.artist, sizeof(state.metadata.artist), "Reply All");
+	player_lands_art(sleeve, sleeve, 12);
+	go_dark();
+	wake();
+	assert(strcmp(lv_label_get_text(strip_label(0)), "Missing Hit") == 0);
+	assert(strcmp(lv_label_get_text(strip_label(1)), "Gimlet Media") == 0);
+	hide_now();
+	/* The same file with nothing behind it: the artist the tags give stands. */
+	playing_feed_known = false;
+	go_dark();
+	wake();
+	assert(strcmp(lv_label_get_text(strip_label(1)), "Reply All") == 0);
+	hide_now();
 
 	/* Switched off with the screensaver up: everything goes with it. */
 	go_dark();

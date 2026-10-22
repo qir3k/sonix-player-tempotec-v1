@@ -552,17 +552,16 @@ static void screensaver_refresh_theme(void) {
 	// roles the palette's own Now Playing deck gives the same things: the
 	// track name's colour for the title, the artist line's for the artist --
 	// which is Amber's amber and Tokyo Night's cyan, the one place the two
-	// palettes ask a different colour of the same role -- the accent for the
-	// time and the deck's quiet chevron for the way out.
+	// palettes ask a different colour of the same role -- and the deck's quiet
+	// chevron for the way out. The time is white in every palette: it is the
+	// one thing here that should read the same whatever accent is chosen.
 	lv_color_t ink_title = lv_color_white();
 	lv_color_t ink_artist = lv_color_make(200, 200, 200);
-	lv_color_t ink_clock = lv_color_white();
 	lv_color_t ink_chevron = lv_color_white();
 	if (field) {
 		ink_title = theme_player_chrome_color(THEME_PLAYER_CHROME_PRIMARY);
 		ink_artist = tokyo ? theme_semantic_color(THEME_SEMANTIC_CYAN)
 						   : theme_player_chrome_color(THEME_PLAYER_CHROME_SECONDARY);
-		ink_clock = theme()->accent;
 		ink_chevron = theme_player_chrome_color(THEME_PLAYER_CHROME_CHEVRON);
 	}
 
@@ -582,7 +581,7 @@ static void screensaver_refresh_theme(void) {
 		lv_obj_set_style_text_color(artist_label, ink_artist, 0);
 	}
 	if (clock_label) {
-		lv_obj_set_style_text_color(clock_label, ink_clock, 0);
+		lv_obj_set_style_text_color(clock_label, lv_color_white(), 0);
 	}
 	if (chevron_icon) {
 		lv_obj_set_style_image_recolor(chevron_icon, ink_chevron, 0);
@@ -727,7 +726,16 @@ static void refresh_content(void) {
 		const char *slash = strrchr(state.current_file, '/');
 		scrolltext_set(title_label, state.metadata.title[0] ? state.metadata.title
 															: (slash ? slash + 1 : state.current_file));
-		const char *artist = metadata_shown_artist(&state.metadata);
+		// A podcast episode has the show's own name in its artist field, because
+		// that is the line the player and the queue want under the episode. Here
+		// the line names the podcast's author instead, which only the sidecar
+		// knows -- and the player already reads it for its own star. Anything
+		// else, or an episode from a hand-copied file with no sidecar, keeps the
+		// artist the tags give.
+		podcast_feed_t feed;
+		const char *artist = player_current_podcast_feed(NULL, &feed) && feed.author[0]
+								? feed.author
+								: metadata_shown_artist(&state.metadata);
 		scrolltext_set(artist_label, artist);
 	} else {
 		scrolltext_set(title_label, "");
