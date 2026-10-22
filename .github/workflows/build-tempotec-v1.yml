@@ -115,6 +115,33 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+
+      # The version this build will be released as, decided before the image is
+      # built rather than after it: a personal image stamps it into
+      # system-info.json as the installed OS version, and the update check
+      # compares release tags against exactly that string. Doing it first is
+      # what lets About, the tag and the updater agree; the cost is that a tag
+      # exists for a build that might fail, which the next push steps past.
+      - name: Bump the version for a personal build
+        id: version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A patch for every push; a commit saying #major or #minor wins over
+          # this, and #none refuses to tag. BRANCH_HISTORY=last reads the
+          # pushed commit rather than the whole history.
+          DEFAULT_BUMP: patch
+          BRANCH_HISTORY: last
+          # Only personal releases. Without this the action treats a branch
+          # that is not the default one as a prerelease (v1.0.1-beta.1).
+          RELEASE_BRANCHES: personal
+          TAG_PREFIX: v
+          # A fork with no tags starts here, so the first push makes v1.0.1.
+          # The versions the upstream project tags (1.4.3, ...) are not in
+          # this repository's tags.
+          INITIAL_VERSION: 1.0.0
+
       - name: Install build and firmware tools
         run: |
           sudo apt-get update
@@ -177,6 +204,38 @@ jobs:
       - name: Build TempoTec V1 target binaries
         working-directory: sonix-player
         run: make target -j"$(nproc)"
+
+
+      # A personal image is a release of this fork, not of upstream: it says
+      # which version it is (OS_version, which the update check measures
+      # releases against), it looks for updates in this repository's releases
+      # (ota-repo), and About credits whoever built it (forked-by). Nothing
+      # here runs on main, dev or a tag build, so those images keep exactly
+      # what their asset file says.
+      - name: Stamp the personal build's version and update source
+        if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.new_tag }}
+          UPDATE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          test -n "$version"
+          info=sonix-packer/assets/V1/usr/resource/sonix/components/system-info.json
+          test -f "$info"
+          python3 - "$info" "$version" "$UPDATE_REPO" <<'PY'
+          import json, sys
+          path, version, repo = sys.argv[1:4]
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+          data["OS_version"] = version
+          data["ota-repo"] = repo
+          data["forked-by"] = "qirke (github.com/qir3k)"
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=4)
+              f.write("\n")
+          PY
+          cat "$info"
 
       - name: Build v1.upt
         run: |
@@ -278,32 +337,6 @@ jobs:
             echo "### Published to release $RELEASE_TAG"
             echo "v1.upt, $local_size bytes, built from $BUILT_SHA."
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # Every image built from the personal branch becomes a release, with
-      # the patch bumped and the notes drawn from the commits since the last
-      # one. It happens before the boot-script report is pushed below, because
-      # that push moves the branch past this commit, and the tag has to name
-      # the commit the image was built from -- the same rule the step above
-      # holds a hand-published tag to.
-      - name: Bump the version for a personal build
-        id: version
-        if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
-        uses: anothrNick/github-tag-action@1.75.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A patch for every push; a commit saying #major or #minor wins over
-          # this, and #none refuses to tag. BRANCH_HISTORY=last reads the
-          # pushed commit rather than the whole history.
-          DEFAULT_BUMP: patch
-          BRANCH_HISTORY: last
-          # Only personal releases. Without this the action treats a branch
-          # that is not the default one as a prerelease (v1.0.1-beta.1).
-          RELEASE_BRANCHES: personal
-          TAG_PREFIX: v
-          # A fork with no tags starts here, so the first push makes v1.0.1.
-          # The versions the upstream project tags (1.4.3, ...) are not in
-          # this repository's tags.
-          INITIAL_VERSION: 1.0.0
 
       - name: Check the tag names this build
         if: github.event_name == 'push' && github.ref == 'refs/heads/personal'

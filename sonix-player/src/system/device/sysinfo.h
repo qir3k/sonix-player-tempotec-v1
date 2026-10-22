@@ -20,8 +20,14 @@
 //         "dac-info": "Dual Cirrus Logic CS43198",
 //         "OS_version": "1.0",
 //         "Build_version": "182",
-//         "ota-repo": "Jepl4r/sonix-player"
+//         "ota-repo": "Jepl4r/sonix-player",
+//         "forked-by": "..."
 //     }
+//
+// "OS_version" is the version the update check compares release tags against,
+// so an image that leaves it as a word rather than a number can never be told
+// apart from the newest release. A build that cuts releases of its own writes
+// the release's version here.
 //
 // This way updating the build number does not mean rebuilding, and whoever
 // assembles a firmware image can write it from the build script. A missing or
@@ -50,6 +56,11 @@ const char *sysinfo_dac_info(void);
 // The GitHub repository the update from the internet looks in, "owner/name",
 // verbatim from the file (ota.h). "" when the file does not say.
 const char *sysinfo_ota_repo(void);
+
+// Who forked this build, verbatim from the file, for the information page to
+// print. "" when the file does not say, which is every image that does not
+// write the key: those show the upstream fork's credit.
+const char *sysinfo_forked_by(void);
 
 // ---------------------------------------------------------------------------
 // the models, and what differs between them
