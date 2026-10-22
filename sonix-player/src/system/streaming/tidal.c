@@ -1678,6 +1678,18 @@ bool tidal_favorite_remove_track(long track_id) {
 bool tidal_favorite_add_album(const char *album_id) { return favorite_add("albums", "albumId", album_id); }
 bool tidal_favorite_remove_album(const char *album_id) { return favorite_remove("albums", album_id); }
 
+bool tidal_favorite_add_artist(long artist_id) {
+	char id[32];
+	snprintf(id, sizeof(id), "%ld", artist_id);
+	return favorite_add("artists", "artistId", id);
+}
+
+bool tidal_favorite_remove_artist(long artist_id) {
+	char id[32];
+	snprintf(id, sizeof(id), "%ld", artist_id);
+	return favorite_remove("artists", id);
+}
+
 int tidal_favorite_track_ids(long *out, int max) {
 	if (!out || max <= 0) {
 		return -1;
@@ -1743,6 +1755,27 @@ bool tidal_playlist_delete(const char *playlist_id) {
 
 	char url[768];
 	snprintf(url, sizeof(url), "%s/playlists/%s?countryCode=%s", api_url, encoded, country());
+	return api_write("DELETE", url, NULL);
+}
+
+// Removing is by position, not by track id: the same track may be in a playlist
+// twice, and the entry that goes is the one that was tapped. Tidal numbers the
+// entries from zero in the order tidal_playlist_tracks() returns them, which is
+// the order the page draws them in.
+bool tidal_playlist_remove_track(const char *playlist_id, int index) {
+	if (!playlist_id || !*playlist_id || index < 0) {
+		return false;
+	}
+	if (!tidal_logged_in()) {
+		set_error("%s", tr("tidal_not_signed_in"));
+		return false;
+	}
+
+	char encoded[64];
+	http_url_encode(playlist_id, encoded, sizeof(encoded));
+
+	char url[768];
+	snprintf(url, sizeof(url), "%s/playlists/%s/items/%d?countryCode=%s", api_url, encoded, index, country());
 	return api_write("DELETE", url, NULL);
 }
 

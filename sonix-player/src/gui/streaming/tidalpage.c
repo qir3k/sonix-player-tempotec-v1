@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <malloc.h>
 
+#include "src/gui/board_profile.h"
 #include "src/gui/shell/confirm.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
@@ -24,6 +25,7 @@
 #include "src/system/decode/growfile.h"
 #include "src/system/playback/device_state.h"
 #include "src/system/core/lang.h"
+#include "src/system/core/config.h"
 #include "src/system/playback/playlist.h"
 #include "src/system/device/system.h"
 #include "src/system/streaming/tidal.h"
@@ -81,6 +83,7 @@ typedef enum {
 	JOB_PLAYLIST_TRACKS,
 	JOB_FAV_TRACKS,
 	JOB_FAV_ALBUMS,
+	JOB_FAV_ARTISTS,
 	JOB_USER_PLAYLISTS,
 	JOB_FEATURED,
 	JOB_PLAY,
@@ -133,6 +136,9 @@ static pthread_cond_t result_taken = PTHREAD_COND_INITIALIZER;
 static job_kind_t result_kind;
 static char result_error[256];
 static char result_title[160];
+// Which playlist the tracks that just arrived belong to: the rows of a playlist
+// can be taken out of it, and a row knows its position but not the playlist.
+static char result_playlist_id[TIDAL_ID_MAX];
 
 // The showcase that came back empty, as a slot among the three featured
 // entries; -1 when it worked.
@@ -259,8 +265,12 @@ typedef enum {
 	ROW_MENU_NONE = 0,
 	ROW_MENU_TRACK_ADD,	   // "add to favourites" on a track
 	ROW_MENU_TRACK_REMOVE, // "remove from favourites" on a track
+	// The same track, seen inside a playlist: it can also be taken out of it.
+	ROW_MENU_PLAYLIST_TRACK,
 	ROW_MENU_ALBUM_ADD,
 	ROW_MENU_ALBUM_REMOVE,
+	ROW_MENU_ARTIST_ADD,
+	ROW_MENU_ARTIST_REMOVE,
 	ROW_MENU_PLAYLIST_DELETE,
 } row_menu_t;
 
@@ -268,8 +278,9 @@ static row_menu_t row_menu_kind(job_kind_t kind) {
 	switch (kind) {
 	case JOB_SEARCH_TRACKS:
 	case JOB_ALBUM_TRACKS:
-	case JOB_PLAYLIST_TRACKS:
 		return ROW_MENU_TRACK_ADD;
+	case JOB_PLAYLIST_TRACKS:
+		return ROW_MENU_PLAYLIST_TRACK;
 	case JOB_FAV_TRACKS:
 		return ROW_MENU_TRACK_REMOVE;
 	case JOB_SEARCH_ALBUMS:
@@ -278,12 +289,20 @@ static row_menu_t row_menu_kind(job_kind_t kind) {
 		return ROW_MENU_ALBUM_ADD;
 	case JOB_FAV_ALBUMS:
 		return ROW_MENU_ALBUM_REMOVE;
+	case JOB_SEARCH_ARTISTS:
+		return ROW_MENU_ARTIST_ADD;
+	case JOB_FAV_ARTISTS:
+		return ROW_MENU_ARTIST_REMOVE;
 	case JOB_USER_PLAYLISTS:
 		return ROW_MENU_PLAYLIST_DELETE;
 	default:
 		return ROW_MENU_NONE;
 	}
 }
+
+// The playlist being shown, when the list on screen is one. The removal needs
+// it: the row knows its position but not which playlist it belongs to.
+static char list_playlist_id[TIDAL_ID_MAX];
 
 // The row the menu was opened on. Only one: the menu is modal.
 static int menu_index = -1;
@@ -298,7 +317,18 @@ static void reload_current_list(void) {
 	switch (list_kind) {
 	case JOB_FAV_TRACKS:
 	case JOB_FAV_ALBUMS:
+	case JOB_FAV_ARTISTS:
 	case JOB_USER_PLAYLISTS:
+		run(&job, "loading");
+		break;
+	case JOB_PLAYLIST_TRACKS:
+		// The same playlist again, now one entry shorter. It is the same job,
+		// so the history sees a re-read and not a step forward.
+		if (!list_playlist_id[0]) {
+			break;
+		}
+		snprintf(job.id_text, sizeof(job.id_text), "%s", list_playlist_id);
+		snprintf(job.text, sizeof(job.text), "%s", result_title);
 		run(&job, "loading");
 		break;
 	default:
@@ -368,6 +398,32 @@ static void do_album_remove(void *user) {
 	tidalsync_album_favorite(result_albums[menu_index].id_text, false, row_sync_done, (void *)(intptr_t)1);
 }
 
+static void do_artist_add(void *user) {
+	(void)user;
+	if (menu_index < 0 || menu_index >= result_count) {
+		return;
+	}
+	tidalsync_artist_favorite(result_artists[menu_index].id, true, row_added_done, NULL);
+}
+
+static void do_artist_remove(void *user) {
+	(void)user;
+	if (menu_index < 0 || menu_index >= result_count) {
+		return;
+	}
+	tidalsync_artist_favorite(result_artists[menu_index].id, false, row_sync_done, (void *)(intptr_t)1);
+}
+
+// Taking a track out of the playlist it was opened in. The row's index is the
+// entry's position in the playlist, which is what Tidal asks for.
+static void do_playlist_track_remove(void *user) {
+	(void)user;
+	if (menu_index < 0 || menu_index >= result_count || !list_playlist_id[0]) {
+		return;
+	}
+	tidalsync_playlist_track_remove(list_playlist_id, menu_index, row_sync_done, (void *)(intptr_t)1);
+}
+
 static void do_playlist_delete(void *user) {
 	(void)user;
 	if (menu_index < 0 || menu_index >= result_count) {
@@ -400,6 +456,28 @@ static void ask_album_remove(void *user) {
 	confirm_show("remove_from_favourites_2", message, "remove", do_album_remove, NULL);
 }
 
+static void ask_artist_remove(void *user) {
+	(void)user;
+	if (menu_index < 0 || menu_index >= result_count) {
+		return;
+	}
+	char message[TIDAL_NAME_MAX + 96];
+	snprintf(message, sizeof(message), tr("will_no_longer_be_one_of_your_artists"),
+			 result_artists[menu_index].name);
+	confirm_show("remove_from_favourites_2", message, "remove", do_artist_remove, NULL);
+}
+
+static void ask_playlist_track_remove(void *user) {
+	(void)user;
+	if (menu_index < 0 || menu_index >= result_count) {
+		return;
+	}
+	char message[TIDAL_TITLE_MAX + 96];
+	snprintf(message, sizeof(message), tr("will_be_removed_from_the_playlist"),
+			 result_tracks[menu_index].title);
+	confirm_show("medialist_remove_from_playlist_2", message, "remove", do_playlist_track_remove, NULL);
+}
+
 static void ask_playlist_delete(void *user) {
 	(void)user;
 	if (menu_index < 0 || menu_index >= result_count) {
@@ -423,46 +501,77 @@ static void row_menu_cb(lv_event_t *e) {
 	}
 	menu_index = index;
 
-	popover_item_t item;
-	memset(&item, 0, sizeof(item));
+	popover_item_t items[2];
+	memset(items, 0, sizeof(items));
+	int count = 1;
 
 	switch (row_menu_kind(list_kind)) {
 	case ROW_MENU_TRACK_ADD:
 		// A track already in favourites is offered for removal, not for
 		// adding again.
 		if (tidalsync_is_favorite(result_tracks[index].id)) {
-			item.label = "remove_from_favourites";
-			item.action = ask_track_remove;
+			items[0].label = "remove_from_favourites";
+			items[0].action = ask_track_remove;
 		} else {
-			item.label = "medialist_add_to_favourites";
-			item.action = do_track_add;
+			items[0].label = "medialist_add_to_favourites";
+			items[0].action = do_track_add;
 		}
 		break;
 	case ROW_MENU_TRACK_REMOVE:
-		item.label = "remove_from_favourites";
-		item.action = ask_track_remove;
+		items[0].label = "remove_from_favourites";
+		items[0].action = ask_track_remove;
+		break;
+	case ROW_MENU_PLAYLIST_TRACK:
+		// Both things one can do with a track that is in a playlist: favourite
+		// it, or take it out of this playlist.
+		if (tidalsync_is_favorite(result_tracks[index].id)) {
+			items[0].label = "remove_from_favourites";
+			items[0].action = ask_track_remove;
+		} else {
+			items[0].label = "medialist_add_to_favourites";
+			items[0].action = do_track_add;
+		}
+		items[1].label = "medialist_remove_from_playlist";
+		items[1].action = ask_playlist_track_remove;
+		count = 2;
 		break;
 	case ROW_MENU_ALBUM_ADD:
-		item.label = "medialist_add_to_favourites";
-		item.action = do_album_add;
+		items[0].label = "medialist_add_to_favourites";
+		items[0].action = do_album_add;
 		break;
 	case ROW_MENU_ALBUM_REMOVE:
-		item.label = "remove_from_favourites";
-		item.action = ask_album_remove;
+		items[0].label = "remove_from_favourites";
+		items[0].action = ask_album_remove;
+		break;
+	case ROW_MENU_ARTIST_ADD:
+		items[0].label = "medialist_add_to_favourites";
+		items[0].action = do_artist_add;
+		break;
+	case ROW_MENU_ARTIST_REMOVE:
+		items[0].label = "remove_from_favourites";
+		items[0].action = ask_artist_remove;
 		break;
 	case ROW_MENU_PLAYLIST_DELETE:
-		item.label = "delete_playlist";
-		item.action = ask_playlist_delete;
+		items[0].label = "delete_playlist";
+		items[0].action = ask_playlist_delete;
 		break;
 	default:
 		return;
 	}
 
-	popover_show(lv_event_get_current_target(e), &item, 1);
+	popover_show(lv_event_get_current_target(e), items, count);
 }
 
 // Side length of a row thumbnail.
-#define ROW_THUMB 60
+//
+// 60 px on the 480-px players, 38 on the 240-px V1. The old 88 px row carried a
+// 60 px sleeve, which on the V1 showed two and a half tracks per screen and cut
+// the artist's name off at the first word: the music tab's own rows are 44 px
+// with a 36 px sleeve (see medialist.c) and that is the density to match here.
+#define ROW_THUMB bp_pick(38, 60)
+#define ROW_HEIGHT bp_pick(52, 88)
+#define ROW_TITLE_FONT (bp_is_tempotec_v1() ? &font_ui_18 : &font_ui_22)
+#define ROW_DETAIL_FONT (bp_is_tempotec_v1() ? &font_ui_14 : &font_ui_18)
 
 // Row cover art.
 //
@@ -727,15 +836,15 @@ static void list_unloaded_cb(lv_event_t *e) {
 // too long, instead of letting it wrap over the subtitle.
 static lv_obj_t *make_row(const char *name, const char *detail, const char *cover_url, bool dimmed, int index) {
 	lv_obj_t *row = lv_btn_create(list_container);
-	lv_obj_set_size(row, lv_pct(100), 88);
+	lv_obj_set_size(row, lv_pct(100), ROW_HEIGHT);
 	lv_obj_add_style(row, &theme_style_card, 0);
 	lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
-	lv_obj_set_style_radius(row, 12, 0);
+	lv_obj_set_style_radius(row, bp_pick(10, 12), 0);
 	lv_obj_set_style_border_width(row, 0, 0);
 	lv_obj_set_style_shadow_width(row, 0, 0);
-	lv_obj_set_style_pad_hor(row, 16, 0);
+	lv_obj_set_style_pad_hor(row, bp_pick(5, 16), 0);
 	lv_obj_set_style_pad_ver(row, 0, 0);
-	lv_obj_set_style_pad_column(row, 8, 0);
+	lv_obj_set_style_pad_column(row, bp_pick(6, 8), 0);
 	lv_obj_set_scrollable(row, false);
 	lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
 	lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -766,7 +875,7 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 	lv_obj_set_style_bg_opa(texts, 0, 0);
 	lv_obj_set_style_border_width(texts, 0, 0);
 	lv_obj_set_style_pad_all(texts, 0, 0);
-	lv_obj_set_style_pad_row(texts, 6, 0); // breathing room between title and subtitle
+	lv_obj_set_style_pad_row(texts, bp_pick(2, 6), 0); // breathing room between title and subtitle
 	lv_obj_set_scrollable(texts, false);
 	lv_obj_set_event_bubble(texts, true);
 	lv_obj_set_flex_flow(texts, LV_FLEX_FLOW_COLUMN);
@@ -776,9 +885,9 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 	lv_label_set_text(label, name);
 	lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(label, lv_pct(100));
-	lv_obj_set_height(label, lv_font_get_line_height(&font_ui_22));
+	lv_obj_set_height(label, lv_font_get_line_height(ROW_TITLE_FONT));
 	lv_obj_add_style(label, &theme_style_text, 0);
-	lv_obj_set_style_text_font(label, &font_ui_22, 0);
+	lv_obj_set_style_text_font(label, ROW_TITLE_FONT, 0);
 
 	// A track the subscription does not cover stays in the list but reads as
 	// unplayable: hiding it would leave a gap in the album with no explanation.
@@ -791,15 +900,15 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 		lv_label_set_text(sub, detail);
 		lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
 		lv_obj_set_width(sub, lv_pct(100));
-		lv_obj_set_height(sub, lv_font_get_line_height(&font_ui_18));
+		lv_obj_set_height(sub, lv_font_get_line_height(ROW_DETAIL_FONT));
 		lv_obj_add_style(sub, &theme_style_text_dim, 0);
-		lv_obj_set_style_text_font(sub, &font_ui_18, 0);
+		lv_obj_set_style_text_font(sub, ROW_DETAIL_FONT, 0);
 	}
 
 	// The three dots, where the list has something to offer on a single entry.
 	if (row_menu_kind(result_kind) != ROW_MENU_NONE) {
 		lv_obj_t *menu_btn = lv_btn_create(row);
-		lv_obj_set_size(menu_btn, 44, 44);
+		lv_obj_set_size(menu_btn, bp_pick(32, 44), bp_pick(32, 44));
 		lv_obj_set_style_bg_opa(menu_btn, LV_OPA_TRANSP, 0);
 		lv_obj_set_style_border_width(menu_btn, 0, 0);
 		lv_obj_set_style_shadow_width(menu_btn, 0, 0);
@@ -857,7 +966,8 @@ static void fill_list(int from) {
 			make_row(a->title, detail, a->cover, false, i);
 			break;
 		}
-		case JOB_SEARCH_ARTISTS: {
+		case JOB_SEARCH_ARTISTS:
+		case JOB_FAV_ARTISTS: {
 			const tidal_artist_t *a = &result_artists[i];
 			snprintf(detail, sizeof(detail), "%d album", a->album_count);
 			make_row(a->name, a->album_count > 0 ? detail : "", a->image, false, i);
@@ -925,6 +1035,14 @@ static void job_done_cb(void *user) {
 		page_loading = false;
 		job_result_taken();
 		return;
+	}
+
+	// Which playlist these rows belong to, before the rows exist: the removal
+	// menu reads it.
+	if (result_kind == JOB_PLAYLIST_TRACKS) {
+		snprintf(list_playlist_id, sizeof(list_playlist_id), "%s", result_playlist_id);
+	} else {
+		list_playlist_id[0] = '\0';
 	}
 
 	switch (result_kind) {
@@ -1654,6 +1772,7 @@ static void *worker_main(void *arg) {
 		result_error[0] = '\0';
 		result_kind = job.kind;
 		result_featured_gone = -1;
+		result_playlist_id[0] = '\0';
 
 		// The length of the list currently on screen, saved before touching
 		// anything.
@@ -1734,6 +1853,7 @@ static void *worker_main(void *arg) {
 			// playlists are named by UUID.
 			n = tidal_playlist_tracks(job.id_text, off, result_tracks + off, want);
 			snprintf(result_title, sizeof(result_title), "%.150s", job.text);
+			snprintf(result_playlist_id, sizeof(result_playlist_id), "%s", job.id_text);
 			break;
 
 		case JOB_FAV_TRACKS:
@@ -1743,6 +1863,10 @@ static void *worker_main(void *arg) {
 		case JOB_FAV_ALBUMS:
 			n = tidal_favorite_albums(off, result_albums + off, want);
 			snprintf(result_title, sizeof(result_title), "%s", tr("favourite_albums"));
+			break;
+		case JOB_FAV_ARTISTS:
+			n = tidal_favorite_artists(off, result_artists + off, want);
+			snprintf(result_title, sizeof(result_title), "%s", tr("favourite_artists"));
 			break;
 		case JOB_USER_PLAYLISTS:
 			n = tidal_user_playlists(off, result_playlists + off, want);
@@ -1997,6 +2121,7 @@ static void row_clicked_cb(lv_event_t *e) {
 		return;
 
 	case JOB_SEARCH_ARTISTS:
+	case JOB_FAV_ARTISTS:
 		job.kind = JOB_ARTIST_ALBUMS;
 		job.id = result_artists[index].id;
 		snprintf(job.text, sizeof(job.text), "%s", result_artists[index].name);
@@ -2024,9 +2149,100 @@ static lv_obj_t *search_clear_btn; // the x that empties it
 static keyboard_t *search_keyboard;
 static int search_kind_index; // 0 tracks, 1 albums, 2 artists
 static lv_obj_t *search_pills[3];
+static lv_obj_t *search_history_list;
+static lv_obj_t *search_history_empty;
+
+// The last few queries, newest first. Eight, because a history is for picking
+// up a search from the day before and not for keeping a log; they live in the
+// configuration file, which is rewritten as a whole on every change.
+#define SEARCH_HISTORY_MAX 8
+#define SEARCH_HISTORY_LEN 96
+#define SEARCH_HISTORY_FONT (bp_is_tempotec_v1() ? &font_ui_18 : &font_ui_24)
+
+static char history_terms[SEARCH_HISTORY_MAX][SEARCH_HISTORY_LEN];
+static int history_count;
+static bool history_loaded;
+
+static void search_history_rebuild(void);
+
+// Rebuilding the list deletes the rows in it, and one of those rows may be the
+// very widget whose tap asked for the rebuild. The work is queued instead, so
+// it happens after the event has returned.
+static void search_history_rebuild_async(void *user) {
+	(void)user;
+	search_history_rebuild();
+}
+
+static void history_load(void) {
+	if (history_loaded) {
+		return;
+	}
+	history_loaded = true;
+	history_count = 0;
+
+	int stored = (int)config_get_int("tidal", "search_history_count", 0);
+	if (stored < 0) {
+		stored = 0;
+	}
+	if (stored > SEARCH_HISTORY_MAX) {
+		stored = SEARCH_HISTORY_MAX;
+	}
+	for (int i = 0; i < stored; i++) {
+		char key[24];
+		snprintf(key, sizeof(key), "search_history_%d", i);
+		const char *term = config_get("tidal", key, "");
+		if (term && term[0]) {
+			snprintf(history_terms[history_count], SEARCH_HISTORY_LEN, "%s", term);
+			history_count++;
+		}
+	}
+}
+
+static void history_save(void) {
+	config_set_int("tidal", "search_history_count", history_count);
+	// Past the end the keys are emptied rather than left where they were: a
+	// cleared history that a later read finds again is worse than none.
+	for (int i = 0; i < SEARCH_HISTORY_MAX; i++) {
+		char key[24];
+		snprintf(key, sizeof(key), "search_history_%d", i);
+		config_set("tidal", key, i < history_count ? history_terms[i] : "");
+	}
+	config_save();
+}
+
+// Puts the term on top, once. A search already in the list moves up instead of
+// filling the list with the same word repeated.
+static void history_remember(const char *term) {
+	history_load();
+	while (term && *term == ' ') {
+		term++;
+	}
+	if (!term || !*term) {
+		return;
+	}
+
+	char kept[SEARCH_HISTORY_MAX][SEARCH_HISTORY_LEN];
+	int kept_count = 0;
+	for (int i = 0; i < history_count && kept_count < SEARCH_HISTORY_MAX - 1; i++) {
+		if (strcmp(history_terms[i], term) == 0) {
+			continue;
+		}
+		snprintf(kept[kept_count], SEARCH_HISTORY_LEN, "%s", history_terms[i]);
+		kept_count++;
+	}
+	snprintf(history_terms[0], SEARCH_HISTORY_LEN, "%s", term);
+	for (int i = 0; i < kept_count; i++) {
+		snprintf(history_terms[i + 1], SEARCH_HISTORY_LEN, "%s", kept[i]);
+	}
+	history_count = kept_count + 1;
+	history_save();
+}
 
 static void paint_search_pills(void) {
 	for (int i = 0; i < 3; i++) {
+		if (!search_pills[i]) {
+			continue;
+		}
 		bool on = i == search_kind_index;
 		lv_obj_set_style_bg_color(search_pills[i], on ? theme()->accent : theme()->surface_pressed, 0);
 		lv_obj_set_style_text_color(lv_obj_get_child(search_pills[i], 0), on ? theme_on_accent() : theme()->text_primary,
@@ -2035,6 +2251,9 @@ static void paint_search_pills(void) {
 }
 
 static void search_pill_cb(lv_event_t *e) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
 	search_kind_index = (int)(intptr_t)lv_event_get_user_data(e);
 	paint_search_pills();
 }
@@ -2057,42 +2276,198 @@ static void search_field_changed_cb(lv_event_t *e) {
 	refresh_search_clear();
 }
 
-static void search_clear_cb(lv_event_t *e) {
-	(void)e;
-	lv_textarea_set_text(search_field, "");
-	keyboard_reset(search_keyboard);
-	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
-	lv_obj_send_event(search_field, LV_EVENT_FOCUSED, NULL);
-	refresh_search_clear();
+// Typing needs the keyboard, and the keyboard and the history cannot both be on
+// a 320-px screen: one replaces the other. Tapping the field is what asks for
+// the keyboard.
+static void search_keyboard_show(bool visible) {
+	if (!search_keyboard) {
+		return;
+	}
+	keyboard_set_visible(search_keyboard, visible);
+	if (visible) {
+		lv_obj_set_hidden(search_history_list, true);
+		lv_obj_set_hidden(search_history_empty, true);
+	} else {
+		search_history_rebuild();
+	}
 }
 
-static void search_accept_cb(lv_event_t *e) {
+static void search_field_clicked_cb(lv_event_t *e) {
 	(void)e;
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	search_keyboard_show(true);
+	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
+	lv_obj_send_event(search_field, LV_EVENT_FOCUSED, NULL);
+}
+
+// Runs what is in the field, in the kind chosen by the pills, and remembers it.
+static void search_run(void) {
 	const char *text = lv_textarea_get_text(search_field);
 	if (!text || !*text) {
 		return;
 	}
+	history_remember(text);
 
 	job_t job = {0};
 	job.kind = search_kind_index == 1 ? JOB_SEARCH_ALBUMS
 									  : (search_kind_index == 2 ? JOB_SEARCH_ARTISTS : JOB_SEARCH_TRACKS);
 	snprintf(job.text, sizeof(job.text), "%s", text);
+	// The results get the whole page, as on the local search page: the keyboard
+	// stays up for the next query otherwise, over a list nobody asked to see
+	// with it.
+	search_keyboard_show(false);
 	run(&job, "searching");
+}
+
+static void search_accept_cb(lv_event_t *e) {
+	(void)e;
+	search_run();
+}
+
+static void search_clear_cb(lv_event_t *e) {
+	(void)e;
+	lv_textarea_set_text(search_field, "");
+	keyboard_reset(search_keyboard);
+	refresh_search_clear();
+}
+
+// One row of the history: the query, and an x to forget just that one.
+static void history_forget_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= history_count) {
+		return;
+	}
+	for (int i = index; i + 1 < history_count; i++) {
+		snprintf(history_terms[i], SEARCH_HISTORY_LEN, "%s", history_terms[i + 1]);
+	}
+	history_count--;
+	history_save();
+	gui_post(search_history_rebuild_async, NULL);
+}
+
+static void history_pick_cb(lv_event_t *e) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= history_count) {
+		return;
+	}
+	lv_textarea_set_text(search_field, history_terms[index]);
+	refresh_search_clear();
+	search_run();
+}
+
+// Draws the history. Shown in place of the keyboard when nothing is being typed.
+static void search_history_rebuild(void) {
+	if (!search_history_list) {
+		return;
+	}
+	history_load();
+	lv_obj_clean(search_history_list);
+
+	bool any = history_count > 0;
+	lv_obj_set_hidden(search_history_list, !any);
+	if (search_history_empty) {
+		lv_obj_set_hidden(search_history_empty, any);
+	}
+	if (!any) {
+		return;
+	}
+
+	for (int i = 0; i < history_count; i++) {
+		lv_obj_t *row = lv_btn_create(search_history_list);
+		lv_obj_set_width(row, lv_pct(100));
+		lv_obj_set_height(row, bp_pick(40, 68));
+		lv_obj_add_style(row, &theme_style_card, 0);
+		lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
+		lv_obj_set_style_radius(row, bp_pick(10, 12), 0);
+		lv_obj_set_style_border_width(row, 0, 0);
+		lv_obj_set_style_shadow_width(row, 0, 0);
+		lv_obj_set_style_pad_hor(row, bp_pick(8, 20), 0);
+		lv_obj_set_style_pad_column(row, bp_pick(4, 10), 0);
+		lv_obj_set_scrollable(row, false);
+		lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+		lv_obj_add_event_cb(row, history_pick_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		lv_obj_t *label = lv_label_create(row);
+		lv_label_set_text(label, history_terms[i]);
+		lv_obj_add_style(label, &theme_style_text, 0);
+		lv_obj_set_style_text_font(label, SEARCH_HISTORY_FONT, 0);
+		lv_obj_set_flex_grow(label, 1);
+		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+		lv_obj_set_height(label, lv_font_get_line_height(SEARCH_HISTORY_FONT));
+
+		lv_obj_t *x = lv_btn_create(row);
+		lv_obj_set_size(x, bp_pick(30, 44), bp_pick(30, 44));
+		lv_obj_set_style_bg_opa(x, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(x, 0, 0);
+		lv_obj_set_style_shadow_width(x, 0, 0);
+		lv_obj_set_style_pad_all(x, 0, 0);
+		lv_obj_add_event_cb(x, history_forget_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		lv_obj_t *glyph = lv_image_create(x);
+		lv_image_set_src(glyph, &icon_clear);
+		lv_obj_add_style(glyph, &theme_style_icon, 0);
+		lv_obj_set_style_image_opa(glyph, LV_OPA_60, 0);
+		lv_obj_center(glyph);
+	}
+}
+
+// From Tidal settings: forget every query at once.
+static void clear_search_history_cb(lv_event_t *e) {
+	(void)e;
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	history_load();
+	history_count = 0;
+	history_save();
+	search_history_rebuild();
+	toast_success("search_history_cleared");
 }
 
 static void open_search_cb(lv_event_t *e) {
 	(void)e;
 	lv_textarea_set_text(search_field, "");
 	keyboard_reset(search_keyboard);
-	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
-	lv_obj_send_event(search_field, LV_EVENT_FOCUSED, NULL);
 	refresh_search_clear();
+	// The history first, unless there is none to show: then the keyboard is
+	// what the page opens on, and the first tap has something to do.
+	history_load();
+	search_keyboard_show(history_count == 0);
 	switch_screen(search_screen);
 }
 
+static void search_loaded_cb(lv_event_t *e) {
+	(void)e;
+	refresh_search_clear();
+	// Back from the results, the keyboard that was sent away stays away and
+	// the history takes the space it left.
+	if (!keyboard_is_visible(search_keyboard)) {
+		search_history_rebuild();
+	}
+}
+
 static void build_search_page(gui_config_t *cfg) {
+	const bool compact = cfg->screen_width < 320;
+	const int field_h = compact ? 44 : 62;
+	const int gap = compact ? 6 : 10;
+	const int pill_h = compact ? 30 : 52;
+	const int clear_side = compact ? 40 : 56;
+
 	search_screen = lv_obj_create(NULL);
 	lv_obj_add_style(search_screen, &theme_style_screen, 0);
+	// Every return from the results lands here with the history, not the
+	// keyboard: the query has already been run.
+	lv_obj_add_event_cb(search_screen, search_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 
 	settingsrow_title(search_screen, cfg, "tidal_search_tidal");
 	int top = settingsrow_content_top(cfg);
@@ -2100,23 +2475,26 @@ static void build_search_page(gui_config_t *cfg) {
 	search_field = lv_textarea_create(search_screen);
 	lv_textarea_set_one_line(search_field, true);
 	lv_textarea_set_placeholder_text(search_field, tr("artist_album_or_track"));
-	lv_obj_set_size(search_field, cfg->screen_width - 2 * cfg->padding, 62);
+	lv_obj_set_size(search_field, cfg->screen_width - 2 * cfg->padding, field_h);
 	lv_obj_set_scrollbar_mode(search_field, LV_SCROLLBAR_MODE_OFF);
 	lv_obj_align(search_field, LV_ALIGN_TOP_LEFT, cfg->padding, top);
 	lv_obj_add_style(search_field, &theme_style_card, 0);
-	lv_obj_set_style_radius(search_field, 12, 0);
+	lv_obj_set_style_radius(search_field, compact ? 10 : 12, 0);
 	lv_obj_set_style_border_width(search_field, 0, 0);
 	lv_obj_set_style_shadow_width(search_field, 0, 0);
-	lv_obj_set_style_pad_all(search_field, 14, 0);
-	lv_obj_set_style_text_font(search_field, &font_ui_24, 0);
+	lv_obj_set_style_pad_all(search_field, compact ? 8 : 14, 0);
+	lv_obj_set_style_text_font(search_field, compact ? &font_ui_18 : &font_ui_24, 0);
 	keyboard_style_caret(search_field);
 	lv_obj_add_event_cb(search_field, search_field_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+	// Tapping it brings the keyboard, and the history steps aside for it.
+	lv_obj_add_event_cb(search_field, search_field_clicked_cb, LV_EVENT_CLICKED, NULL);
 
 	// The x on the right edge of the field, as in local search: clears the
 	// query with one tap. Hidden while the field is empty.
 	search_clear_btn = lv_btn_create(search_screen);
-	lv_obj_set_size(search_clear_btn, 56, 56);
-	lv_obj_align(search_clear_btn, LV_ALIGN_TOP_RIGHT, -cfg->padding - 4, top + (62 - 56) / 2);
+	lv_obj_set_size(search_clear_btn, clear_side, clear_side);
+	lv_obj_align(search_clear_btn, LV_ALIGN_TOP_RIGHT, -cfg->padding - (compact ? 0 : 4),
+				 top + (field_h - clear_side) / 2);
 	lv_obj_set_style_bg_opa(search_clear_btn, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_shadow_width(search_clear_btn, 0, 0);
 	lv_obj_set_style_border_width(search_clear_btn, 0, 0);
@@ -2131,28 +2509,83 @@ static void build_search_page(gui_config_t *cfg) {
 	lv_obj_center(search_clear_icon);
 
 	// Room for it, so a long query does not run underneath.
-	lv_obj_set_style_pad_right(search_field, 60, 0);
+	lv_obj_set_style_pad_right(search_field, compact ? 42 : 60, 0);
+
+	// The three kinds, in a row that scrolls sideways.
+	//
+	// They used to be three 140-px buttons stepping 150 px, which put the third
+	// at x=320 on a 240-px panel: the row has to scroll, and each pill has to be
+	// as wide as its own word, or "Albums" alone would fill the screen.
+	lv_obj_t *pill_row = lv_obj_create(search_screen);
+	lv_obj_set_size(pill_row, cfg->screen_width - 2 * cfg->padding, pill_h);
+	lv_obj_align(pill_row, LV_ALIGN_TOP_LEFT, cfg->padding, top + field_h + gap);
+	lv_obj_set_style_bg_opa(pill_row, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(pill_row, 0, 0);
+	lv_obj_set_style_pad_all(pill_row, 0, 0);
+	lv_obj_set_style_pad_column(pill_row, compact ? 6 : 10, 0);
+	lv_obj_set_scroll_dir(pill_row, LV_DIR_HOR);
+	lv_obj_set_scrollbar_mode(pill_row, LV_SCROLLBAR_MODE_OFF);
+	lv_obj_set_event_bubble(pill_row, true);
+	lv_obj_set_flex_flow(pill_row, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(pill_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
 	static const char *const KINDS[] = {"tracks_2", "albums", "artists"};
 	for (int i = 0; i < 3; i++) {
-		lv_obj_t *pill = lv_btn_create(search_screen);
-		lv_obj_set_size(pill, 140, 52);
+		lv_obj_t *pill = lv_btn_create(pill_row);
+		lv_obj_set_size(pill, LV_SIZE_CONTENT, pill_h);
+		lv_obj_set_style_pad_hor(pill, compact ? 12 : 22, 0);
 		lv_obj_set_style_radius(pill, LV_RADIUS_CIRCLE, 0);
 		lv_obj_set_style_shadow_width(pill, 0, 0);
 		lv_obj_set_style_border_width(pill, 0, 0);
-		lv_obj_align(pill, LV_ALIGN_TOP_LEFT, cfg->padding + i * 150, top + 78);
 		lv_obj_add_event_cb(pill, search_pill_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
 		lv_obj_t *label = lv_label_create(pill);
 		lv_label_set_text(label, tr(KINDS[i]));
-		lv_obj_set_style_text_font(label, &font_ui_20, 0);
+		lv_obj_set_style_text_font(label, compact ? &font_ui_16 : &font_ui_20, 0);
 		lv_obj_center(label);
 		search_pills[i] = pill;
 	}
 	paint_search_pills();
 
-	search_keyboard = keyboard_create(search_screen, cfg->screen_width, cfg->screen_width < 320 ? 144 : 316, search_field, NULL, "ok",
+	// What is under the pills: the history while nothing is typed, the keyboard
+	// while something is.
+	int history_top = top + field_h + gap + pill_h + gap;
+	int history_h = cfg->screen_height - history_top - cfg->padding;
+	if (history_h < 40) {
+		history_h = 40;
+	}
+
+	search_history_list = lv_obj_create(search_screen);
+	lv_obj_set_size(search_history_list, cfg->screen_width - 2 * cfg->padding, history_h);
+	lv_obj_align(search_history_list, LV_ALIGN_TOP_LEFT, cfg->padding, history_top);
+	lv_obj_set_style_bg_opa(search_history_list, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(search_history_list, 0, 0);
+	lv_obj_set_style_radius(search_history_list, 0, 0);
+	lv_obj_set_style_pad_all(search_history_list, 0, 0);
+	lv_obj_set_style_pad_gap(search_history_list, compact ? 4 : 8, 0);
+	lv_obj_set_style_pad_bottom(search_history_list, cfg->padding, 0);
+	lv_obj_set_scroll_dir(search_history_list, LV_DIR_VER);
+	lv_obj_set_scrollbar_mode(search_history_list, LV_SCROLLBAR_MODE_AUTO);
+	lv_obj_set_event_bubble(search_history_list, true);
+	lv_obj_set_flex_flow(search_history_list, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_flex_align(search_history_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+	search_history_empty = lv_label_create(search_screen);
+	lv_label_set_text(search_history_empty, tr("no_searches_yet"));
+	lv_obj_add_style(search_history_empty, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(search_history_empty, &font_ui_18, 0);
+	lv_obj_set_width(search_history_empty, cfg->screen_width - 2 * cfg->padding);
+	lv_label_set_long_mode(search_history_empty, LV_LABEL_LONG_WRAP);
+	lv_obj_align(search_history_empty, LV_ALIGN_TOP_LEFT, cfg->padding, history_top + 10);
+	lv_obj_set_hidden(search_history_empty, true);
+
+	search_keyboard = keyboard_create(search_screen, cfg->screen_width, compact ? 144 : 316, search_field, NULL, "ok",
 									  search_accept_cb, NULL);
+
+	// The history is what the page opens on; the keyboard arrives with the
+	// first tap in the field.
+	search_keyboard_show(false);
+
 	switcher_attach_back_gesture(search_screen);
 	theme_register_refresh(paint_search_pills);
 }
@@ -2512,6 +2945,106 @@ static const char *const FEATURED_NAMES[3] = {"new_releases", "tidal_most_stream
 // until the player is restarted.
 static bool featured_hidden[3];
 
+// ---------------------------------------------------------------------------
+// the rows of the main page
+//
+// Seven of them, and the user decides which are there and in what order. Someone
+// who never opens the showcases wants them gone; someone who plays the favourite
+// tracks every evening wants them on top. Stored in the configuration as a
+// comma-separated order and a bit mask of the hidden ones.
+// ---------------------------------------------------------------------------
+
+enum {
+	HOME_FAV_TRACKS = 0,
+	HOME_FAV_ALBUMS,
+	HOME_FAV_ARTISTS,
+	HOME_PLAYLISTS,
+	HOME_NEW,
+	HOME_TOP,
+	HOME_RECOMMENDED,
+	HOME_ROWS,
+};
+
+static int home_order[HOME_ROWS];
+static bool home_hidden[HOME_ROWS];
+static bool home_layout_loaded;
+
+static const char *home_row_name(int row) {
+	switch (row) {
+	case HOME_FAV_TRACKS:
+		return "favourite_tracks";
+	case HOME_FAV_ALBUMS:
+		return "favourite_albums";
+	case HOME_FAV_ARTISTS:
+		return "favourite_artists";
+	case HOME_PLAYLISTS:
+		return "my_playlists";
+	case HOME_NEW:
+		return FEATURED_NAMES[0];
+	case HOME_TOP:
+		return FEATURED_NAMES[1];
+	case HOME_RECOMMENDED:
+		return FEATURED_NAMES[2];
+	default:
+		return "";
+	}
+}
+
+static void home_layout_load(void) {
+	if (home_layout_loaded) {
+		return;
+	}
+	home_layout_loaded = true;
+
+	// A comma-separated order, as saved. Anything unreadable falls back to the
+	// default order, and a row named by no number is appended: a configuration
+	// written by an older build (or edited by hand) must not lose a row that
+	// the page has since gained.
+	const char *saved = config_get("tidal", "home_order", "0,1,2,3,4,5,6");
+	bool seen[HOME_ROWS] = {false};
+	int count = 0;
+	for (const char *p = saved; p && *p && count < HOME_ROWS; p++) {
+		if (*p < '0' || *p >= '0' + HOME_ROWS) {
+			continue;
+		}
+		int row = *p - '0';
+		if (seen[row]) {
+			continue;
+		}
+		seen[row] = true;
+		home_order[count++] = row;
+	}
+	for (int row = 0; row < HOME_ROWS; row++) {
+		if (!seen[row]) {
+			home_order[count++] = row;
+		}
+	}
+
+	long mask = config_get_int("tidal", "home_hidden", 0);
+	for (int row = 0; row < HOME_ROWS; row++) {
+		home_hidden[row] = ((mask >> row) & 1) != 0;
+	}
+}
+
+static void home_layout_save(void) {
+	char order[32];
+	size_t used = 0;
+	for (int slot = 0; slot < HOME_ROWS && used < sizeof(order); slot++) {
+		used += (size_t)snprintf(order + used, sizeof(order) - used, "%s%d", slot ? "," : "",
+								 home_order[slot]);
+	}
+	config_set("tidal", "home_order", order);
+
+	long mask = 0;
+	for (int row = 0; row < HOME_ROWS; row++) {
+		if (home_hidden[row]) {
+			mask |= 1L << row;
+		}
+	}
+	config_set_int("tidal", "home_hidden", mask);
+	config_save();
+}
+
 static const int QUALITY_VALUES[4] = {TIDAL_QUALITY_LOW, TIDAL_QUALITY_HIGH, TIDAL_QUALITY_LOSSLESS,
 									  TIDAL_QUALITY_HIRES};
 
@@ -2559,6 +3092,206 @@ static lv_obj_t *corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t
 }
 
 // ---------------------------------------------------------------------------
+// which rows the main page has, and in what order
+//
+// A page of its own rather than a menu: seven rows, each with a switch and two
+// arrows, is more than a popover can say. The arrows move a row one step up or
+// down the list; the switch decides whether the main page shows it at all.
+// ---------------------------------------------------------------------------
+
+static lv_obj_t *home_settings_screen;
+static lv_obj_t *home_settings_container;
+
+static void home_settings_rebuild(void);
+
+// The chevron the corner buttons use, turned over for "down": there is one
+// chevron glyph in the icon set, and rotating it beats a second file.
+static lv_obj_t *home_arrow_button(lv_obj_t *parent, bool down, bool dim, lv_event_cb_t cb, int row) {
+	int side = bp_pick(30, 52);
+	lv_obj_t *button = lv_btn_create(parent);
+	lv_obj_set_size(button, side, side);
+	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(button, 0, 0);
+	lv_obj_set_style_shadow_width(button, 0, 0);
+	lv_obj_set_style_pad_all(button, 0, 0);
+	lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, (void *)(intptr_t)row);
+
+	lv_obj_t *icon = lv_image_create(button);
+	lv_image_set_src(icon, &icon_chevron_up);
+	lv_obj_add_style(icon, &theme_style_icon, 0);
+	if (down) {
+		lv_image_set_rotation(icon, 1800);
+	}
+	if (dim) {
+		lv_obj_set_style_image_opa(icon, LV_OPA_30, 0);
+	}
+	lv_obj_center(icon);
+	return button;
+}
+
+// The switch and the arrows change the list they are drawn in, so the page is
+// rebuilt after the event has returned: deleting the widget whose callback is
+// running is the one thing an event handler must not do.
+static void home_settings_deferred_rebuild(void *user) {
+	(void)user;
+	home_settings_rebuild();
+}
+
+static int home_slot_of(int row) {
+	for (int slot = 0; slot < HOME_ROWS; slot++) {
+		if (home_order[slot] == row) {
+			return slot;
+		}
+	}
+	return -1;
+}
+
+static void home_row_up_cb(lv_event_t *e) {
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	int row = (int)(intptr_t)lv_event_get_user_data(e);
+	int slot = home_slot_of(row);
+	if (slot <= 0) {
+		return;
+	}
+	home_order[slot] = home_order[slot - 1];
+	home_order[slot - 1] = row;
+	home_layout_save();
+	rebuild_home();
+	gui_post(home_settings_deferred_rebuild, NULL);
+}
+
+static void home_row_down_cb(lv_event_t *e) {
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	int row = (int)(intptr_t)lv_event_get_user_data(e);
+	int slot = home_slot_of(row);
+	if (slot < 0 || slot >= HOME_ROWS - 1) {
+		return;
+	}
+	home_order[slot] = home_order[slot + 1];
+	home_order[slot + 1] = row;
+	home_layout_save();
+	rebuild_home();
+	gui_post(home_settings_deferred_rebuild, NULL);
+}
+
+// On means "shown on the Tidal page", which is the way round that reads
+// without a caption explaining it.
+static void home_row_switch_cb(lv_event_t *e) {
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	int row = (int)(intptr_t)lv_event_get_user_data(e);
+	lv_obj_t *toggle = lv_event_get_target(e);
+	home_hidden[row] = !lv_obj_has_state(toggle, LV_STATE_CHECKED);
+	home_layout_save();
+	rebuild_home();
+}
+
+static lv_obj_t *home_setting_row(lv_obj_t *parent, int row, int slot) {
+	const bool compact = bp_is_tempotec_v1();
+	const lv_font_t *name_font = compact ? &font_ui_18 : &font_ui_24;
+
+	lv_obj_t *card = lv_obj_create(parent);
+	lv_obj_set_width(card, lv_pct(100));
+	// Two lines: the name across the top and the controls under it. Side by
+	// side does not fit a translated name and three controls even on 480 px.
+	lv_obj_set_height(card, compact ? 66 : 120);
+	lv_obj_add_style(card, &theme_style_card, 0);
+	lv_obj_set_style_radius(card, compact ? bp_tile_radius() : 12, 0);
+	lv_obj_set_style_border_width(card, 0, 0);
+	lv_obj_set_style_shadow_width(card, 0, 0);
+	lv_obj_set_style_pad_hor(card, compact ? 8 : 20, 0);
+	lv_obj_set_style_pad_ver(card, compact ? 4 : 12, 0);
+	lv_obj_set_scrollable(card, false);
+	lv_obj_set_event_bubble(card, true);
+
+	lv_obj_t *name = lv_label_create(card);
+	lv_label_set_text(name, tr(home_row_name(row)));
+	lv_obj_add_style(name, &theme_style_text, 0);
+	lv_obj_set_style_text_font(name, name_font, 0);
+	lv_obj_set_width(name, lv_pct(100));
+	lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+	lv_obj_set_height(name, lv_font_get_line_height(name_font));
+	lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 0);
+
+	lv_obj_t *controls = lv_obj_create(card);
+	lv_obj_set_size(controls, lv_pct(100), compact ? 30 : 52);
+	lv_obj_align(controls, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+	lv_obj_set_style_bg_opa(controls, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(controls, 0, 0);
+	lv_obj_set_style_pad_all(controls, 0, 0);
+	lv_obj_set_style_pad_gap(controls, compact ? 4 : 12, 0);
+	lv_obj_set_scrollable(controls, false);
+	lv_obj_set_event_bubble(controls, true);
+	lv_obj_set_flex_flow(controls, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(controls, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+	home_arrow_button(controls, false, slot == 0, home_row_up_cb, row);
+	home_arrow_button(controls, true, slot == HOME_ROWS - 1, home_row_down_cb, row);
+
+	// Pushes the switch to the far right, whatever the name above is.
+	lv_obj_t *spacer = lv_obj_create(controls);
+	lv_obj_set_size(spacer, 1, 1);
+	lv_obj_set_flex_grow(spacer, 1);
+	lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(spacer, 0, 0);
+	lv_obj_set_style_pad_all(spacer, 0, 0);
+	lv_obj_set_clickable(spacer, false);
+	lv_obj_set_scrollable(spacer, false);
+
+	lv_obj_t *toggle = lv_switch_create(controls);
+	lv_obj_set_size(toggle, compact ? 48 : 68, compact ? 28 : 36);
+	theme_apply_switch(toggle);
+	lv_obj_add_event_cb(toggle, home_row_switch_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)row);
+	if (!home_hidden[row]) {
+		lv_obj_add_state(toggle, LV_STATE_CHECKED);
+	}
+
+	return card;
+}
+
+static void home_settings_rebuild(void) {
+	if (!home_settings_container) {
+		return;
+	}
+	home_layout_load();
+	lv_obj_clean(home_settings_container);
+
+	lv_obj_t *note = lv_label_create(home_settings_container);
+	lv_label_set_text(note, tr("tidal_home_note"));
+	lv_obj_add_style(note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(note, &font_ui_18, 0);
+	lv_obj_set_width(note, lv_pct(100));
+	lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+	lv_obj_set_style_pad_bottom(note, 4, 0);
+
+	for (int slot = 0; slot < HOME_ROWS; slot++) {
+		home_setting_row(home_settings_container, home_order[slot], slot);
+	}
+}
+
+static void home_settings_loaded_cb(lv_event_t *e) {
+	(void)e;
+	home_settings_rebuild();
+}
+
+static void open_home_settings_cb(lv_event_t *e) {
+	(void)e;
+	switch_screen(home_settings_screen);
+}
+
+static void build_home_settings_page(gui_config_t *cfg) {
+	home_settings_screen = lv_obj_create(NULL);
+	home_settings_container = settingsrow_page(home_settings_screen, cfg, "tidal_home");
+	lv_obj_add_event_cb(home_settings_screen, home_settings_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	switcher_attach_back_gesture(home_settings_screen);
+}
+
+// ---------------------------------------------------------------------------
 // Tidal settings
 //
 // The corner holds the gear (as on the Music page) and the magnifier; this
@@ -2575,10 +3308,7 @@ static void quality_refresh(void) {
 		if (!quality_pills[i]) {
 			continue;
 		}
-		bool on = QUALITY_VALUES[i] == current;
-		lv_obj_set_style_bg_color(quality_pills[i], on ? theme()->accent : theme()->surface_pressed, 0);
-		lv_obj_set_style_text_color(lv_obj_get_child(quality_pills[i], 0), on ? theme_on_accent() : theme()->text_primary,
-									0);
+		settingsrow_pill_active(quality_pills[i], QUALITY_VALUES[i] == current);
 	}
 }
 
@@ -2613,7 +3343,7 @@ static void logout_cb(lv_event_t *e) {
 	// theirs.
 	char message[160];
 	snprintf(message, sizeof(message), tr("sign_out_confirm_note"), tidal_display_name());
-	confirm_show("tidal_sign_out_of_tidal", message, "leave", do_logout, NULL);
+	confirm_show("tidal_sign_out_of_tidal", message, "sign_out", do_logout, NULL);
 }
 
 static void open_settings_cb(lv_event_t *e) {
@@ -2626,58 +3356,26 @@ static void build_settings_page(gui_config_t *cfg) {
 	tsettings_screen = lv_obj_create(NULL);
 	lv_obj_t *container = settingsrow_page(tsettings_screen, cfg, "tidal_settings");
 
-	// Quality: a card with the name on top and the four pills below, exactly
-	// like "DSD output" or "Replay gain" on the Music page.
-	lv_obj_t *card = lv_obj_create(container);
-	lv_obj_set_width(card, lv_pct(100));
-	lv_obj_set_height(card, LV_SIZE_CONTENT);
-	lv_obj_add_style(card, &theme_style_card, 0);
-	lv_obj_set_style_radius(card, 12, 0);
-	lv_obj_set_style_border_width(card, 0, 0);
-	lv_obj_set_style_shadow_width(card, 0, 0);
-	lv_obj_set_style_pad_all(card, 20, 0);
-	lv_obj_set_style_pad_row(card, 18, 0);
-	lv_obj_set_scrollable(card, false);
-	lv_obj_set_event_bubble(card, true);
-	lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-
-	lv_obj_t *name = lv_label_create(card);
-	lv_label_set_text(name, tr("audio_quality"));
-	lv_obj_add_style(name, &theme_style_text, 0);
-	lv_obj_set_style_text_font(name, &font_ui_24, 0);
-
-	lv_obj_t *pills = lv_obj_create(card);
-	lv_obj_set_size(pills, lv_pct(100), LV_SIZE_CONTENT);
-	lv_obj_set_style_bg_opa(pills, 0, 0);
-	lv_obj_set_style_border_width(pills, 0, 0);
-	lv_obj_set_style_pad_all(pills, 0, 0);
-	lv_obj_set_style_pad_gap(pills, 12, 0);
-	lv_obj_set_scrollable(pills, false);
-	lv_obj_set_event_bubble(pills, true);
-	lv_obj_set_flex_flow(pills, LV_FLEX_FLOW_ROW_WRAP);
-	lv_obj_set_flex_align(pills, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
-
+	// Quality: the shared pill card, the same one "DSD output" and "Replay
+	// gain" use. The pills were hand-built here before, at the 480-px size
+	// (56 px tall, 22 px of side padding) regardless of the panel, so on the V1
+	// they were nearly twice the height of every other pill in the interface
+	// and spilled off the card.
+	lv_obj_t *pills = NULL;
+	settingsrow_pills(container, "audio_quality", &pills);
 	for (int i = 0; i < 4; i++) {
-		lv_obj_t *btn = lv_btn_create(pills);
-		lv_obj_set_size(btn, LV_SIZE_CONTENT, 56);
-		lv_obj_set_style_pad_hor(btn, 22, 0);
-		lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-		lv_obj_set_style_shadow_width(btn, 0, 0);
-		lv_obj_set_style_border_width(btn, 0, 0);
-		lv_obj_add_event_cb(btn, quality_pick_cb, LV_EVENT_CLICKED, (void *)(intptr_t)QUALITY_VALUES[i]);
-
 		// These names go through tr(): half of each is a translatable word,
 		// not an acronym.
-		lv_obj_t *label = lv_label_create(btn);
-		lv_label_set_text(label, tr(QUALITY_NAMES[i]));
-		lv_obj_set_style_text_font(label, &font_ui_22, 0);
-		lv_obj_center(label);
-
-		quality_pills[i] = btn;
+		quality_pills[i] = settingsrow_pill(pills, QUALITY_NAMES[i], QUALITY_VALUES[i], quality_pick_cb);
 	}
 
-	settingsrow_action(container, "leave", logout_cb, NULL);
+	settingsrow_add(container, "tidal_home", NULL, open_home_settings_cb, NULL);
+
+	settingsrow_action(container, "clear_search_history", clear_search_history_cb, NULL);
+
+	// "Leave" said nothing about what would be left: this row signs the
+	// account out. The confirmation follows the same word.
+	settingsrow_action(container, "sign_out_of_tidal", logout_cb, NULL);
 
 	quality_refresh();
 	theme_register_refresh(quality_refresh);
@@ -2789,14 +3487,46 @@ static void rebuild_home(void) {
 
 	// No "Search" row: it is the magnifier in the corner, where it sits on
 	// every other searchable page.
-	settingsrow_add(home_container, "favourite_tracks", NULL, simple_job_cb, (void *)(intptr_t)JOB_FAV_TRACKS);
-	settingsrow_add(home_container, "favourite_albums", NULL, simple_job_cb, (void *)(intptr_t)JOB_FAV_ALBUMS);
-	settingsrow_add(home_container, "my_playlists", NULL, simple_job_cb, (void *)(intptr_t)JOB_USER_PLAYLISTS);
-	for (int i = 0; i < 3; i++) {
-		if (featured_hidden[i]) {
+	//
+	// The rows come in the order the user chose, minus the ones they hid (and
+	// minus a showcase that answered with nothing this session).
+	home_layout_load();
+	for (int slot = 0; slot < HOME_ROWS; slot++) {
+		int row = home_order[slot];
+		if (home_hidden[row]) {
 			continue;
 		}
-		settingsrow_add(home_container, FEATURED_NAMES[i], NULL, featured_job_cb, (void *)(intptr_t)i);
+		switch (row) {
+		case HOME_FAV_TRACKS:
+			settingsrow_add(home_container, "favourite_tracks", NULL, simple_job_cb,
+							(void *)(intptr_t)JOB_FAV_TRACKS);
+			break;
+		case HOME_FAV_ALBUMS:
+			settingsrow_add(home_container, "favourite_albums", NULL, simple_job_cb,
+							(void *)(intptr_t)JOB_FAV_ALBUMS);
+			break;
+		case HOME_FAV_ARTISTS:
+			settingsrow_add(home_container, "favourite_artists", NULL, simple_job_cb,
+							(void *)(intptr_t)JOB_FAV_ARTISTS);
+			break;
+		case HOME_PLAYLISTS:
+			settingsrow_add(home_container, "my_playlists", NULL, simple_job_cb,
+							(void *)(intptr_t)JOB_USER_PLAYLISTS);
+			break;
+		case HOME_NEW:
+		case HOME_TOP:
+		case HOME_RECOMMENDED: {
+			int showcase = row - HOME_NEW;
+			if (featured_hidden[showcase]) {
+				break;
+			}
+			settingsrow_add(home_container, FEATURED_NAMES[showcase], NULL, featured_job_cb,
+							(void *)(intptr_t)showcase);
+			break;
+		}
+		default:
+			break;
+		}
 	}
 
 	update_corner_buttons();
@@ -2874,6 +3604,7 @@ void tidalpage_init(gui_config_t *cfg) {
 	build_list_page(cfg);
 	build_search_page(cfg);
 	build_settings_page(cfg);
+	build_home_settings_page(cfg);
 	build_login_page(cfg);
 	build_busy_layer();
 	tidalcache_set_slow_start_cb(on_slow_start);

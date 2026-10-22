@@ -95,11 +95,14 @@ typedef enum {
 	JOB_PLAYLIST_CREATE,
 	JOB_ALBUM_FAVORITE,
 	JOB_PLAYLIST_REMOVE,
+	JOB_PLAYLIST_TRACK_REMOVE,
+	JOB_ARTIST_FAVORITE,
 } job_kind_t;
 
 typedef struct {
 	job_kind_t kind;
 	long track_id;
+	int index; // which entry of a playlist, for the removal
 	// Tidal playlists are addressed by UUID, so the job carries its own copy
 	// rather than a number: the caller can free its string as soon as submit()
 	// returns, without waiting for the worker.
@@ -204,6 +207,27 @@ static void do_album_favorite(const job_t *job) {
 	}
 }
 
+static void do_playlist_track_remove(const job_t *job) {
+	bool ok = tidal_playlist_remove_track(job->playlist_id, job->index);
+	if (ok) {
+		// The cached copy of the account's playlists keeps the old track count,
+		// which the picker shows.
+		pthread_mutex_lock(&lock);
+		playlists_loaded = false;
+		pthread_mutex_unlock(&lock);
+	}
+	if (job->done) {
+		job->done(ok, ok ? NULL : tidal_last_error(), job->user);
+	}
+}
+
+static void do_artist_favorite(const job_t *job) {
+	bool ok = job->want ? tidal_favorite_add_artist(job->track_id) : tidal_favorite_remove_artist(job->track_id);
+	if (job->done) {
+		job->done(ok, ok ? NULL : tidal_last_error(), job->user);
+	}
+}
+
 static void do_playlist_remove(const job_t *job) {
 	bool ok = tidal_playlist_delete(job->playlist_id);
 	if (ok) {
@@ -250,6 +274,12 @@ static void *worker_main(void *arg) {
 			break;
 		case JOB_PLAYLIST_REMOVE:
 			do_playlist_remove(&job);
+			break;
+		case JOB_PLAYLIST_TRACK_REMOVE:
+			do_playlist_track_remove(&job);
+			break;
+		case JOB_ARTIST_FAVORITE:
+			do_artist_favorite(&job);
 			break;
 		default:
 			break;
@@ -346,6 +376,29 @@ void tidalsync_playlist_remove(const char *playlist_id, tidalsync_done_cb done, 
 	}
 	job_t job = {.kind = JOB_PLAYLIST_REMOVE, .done = done, .user = user};
 	snprintf(job.playlist_id, sizeof(job.playlist_id), "%s", playlist_id);
+	submit(&job);
+}
+
+void tidalsync_playlist_track_remove(const char *playlist_id, int index, tidalsync_done_cb done, void *user) {
+	if (!playlist_id || !*playlist_id || index < 0) {
+		if (done) {
+			done(false, tr("tidal_playlist_without_id"), user);
+		}
+		return;
+	}
+	job_t job = {.kind = JOB_PLAYLIST_TRACK_REMOVE, .index = index, .done = done, .user = user};
+	snprintf(job.playlist_id, sizeof(job.playlist_id), "%s", playlist_id);
+	submit(&job);
+}
+
+void tidalsync_artist_favorite(long artist_id, bool want, tidalsync_done_cb done, void *user) {
+	if (artist_id <= 0) {
+		if (done) {
+			done(false, tr("tidal_artist_without_id"), user);
+		}
+		return;
+	}
+	job_t job = {.kind = JOB_ARTIST_FAVORITE, .track_id = artist_id, .want = want, .done = done, .user = user};
 	submit(&job);
 }
 
