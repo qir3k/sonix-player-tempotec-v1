@@ -2137,9 +2137,9 @@ void quickpanel_init(gui_config_t *cfg) {
 	}
 
 	brightness_slider = lv_slider_create(bright_row);
-	// Give the brightness control a larger touch target: the original 10 px
-	// rail is awkward to grab with a fingertip, especially with a case fitted.
-	lv_obj_set_height(brightness_slider, qp_compact ? 16 : 18);
+	// Keep the visual rail slim; the enlarged click area below makes it easier
+	// to grab without making the knob look oversized against the track.
+	lv_obj_set_height(brightness_slider, 10);
 	lv_obj_set_flex_grow(brightness_slider, 1);
 	lv_slider_set_range(brightness_slider, 1, 100);
 	lv_obj_set_style_radius(brightness_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
@@ -2150,7 +2150,7 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_set_style_radius(brightness_slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
 	lv_obj_set_style_bg_color(brightness_slider, lv_color_white(), LV_PART_KNOB);
 	theme_apply_slider_knob(brightness_slider);
-	lv_obj_set_style_pad_all(brightness_slider, qp_compact ? 5 : 8, LV_PART_KNOB);
+	lv_obj_set_style_pad_all(brightness_slider, qp_compact ? 4 : 6, LV_PART_KNOB);
 	lv_obj_set_style_shadow_width(brightness_slider, 8, LV_PART_KNOB);
 	lv_obj_set_style_shadow_opa(brightness_slider, LV_OPA_30, LV_PART_KNOB);
 	lv_obj_set_style_shadow_color(brightness_slider, lv_color_black(), LV_PART_KNOB);
