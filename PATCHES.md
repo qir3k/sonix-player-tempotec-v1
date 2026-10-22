@@ -1324,3 +1324,55 @@ was called on the interface thread from the delete handler, so deleting a
 downloaded episode could freeze the page for as long as the card took. It runs on
 a thread of its own at background priority now; the file is already gone, and the
 rest is bookkeeping the card gets round to on its own.
+
+## Swipe typing, and a search row that fits
+
+**A word per gesture.** Dragging a finger from letter to letter across the
+keyboard now types the word it spells -- the way Gboard's glide typing works --
+without stopping on any key. Settings -> More has a **Swipe typing** switch
+beside the keyboard rows and **Swipe language** under it: English, Polish, or
+both. The switch and the language live in `[keyboard]` as `swipe` and
+`swipe_lang`; both take effect at once, with no rebuild of the keyboard.
+
+**The lists are files on the card, not code.**
+`<card>/Dictionaries/en.txt` and `<card>/Dictionaries/pl.txt`, one word per
+line, UTF-8, anything with counts or parts of speech beside the word still
+readable as its first field. Nothing is shipped in the binary: a list is
+somebody else's file and belongs where the user can put it. A list is read whole
+(up to 384 kB, past which it is read as far as the cap) the first time it is
+needed, kept in one block with an offset per word, and dropped when the language
+changes. A language with no file simply types nothing, and the row says which
+lists were found.
+
+**Polish is matched without its tails and typed with them.** The keys are Latin
+letters, so a word is looked up folded (`łąka` as `laka`) and written out as the
+list spells it. That is the whole point on a Polish list: the path never has to
+cross a key that does not exist.
+
+**How a path becomes a word.** Every key's distance to the nearest point of the
+path is measured once, and so is the sequence of keys the path crosses; a word
+must spell itself out in that sequence in order, which throws away nearly the
+whole list without arithmetic; what is left is scored on how close the path came
+to each of its letters and on its length against the number of keys crossed. A
+path that came nowhere near the letters it would need types nothing at all, so a
+stray drag is silent rather than wrong. The decoder runs on the release of the
+swipe, and only there.
+
+**A tap is still a tap.** A press that travels less than 18 px is left to the key
+it started on, the accent strip takes a held key as it always did, and neither
+the symbol pages nor the T9 keypad take part -- a path is only meaningful across
+three rows of separate letters. Shift and caps capitalise the word (ASCII first
+letters; accented capitals are still entered by holding their key).
+
+**A held key's accents follow the language.** Holding E offers *ę* before *é* in
+Polish and *é* before *ę* in English -- the same strip, reordered rather than
+shortened, so every accent is still there in both languages and the one that is
+wanted is the first cell under the finger. The order comes from the same
+`swipe_lang`, and "both" keeps the table's order this keyboard has always had.
+
+**The search pills are one line, and the row scrolls.** The three categories
+had to share the panel's width, so each stacked its count under its name and the
+row stood 56 px tall over every search on a 320 px screen. Each pill is as wide
+as its own text now, one line and 40 px tall, in a row that scrolls sideways
+like the Tidal tab's -- so the results start 16 px higher and a long translation
+("Исполнители 1234") widens its pill instead of wrapping inside it.
