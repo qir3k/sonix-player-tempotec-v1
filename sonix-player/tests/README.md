@@ -11,6 +11,7 @@ make -C sonix-player/tests calculator
 make -C sonix-player/tests notes
 make -C sonix-player/tests tagdate
 make -C sonix-player/tests mostplayed
+make -C sonix-player/tests aamlayout
 make -C sonix-player/tests podcastplayed
 ```
 
@@ -34,6 +35,20 @@ Checks include:
 - cancellation during HTTP header setup, a stalled body, and reader starvation, followed by generation-safe reuse;
 - nonmutating playlist next-track look-ahead across repeat/shuffle/ordered modes;
 - exclusive decoder leases, both handoff/teardown orders, failed pre-cache retry suppression, repeat-one starting at byte zero, account-change invalidation with an outstanding lease, metadata lookup and unsupported raw codecs.
+
+## Album Art Max's rows
+
+`make -C sonix-player/tests aamlayout` checks the arithmetic of the now-playing
+arrangement that trades the media controls for the artwork. The sleeve is
+decoded at the size the layout gives it *before* anything has been laid out, so
+the box cannot be read back off the widgets: it is its own module
+(`src/gui/nowplaying/aamlayout.c`), handed the heights the board and the face in
+force measured. The suite drives that module at the V1's numbers: the status
+bar, the header row, the sleeve and the strip have to add up to the panel with
+nothing lost or overlapped; Leftie has to cost exactly its rail of width and
+move nothing else; and a panel too short or too narrow for its own rows still
+has to answer with something drawable rather than a negative size. Plain C, no
+LVGL and no display.
 
 ## Software volume
 

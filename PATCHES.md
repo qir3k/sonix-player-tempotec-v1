@@ -138,12 +138,10 @@ deck. The split of the panel is the standard arrangement's own
 (`compact_deck_height()`), so the sleeve is as large as the deck allows and no
 larger; the chrome on the deck keeps the theme's colours while the chevron and
 the source marks take their chance in white over the sharp part, as they do
-over every sleeve in the player. The favourite marker is the heart rather than
-the star here, as it is in Immersive, but drawn a step under the star's size
-(`POSTER_HEART_SCALE`, 22 px against 26 on the V1): the heart fills more of its
-32 px canvas than the star does, and on a deck that is a row of type rather
-than a picture to stand over, the smaller mark reads as a marker and not as a
-second headline.
+over every sleeve in the player. The favourite marker is the same heart every
+layout draws, a step under the usual size here (`POSTER_HEART_SCALE`, 22 px
+against 26 on the V1): on a deck that is a row of type rather than a picture to
+stand over, the smaller mark reads as a marker and not as a second headline.
 
 The one edge the arrangement leaves -- where the foot of the sleeve meets the
 top of the deck -- is softened rather than drawn: a gradient from nothing to
@@ -156,6 +154,147 @@ sleeve to melt (`poster_fade_apply`, from `cover_show()`): an empty sleeve
 keeps its own foot, and the other arrangements keep the edges they have. Without artwork the empty sleeve is the
 cover's own colour from edge to edge, and the blurred copy stays down: the
 deck no longer shows it through, and the sleeve covers everything above it.
+
+The sixth arrangement, **Album Art Max** ("AAM"), is the sleeve instead of the
+controls: the picture at the full width of the panel and everything between the
+status bar and the strip under it, with the transport gone and the first row's
+worth of chrome above it. It is the one arrangement built for the physical
+keys — the concept it comes from says so in as many words ("it trades media
+controls for bigger AA (assumes you'll just use the physical controls)") — so
+what is left on the page is what is *not* transport: the repeat mode, the
+overflow menu and the star, in a 40 px row under the status bar with the format
+line at its left end, and the title with the place in the queue on a black
+strip at the foot. That strip is the deck itself, made one line tall, so nothing
+above it is a panel: the sleeve reaches the strip's top edge and the blur behind
+the page shows only through the header row. The rows are worked out in
+`aamlayout.c`, which knows nothing about LVGL: the sleeve is decoded at the box
+it will be drawn in before anything has been laid out, so the arithmetic cannot
+be read back off the widgets and is a module of its own -- with the tests that
+hold it to the V1's numbers (`make -C sonix-player/tests aamlayout`). On the V1
+the sleeve comes back 240 x 235 in the flat shape and 228 x 235 in Leftie.
+
+It is also the one arrangement that **keeps the status bar**, which the player
+otherwise hides so that artwork can run to the bezel. With the transport off
+the panel, the bar's play/pause mark is the only thing saying which way the
+hardware key will go, and in the concept the bar is part of the drawing. The
+chevron moves with it: `back_btn_player_top_inset()` in `switcher.c`, which is
+the player's own top offset plus whatever the arrangement needs above it, so
+the way back sits centred in the header row rather than in the status bar.
+
+The three marks of that row are laid out as a set and not three times by eye:
+three 36 px slots on one pitch (`AAM_HEAD_PITCH`, 30 px), the rightmost of them
+keeping `AAM_HEAD_END_PAD` (10 px) between the star and the panel's edge, and
+all three glyphs drawn at the same `AAM_HEAD_GLYPH` (20 px) out of the canvases
+they were generated on -- the mode glyph is 30 px and the star 32, and at their
+native sizes inside equal slots the mode read as the heavier button, which is
+what it looked like on the device. The pitch is what puts air between them: at
+26 px each glyph had 6 px of black on either side and the row read as three
+marks crowding one another, so it is 30 px now -- half a glyph of air apiece --
+and the test holds the pitch to that rather than to the slot positions alone.
+The format line still has its 84 px beside the row (the marks begin at 142). The way back keeps the same air as the
+outermost of them, and measured the same way: the chevron is drawn in the middle
+third of its 36 px canvas, so padding its *button* to match the star's put the
+stroke visibly further in. `back_btn_player_ink_inset()` shifts the glyph by
+what the padding asks minus where its own stroke begins -- read out of the image
+at run time, so regenerating the icons cannot leave a stale number behind. The menu's three lines are drawn to match:
+18 px wide, 3 px to a line, on a 6 px pitch. The format line's room is measured
+from the marks themselves (`aam_head_marks_left()`), so the line cannot run
+under them. Both numbers live in `aamlayout.c` with the rows, and the test that
+holds them also holds the row to the 6 px between glyphs it is drawn with.
+
+Progress is the concept's "very minimal scrub bar": an 8 px band along the foot
+of the picture, its foot on the picture's own edge, square-ended, and **a
+stretch of colour** rather than a line -- the played part starts a step lighter
+than the accent at the first second and deepens to it as it runs to the head
+(`paint_progress_tint()`, which is also where the theme's colour or the sleeve's
+is decided). The head is a tab, a block of the accent the height of the band and
+a little wider, not a disc. The unplayed part is the picture under half black,
+so the band reads on any sleeve without a track being drawn round it
+(`aam_slider_style()`; the deck's own ringed, shadowed bar is put back by the
+other half of the same function). The band is 8 px and its reach is not: an
+`lv_obj_set_ext_click_area()` of 8 around it gives the thumb something to find
+without the band itself getting heavier -- and the block the band stands in is
+cut to that same reach, because a press is looked for among a parent's children
+only while it is inside the parent's own box, and a reach that hung outside the
+block would be a reach into nothing. The block takes no presses itself, so the
+8 px it borrows from the foot of the sleeve is borrowed only on the way past.
+
+The two clocks are not on the page at all. They come up in the middle of the
+artwork, large, **only while the track is being scrubbed** — the picture dropped
+to half its brightness behind them — and that is either a finger on the band
+(the slider's own press events) or a held skip key, which the playback side
+already reports through `device_state_scrub_active()`. Both ask the same
+function, `aam_scrub_apply()`, from the poll and from the slider's callback, so
+the veil is right whichever route a scrub takes.
+
+**Leftie**, the concept's second drawing, stands the band up along the left
+edge instead of laying it along the foot: the artwork gives up `AAM_RAIL_W`
+(12 px) of width and the thumb travels vertically, which is the whole of the
+argument for it. It is a setting of its own in the same Display options page
+(`screen/player_aam_leftie`), and because the picture is then a different
+shape, changing it re-measures the page and asks for the artwork again at the
+new box rather than letting LVGL resample it on every frame.
+
+The strip carries **the artist first, then the title**, the place in the queue
+against its right edge: `Motorcycle` in the record's colour, `Big Ideas` in the
+theme's ink, `3/13` in the record's colour too. Who it is before what it is
+called -- the order the concept's own strip is read in.
+
+The row is shared out by measurement rather than in thirds
+(`aam_strip_shares()`, in `aamlayout.c` and under test): a name that fits gets
+exactly the width of its own words and is not made to scroll; when the two
+together overrun the row, whichever of them is short keeps its words whole and
+the other takes what is left, and only when both are long is the row split in
+proportion to what they need. Thirds are what the first attempt did, and a third
+of a 240 px panel is seven letters -- on the device the artist of a real record
+came up `Knxwled`. The queue position is measured too, rather than reserving the
+width of the longest count it could ever hold: the pixels it does not need are
+pixels the names get. It is re-shared on every track change and every change of
+place in the queue, from `aam_strip_fit()`.
+
+Nothing on that row scrolls unless it has to. `scrolltext.c` now decides the
+long mode itself, from the width of the words against the width of the box, and
+decides it again whenever either changes (`scroll_fit()`); before, every one of
+its labels was a circular scroll whether or not it fitted, which left a short
+line measured for an animation it never needed.
+
+Album Art Max draws its marks in the sleeve's colour, and the theme only when
+there is no artwork to take a colour from (`aam_accent()`): the band, the
+artist's name, the heart, the format line and the count are one ink, by
+construction rather than by three matching edits. The favourite mark is a
+**heart** in this arrangement, not the star: there is no transport in the row to
+outweigh it, and the one thing up there that is about the record rather than
+about playing it may as well look like it.
+
+The strip is a row of its own inside the deck rather than three children of the
+deck's column, so the artist follows a title of any length instead of standing
+at a position worked out from the last one; a one-pixel strut with flex-grow
+pushes the queue position to the right end. Everything is reparented and
+re-styled rather than rebuilt, as in every other arrangement on this page, and
+`aam_take_back()` gives each widget back to the row it was built in -- the title
+and the artist to the column (or to the alternative arrangement's pills), in
+their original order, the queue position under the bar, and the artist line's
+colour to its own style.
+
+The transport the arrangement trades away comes back **on the picture**: a
+double tap on the left third of the sleeve is the previous button, a double tap
+on the right third the next one (`aam_sleeve_tap_cb()`), both routed through
+`player_screen_prev()` / `player_screen_next()` so that a station, a podcast, a
+book and the three-second rule behave exactly as they do everywhere else. One
+tap does nothing, and the middle third does nothing either -- the gesture has to
+be unambiguous, because the same press begins the drag that puts the player
+away. The pair is LVGL's own `LV_EVENT_DOUBLE_CLICKED`, counted by the input
+device in its configured double-click time rather than by a timer here. It hangs on the panel the sheet is dragged by, not on the sleeve frame:
+that frame is deliberately not clickable, and making it so would take the drag's
+presses away from it. The band, which sits over the foot of the picture with a
+reach of its own, keeps its presses.
+
+AAM is measured for the 240 × 320 V1 panel and offered only there
+(`bp_is_tempotec_v1()` builds the pill, and `update_layout()` falls back to the
+standard arrangement elsewhere); every number in it is one of the 24 px status
+bar, the 40 px header row and the strip's one line of 15 px type. The three keys
+it adds to the language files are `musicsettings_layout_aam` and
+`musicsettings_aam_leftie` with its note, in all eleven of them.
 
 The **screensaver** follows the same split. Dark and Light keep the arrangement
 they have always had: the artwork stops where the blurred strip begins, and the
@@ -276,7 +415,7 @@ grid starts directly under the status bar, the six tiles sharing the height the
 header took. It is single-hue like Amber, so the places that kept Amber
 monochrome — the status glyphs, the codec colours, the balanced-output gold,
 the Now Playing deck, the screensaver's field — ask `theme_is_monochrome()`
-now, and the deck's roles come back as steps of grey: `#888888` for the star
+now, and the deck's roles come back as steps of grey: `#888888` for the heart
 and the overflow, `#606060` for the idle shuffle. A white accent is also the
 first one white type does not read on, so whatever is drawn on an accent fill —
 a selected pill, a confirm button, the keyboard's accept key, the knob of a
@@ -753,8 +892,8 @@ The confirmation comes first and carries the count. A row is deletable when it
 names a path under the card root and is not one track of a cue sheet --
 `sheet.cue?track=3` is not something to `unlink()`, and the sheet is somebody
 else's selection. Files that go are handed to `library_remove_tracks()`
-(`src/system/library/library.c`), which forgets the media rows, the star, the
-play count and the saved position for exactly those paths, then prunes the links
+(`src/system/library/library.c`), which forgets the media rows, the favourite,
+the play count and the saved position for exactly those paths, then prunes the links
 and the names left empty and bumps `GEN_MEDIA`. Nothing waits for the next
 scan: the list the user just cleaned would otherwise keep answering with rows
 for files that are no longer there.
@@ -873,3 +1012,114 @@ The two strings are appended to all eleven `.ini` files in
 block. Everything else this screen says -- `podcast_one_episode`,
 `podcast_episodes_2`, `podcast_delete_download`, the month names -- was
 already translated.
+
+## Podcasts: heard marks
+
+An episode that has been heard to its end is marked in the database, ticked in
+the list and drawn dimmed, and the mark survives a card swap and a reboot. The
+hard part is not the mark but the moment: the player is a **sheet on
+`lv_layer_top()`**, not a screen, so an episode that ends while it is up leaves
+the list underneath loaded the whole time. No `SCREEN_LOADED` ever arrives to
+re-read the row, and the tick was only visible after leaving the podcast
+section and coming back. The manual long press was the case that worked,
+because it redraws the row it changed.
+
+### The store
+
+`PODCAST_PLAYED(episode_id INTEGER PRIMARY KEY)` lives in the same
+`<card>/.local/podcast.db` as the followed podcasts, in a table of its own: a
+followed show is per podcast, a heard episode is per episode, and an episode
+belongs to a show the listener may never have followed. Separate tables also
+mean the follow mark and the heard marks cannot break each other's writes.
+
+The key is the catalogue's 64-bit episode id, not a path: the same episode is a
+URL when streamed, a file in the cache for a while, and a file under `Podcast`
+when kept -- only the id is shared by all three. A file copied onto the card by
+hand has no id, so it is never marked and its menu offers only Delete.
+
+`podcastplayed.c` holds the whole set in memory, sorted, because an episode
+list asks about it on every row it binds and a scroll binds a dozen: a query
+per row would put SQLite in the middle of a finger's movement. Lookups are a
+binary search, an insert is one `memmove`, and the ceiling is ten thousand
+episodes -- several years of listening -- past which the read stops rather than
+the playback. Each change writes its one row immediately (`INSERT OR IGNORE` /
+`DELETE`), so switching the player off right after the last episode ends cannot
+lose the mark. The file's identity is remembered, and a database replaced under
+the player is noticed and read again.
+
+### Who marks, and who redraws
+
+`handle_track_finished()` in `player.c` marks the episode when `audio.c`'s
+completion says the file itself ran out -- a stop or a skip is not an ending --
+and it does so before the "stop at the end of the episode" return, so an
+episode that ends with that option on is counted too. The long press on a row
+marks one by hand, for what was finished somewhere else or marked by mistake.
+
+The end-of-episode hook then tells the two lists, each only if it is the one on
+screen: `podcastpage_episode_heard()` rebinds the single row that shows that
+episode, and `podcastsaved_episode_heard()` redraws its rows only when the mark
+of that episode actually changed. Both do nothing when the list is elsewhere --
+opening it reads the mark from the database anyway. That is one string compare
+and one row bind per finished episode, with no timer and no polling.
+
+The order button in the heading (newest first / oldest first) is the same
+setting on both lists, because the order is a property of the reader rather
+than of one screen.
+
+## The DAC page on a 240 px panel
+
+The control centre cannot be pulled down while DAC mode holds the screen, so
+the page now carries the three equalisers itself: one card of three pills --
+EQ, PEQ and MSEB -- under the mode switch, lit in the accent colour while that
+equaliser is on, calling the same functions the control centre's circles call.
+A tap here and a tap there leave the same setting and the same picture.
+
+They are pills and not three switch rows because of the arithmetic: the V1's
+panel is 240x320, the page has 248 px under the heading, and a full-width
+switch row is 56 px. The mode switch plus three of them is 236 px before the
+sample rate -- the one number the page exists to show -- is drawn. The card is
+about 81 px, and on the compact panel the decorative mark is dropped as well:
+with even a 48 px mark between the card and the words, the second line of the
+note fell past the foot of the screen, and a half-cut status line reads as a
+bug rather than as decoration.
+
+### The words under the equalisers
+
+The host's rate and the status copy used to hang from the top of whatever was
+left, over an empty rate line that still held its 20 px even when there was no
+rate, so the status never moved when a stream started -- and the two lines sat
+in the upper third of the empty space. Now two transparent spacers, one above
+and one below, grow to share it, and the rate line is hidden while it is
+blank. Measured on the real LVGL layout engine with the V1 profile:
+
+| state | before | after |
+|---|---|---|
+| off (2-line note) | 169 | 169 |
+| waiting for the computer | 169 | 178 |
+| 384 kHz / 44.1 kHz / DSD | rate 145, status 169 | rate 166, status 190 |
+
+So the status now steps down a line when the host starts streaming, instead of
+standing still while a line appears above it. Spacers and not a box: a box
+would clip, and a long error message is still allowed to scroll the page. The
+480x720 layout keeps its stack under the mark, which is what fills that page.
+
+The bit depth is deliberately absent. The driver hands up 32-bit words whatever
+the host negotiated, so a "24 bit" badge would be a lie on the one page that
+exists to report the stream; DSD is already named as DSD.
+
+The "leave DAC mode?" guard now centres its button labels: the label was as
+wide as the button's inside and its text was still laid out from the left edge,
+which left "Leave" 13 px from one side and 30 from the other.
+
+## One favourite mark
+
+The heart is the favourite mark everywhere the player draws one: the player in
+**every** layout (it was Immersive and Poster only, with the star left in the
+Standard, Waveform and Alternative decks), the control centre's button in the
+status bar, the Music page's favourites tile and its corner button, the home
+grid's tile, selection mode's add and take-out buttons, and the radio page's
+favourites button.
+
+The star survives only as unused images in `icons.c`; no `.c` file refers to
+it. Nothing else had to change: the corner buttons already recolour their
+glyph from the theme, and `fonts_choices()` was untouched.

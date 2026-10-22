@@ -1629,6 +1629,24 @@ static lv_obj_t *layout_alternative_pill;
 static lv_obj_t *layout_studio_pill;
 static lv_obj_t *layout_immersive_pill;
 static lv_obj_t *layout_poster_pill;
+static lv_obj_t *layout_aam_pill; // only built on the V1, the panel it is measured for
+// Album Art Max's own row: the band along the foot of the sleeve or up its left
+// edge. Shown only while that arrangement is the chosen one, and only where it
+// is offered at all -- it says nothing about the other five.
+static lv_obj_t *aam_leftie_row, *aam_leftie_note;
+
+// The row belongs to the arrangement, so it appears with it, on the same
+// answer the pills are drawn from rather than on a second reading of the
+// setting.
+static void aam_leftie_show(void) {
+	bool on = aam_leftie_row && player_layout_get() == PLAYER_LAYOUT_ALBUM_ART_MAX;
+	if (aam_leftie_row) {
+		lv_obj_set_hidden(aam_leftie_row, !on);
+	}
+	if (aam_leftie_note) {
+		lv_obj_set_hidden(aam_leftie_note, !on);
+	}
+}
 
 static void layout_refresh(void) {
 	if (!layout_standard_pill) {
@@ -1640,6 +1658,10 @@ static void layout_refresh(void) {
 	settingsrow_pill_active(layout_studio_pill, chosen == PLAYER_LAYOUT_STUDIO);
 	settingsrow_pill_active(layout_immersive_pill, chosen == PLAYER_LAYOUT_IMMERSIVE);
 	settingsrow_pill_active(layout_poster_pill, chosen == PLAYER_LAYOUT_POSTER);
+	if (layout_aam_pill) {
+		settingsrow_pill_active(layout_aam_pill, chosen == PLAYER_LAYOUT_ALBUM_ART_MAX);
+	}
+	aam_leftie_show();
 }
 
 static void layout_pick_cb(lv_event_t *e) {
@@ -1657,6 +1679,15 @@ static lv_obj_t *cover_tint_switch;
 
 static void cover_tint_cb(lv_event_t *e) {
 	player_cover_tint_set(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
+// Where Album Art Max puts its scrub bar: along the foot of the sleeve, or up
+// its left edge. Only the arrangement above can answer for it, so this stores
+// the setting and lets the page move the bar if it is the one on screen.
+static lv_obj_t *aam_leftie_switch;
+
+static void aam_leftie_cb(lv_event_t *e) {
+	player_aam_leftie_set(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 }
 
 // ---------------------------------------------------------------------------
@@ -2385,9 +2416,29 @@ static void build_display_page(gui_config_t *cfg) {
 		settingsrow_pill(layout_pills, "musicsettings_layout_immersive", PLAYER_LAYOUT_IMMERSIVE, layout_pick_cb);
 	layout_poster_pill =
 		settingsrow_pill(layout_pills, "musicsettings_layout_poster", PLAYER_LAYOUT_POSTER, layout_pick_cb);
+	// Album Art Max is offered where it was measured: the 240x320 V1 panel.
+	// On the wide boards the pill is not built at all, rather than built and
+	// quietly ignored -- a layout that does nothing when chosen reads as a
+	// broken page, not as a limitation.
+	if (bp_is_tempotec_v1()) {
+		layout_aam_pill = settingsrow_pill(layout_pills, "musicsettings_layout_aam",
+										   PLAYER_LAYOUT_ALBUM_ART_MAX, layout_pick_cb);
+	}
 
 	layout_refresh();
 	theme_register_refresh(layout_refresh);
+
+	// Album Art Max's own sub-setting. Under the pills and not on its own page:
+	// it is one arrangement's business, and there is nothing else to say. It is
+	// shown only while that arrangement is the one chosen -- the pills above
+	// already say so, and an arrangement's own switch standing under five
+	// others it does not apply to reads as a sixth layout.
+	if (bp_is_tempotec_v1()) {
+		aam_leftie_row = settingsrow_toggle(container, "musicsettings_aam_leftie", &aam_leftie_switch, aam_leftie_cb);
+		aam_leftie_note = option_note(container, "musicsettings_aam_leftie_note");
+		lv_obj_set_state(aam_leftie_switch, LV_STATE_CHECKED, player_aam_leftie_get());
+		aam_leftie_show(); // the row was not there when layout_refresh() last ran
+	}
 
 	// Said here rather than left to be discovered: the Waveform arrangement is
 	// built out of a file on the card -- the shape of the track, the sleeve it
