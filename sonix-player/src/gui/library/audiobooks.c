@@ -44,6 +44,15 @@ static lv_obj_t *tokyo_continue_author;
 static lv_obj_t *tokyo_scan_button;
 static char tokyo_continue_path[512];
 
+// The section card's destination glyphs, kept so a later theme or accent change
+// repaints them: a colour set when the card was built is a snapshot, and it
+// would go on wearing the accent the page was built under.
+static lv_obj_t *tokyo_continue_icon;
+static lv_obj_t *tokyo_open_icon;
+static lv_obj_t *tokyo_scan_icon;
+#define TOKYO_CATEGORY_COUNT 2
+static lv_obj_t *tokyo_category_icons[TOKYO_CATEGORY_COUNT];
+
 static void start_scan(void *user);
 static void section_scan_cb(lv_event_t *e);
 static void section_refresh_theme(void);
@@ -1161,6 +1170,7 @@ static void tokyo_continue_panel_build(gui_config_t *cfg) {
 	lv_image_set_inner_align(book_icon, LV_IMAGE_ALIGN_CENTER);
 	lv_obj_set_style_image_recolor(book_icon, theme_semantic_color(THEME_SEMANTIC_AMBER), 0);
 	lv_obj_set_style_image_recolor_opa(book_icon, LV_OPA_COVER, 0);
+	tokyo_continue_icon = book_icon;
 	lv_obj_t *copy = lv_obj_create(tokyo_continue_book);
 	lv_obj_remove_style_all(copy);
 	lv_obj_set_flex_grow(copy, 1);
@@ -1205,6 +1215,7 @@ static void tokyo_continue_panel_build(gui_config_t *cfg) {
 	lv_image_set_scale(open_icon, (uint32_t)(LV_SCALE_NONE * 17 / 40));
 	lv_obj_set_style_image_recolor(open_icon, theme_semantic_color(THEME_SEMANTIC_AMBER), 0);
 	lv_obj_set_style_image_recolor_opa(open_icon, LV_OPA_COVER, 0);
+	tokyo_open_icon = open_icon;
 	lv_obj_t *open_label = lv_label_create(open_continue);
 	lv_label_set_text(open_label, tr("audiobook_continue"));
 	lv_label_set_long_mode(open_label, LV_LABEL_LONG_DOT);
@@ -1255,6 +1266,7 @@ static void tokyo_continue_panel_build(gui_config_t *cfg) {
 		lv_image_set_inner_align(icon, LV_IMAGE_ALIGN_CENTER);
 		lv_obj_set_style_image_recolor(icon, theme_semantic_color(category_rows[i].tone), 0);
 		lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
+		tokyo_category_icons[i] = icon;
 		lv_obj_t *label = lv_label_create(button);
 		lv_label_set_text(label, tr(category_rows[i].label));
 		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
@@ -1293,6 +1305,7 @@ static void tokyo_continue_panel_build(gui_config_t *cfg) {
 	lv_image_set_inner_align(scan_icon, LV_IMAGE_ALIGN_CENTER);
 	lv_obj_set_style_image_recolor(scan_icon, theme_semantic_color(THEME_SEMANTIC_AMBER), 0);
 	lv_obj_set_style_image_recolor_opa(scan_icon, LV_OPA_COVER, 0);
+	tokyo_scan_icon = scan_icon;
 	lv_obj_t *scan_label = lv_label_create(tokyo_scan_button);
 	lv_label_set_text(scan_label, tr("audiobook_scan_audiobooks_2"));
 	lv_label_set_long_mode(scan_label, LV_LABEL_LONG_DOT);
@@ -1304,9 +1317,32 @@ static void tokyo_continue_panel_build(gui_config_t *cfg) {
 	switcher_attach_back_gesture(tokyo_books_panel);
 }
 
+// The section card's destination glyphs, and no others on this page: each asks
+// the palette for its colour again rather than keeping the one it was built
+// with, so a change of theme or accent reaches the card and not only the
+// tiles behind it. Read from the same roles the build used, so the two can
+// never disagree.
+static void tokyo_glyphs_paint(void) {
+	const theme_semantic_t category_tones[TOKYO_CATEGORY_COUNT] = {THEME_SEMANTIC_AMBER, THEME_SEMANTIC_BLUE};
+	lv_obj_t *const fixed[3] = {tokyo_continue_icon, tokyo_open_icon, tokyo_scan_icon};
+	for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
+		if (fixed[i]) {
+			lv_obj_set_style_image_recolor(fixed[i], theme_semantic_color(THEME_SEMANTIC_AMBER), 0);
+			lv_obj_set_style_image_recolor_opa(fixed[i], LV_OPA_COVER, 0);
+		}
+	}
+	for (int i = 0; i < TOKYO_CATEGORY_COUNT; i++) {
+		if (tokyo_category_icons[i]) {
+			lv_obj_set_style_image_recolor(tokyo_category_icons[i], theme_semantic_color(category_tones[i]), 0);
+			lv_obj_set_style_image_recolor_opa(tokyo_category_icons[i], LV_OPA_COVER, 0);
+		}
+	}
+}
+
 static void section_refresh_theme(void) {
 	bool tokyo = bp_is_tempotec_v1() && theme_uses_function_glyphs();
 	if (tokyo && tokyo_books_panel) {
+		tokyo_glyphs_paint();
 		lv_obj_set_hidden(section_grid, true);
 		lv_obj_set_hidden(section_empty, true);
 		lv_obj_set_hidden(tokyo_books_panel, false);

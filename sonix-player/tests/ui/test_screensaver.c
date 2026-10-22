@@ -309,12 +309,15 @@ static lv_obj_t *cover_box(void) { return lv_obj_get_child(saver_obj(), 0); }
 static lv_obj_t *placeholder(void) { return lv_obj_get_child(cover_box(), 0); }
 static lv_obj_t *frame(void) { return lv_obj_get_child(cover_box(), 1); }
 static lv_obj_t *picture(void) { return lv_obj_get_child(frame(), 0); }
-static lv_obj_t *info_strip(void) { return lv_obj_get_child(saver_obj(), 1); }
+// The field's melted top edge: the band just above the strip, made before it
+// and so drawn under the words (see set_info_strip_backdrop).
+static lv_obj_t *strip_fade(void) { return lv_obj_get_child(saver_obj(), 1); }
+static lv_obj_t *info_strip(void) { return lv_obj_get_child(saver_obj(), 2); }
 // The strip's three lines, in the order init() makes them: title, artist, time.
 static lv_obj_t *strip_label(int index) { return lv_obj_get_child(info_strip(), index); }
 // The swipe-up sign at the foot of the screen: the saver's last child, hung
 // over the strip's lower edge.
-static lv_obj_t *chevron_btn(void) { return lv_obj_get_child(saver_obj(), 2); }
+static lv_obj_t *chevron_btn(void) { return lv_obj_get_child(saver_obj(), 3); }
 static lv_obj_t *chevron_icon(void) { return lv_obj_get_child(chevron_btn(), 0); }
 
 // The picture on screen, as the screensaver holds it: the descriptor LVGL was
@@ -412,6 +415,8 @@ static void check_one_to_one(const cover_image_t *pic) {
 	lv_draw_buf_destroy(shot);
 }
 
+static void check_strip_fade(void);
+
 // The frame: `w` x `h`, centred in the area above the strip with at least the
 // margins round it, the corners rounded like the player's sleeve; the words
 // below it on the page itself, no strip of their own.
@@ -437,6 +442,7 @@ static void check_frame(int w, int h) {
 	assert(lv_obj_get_style_clip_corner(frame(), 0));
 	assert(lv_obj_get_style_bg_opa(info_strip(), 0) == LV_OPA_TRANSP);
 	assert(lv_obj_get_style_bg_image_src(info_strip(), 0) == NULL);
+	check_strip_fade();
 }
 
 // What the page round the frame is: the player's blurred copy when it made
@@ -451,6 +457,37 @@ static void check_page(void) {
 	lv_color_t page = field ? theme()->screen_bg : lv_color_black();
 	assert(lv_color_eq(lv_obj_get_style_bg_color(saver_obj(), 0), page));
 	assert(lv_color_eq(lv_obj_get_style_bg_color(cover_box(), 0), page));
+}
+
+// The field's top edge is melted, not cut: a band as wide as the screen that
+// hangs from the strip's own top edge, the field's colour at no weight on its
+// first row and at the strip's weight on its last, so the two meet without a
+// seam. Only the palettes with a field of their own have an edge to soften --
+// over a blurred strip, over the plain black one or round a framed sleeve
+// there is none, and the band stays hidden.
+static void check_strip_fade(void) {
+	lv_obj_update_layout(saver_obj());
+	bool framed = screensaver_source() == SCREENSAVER_SOURCE_ALBUM && screensaver_style() == SCREENSAVER_STYLE_FRAMED;
+	bool field = !framed && (theme_is_monochrome() || theme_is_tokyo_night());
+	assert(lv_obj_is_hidden(strip_fade()) == !field);
+	if (!field) {
+		return;
+	}
+
+	lv_area_t f, s;
+	lv_obj_get_coords(strip_fade(), &f);
+	lv_obj_get_coords(info_strip(), &s);
+	assert(f.x1 == 0 && lv_area_get_width(&f) == screen_w);
+	assert(lv_area_get_height(&f) == bp_pick(28, 52));
+	assert(f.y2 == s.y1 - 1); // resting on the strip's top edge, and no lower
+
+	const lv_grad_dsc_t *grad = lv_obj_get_style_bg_grad(strip_fade(), 0);
+	assert(grad && grad->stops_count == 2 && grad->dir == LV_GRAD_DIR_VER);
+	assert(grad->stops[0].opa == LV_OPA_TRANSP);
+	// The strip's own weight where the two meet, in the strip's own colour.
+	assert(grad->stops[1].opa == lv_obj_get_style_bg_opa(info_strip(), 0));
+	assert(lv_color_eq(grad->stops[0].color, lv_obj_get_style_bg_color(info_strip(), 0)));
+	assert(lv_color_eq(grad->stops[1].color, lv_obj_get_style_bg_color(info_strip(), 0)));
 }
 
 // Fill as it always was: the artwork covers its whole area, enlarged to do it
@@ -480,6 +517,7 @@ static void check_fill(const cover_image_t *sleeve) {
 	if (field) {
 		assert(lv_obj_get_height(cover_box()) == screen_h); // under the palettes' field
 	}
+	check_strip_fade();
 }
 
 // The first row of the icon that carries any ink. The chevron's square is
