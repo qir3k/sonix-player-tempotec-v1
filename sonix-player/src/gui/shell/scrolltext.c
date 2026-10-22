@@ -282,10 +282,48 @@ static void fade_update(lv_obj_t *label) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Scrolling is for text that does not fit
+//
+// A circular scroll on words that already fit does not read as a scroll: LVGL
+// parks the animation, the label still measures itself for one, and the line
+// then sits at the left of its box with fades on both ends as if it were
+// running -- and, if the box changes size, it sets off for no reason. So the
+// long mode itself follows the measurement: circular while the words overrun,
+// a plain cut when they do not. Re-decided on every text change and on every
+// change of size, which is what a row that shares its width between two names
+// (Album Art Max's strip) does whenever the other name grows or shrinks.
+//
+// A width of zero means the label has not been laid out yet, and is not
+// evidence that the text fits: the answer stays "scroll" until there is a box
+// to compare against.
+// ---------------------------------------------------------------------------
+
+static void scroll_fit(lv_obj_t *label) {
+	if (!label) {
+		return;
+	}
+	lv_label_long_mode_t want = LV_LABEL_LONG_SCROLL_CIRCULAR;
+	int32_t room = lv_obj_get_content_width(label);
+	if (room > 0 && text_width(label, lv_label_get_text(label)) <= room) {
+		want = LV_LABEL_LONG_CLIP;
+	}
+	// Compared before writing: the property rebuilds the animation and
+	// invalidates the object.
+	if (lv_label_get_long_mode(label) != want) {
+		lv_label_set_long_mode(label, want);
+	}
+}
+
 // The label's width is not known when scrolltext_apply() runs -- the layout
 // has not happened yet -- and it changes again whenever the box around it
-// does, so the mask is decided here as well as at every text change.
-static void fade_size_cb(lv_event_t *e) { fade_update(lv_event_get_target(e)); }
+// does, so both the mask and the decision to scroll are taken here as well as
+// at every text change.
+static void fade_size_cb(lv_event_t *e) {
+	lv_obj_t *label = lv_event_get_target(e);
+	scroll_fit(label);
+	fade_update(label);
+}
 
 // A label that goes away must leave the list with it: the next one allocated
 // could land on the same address and inherit its state.
@@ -338,6 +376,7 @@ static void apply_duration(lv_obj_t *label, const char *text) {
 static void fonts_changed(void) {
 	for (int i = 0; i < fade_label_count; i++) {
 		apply_duration(fade_labels[i].label, lv_label_get_text(fade_labels[i].label));
+		scroll_fit(fade_labels[i].label); // a bigger face can make a short line long
 		fade_update(fade_labels[i].label);
 	}
 }
@@ -359,6 +398,7 @@ void scrolltext_apply(lv_obj_t *label) {
 
 	lv_obj_add_event_cb(label, fade_size_cb, LV_EVENT_SIZE_CHANGED, NULL);
 	lv_obj_add_event_cb(label, fade_delete_cb, LV_EVENT_DELETE, NULL);
+	scroll_fit(label); // nothing to measure yet, and it says so by scrolling
 	fade_update(label);
 }
 
@@ -456,6 +496,7 @@ void scrolltext_set(lv_obj_t *label, const char *text) {
 	// animation it builds is the one that stays.
 	apply_duration(label, line);
 	lv_label_set_text(label, line);
+	scroll_fit(label); // new words, new answer to whether they fit
 	fade_update(label);
 	if (line != text) {
 		free(line);

@@ -10,6 +10,7 @@
 #include "src/gui/library/browser.h"
 #include "src/gui/library/audiobookextras.h"
 #include "src/gui/nowplaying/chapters.h"
+#include "src/gui/nowplaying/aamlayout.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/nowplaying/coverloader.h"
 #include "src/gui/library/medialist.h"
@@ -78,6 +79,16 @@ static void update_repeat_button(void);
 // the shape of the track -- and a blue play button in the middle of it was the
 // one thing that still belonged to some other page.
 static lv_color_t chrome_accent(void);
+// The colour of the played stretch of the bar: the accent, or the sleeve's with
+// the cover tint on. Declared here for set_over_cover, which runs long before
+// it.
+static lv_color_t progress_tint(void);
+// Album Art Max's own ink. Declared with the two above because set_over_cover()
+// reaches for it long before the arrangement's section is reached.
+static lv_color_t aam_accent(void);
+// The strip's two names share their row by what they say: called from the track
+// change and from the queue position, both of which sit above its definition.
+static void aam_strip_fit(void);
 static lv_obj_t *progress_slider;
 // The compact slider leaves room for its oversized endpoint knob and shadow.
 // Zero means use the original percentage width on the HiBy panels.
@@ -329,6 +340,37 @@ static int alt_fav_size = ALT_FAV_SIZE;
 static int alt_pill_pad_h = ALT_PILL_PAD_H;
 static int alt_pill_pad_v = ALT_PILL_PAD_V;
 
+// Album Art Max's own numbers, gathered up here rather than at the top of its
+// section: the words' page and the glyph tinting both ask for one of them, and
+// both are written long before that section is.
+#define AAM_HEADER_H 40	  // the row under the status bar: format, mode, menu, star
+#define AAM_BAR_H 8		  // the minimal band along the foot of the sleeve
+#define AAM_BAR_GAP 0	  // it is the picture's last line, not something above it
+#define AAM_BAR_REACH 8	  // how far past the band a thumb may land and still be a drag
+#define AAM_BAR_LIGHTEN 70 // how much lighter the played band is where it starts
+#define AAM_BAR_TAB 9	  // the marker's width, across the band
+#define AAM_STRIP_PAD_H 8 // what the strip keeps at either end
+#define AAM_STRIP_PAD_V 2
+#define AAM_STRIP_GAP 5	  // between the two names and the queue position
+#define AAM_STRIP_GAPS 3  // artist | title | spacer | queue, so three of them
+#define AAM_QUEUE_MIN 30   // the least the queue position is given ("3/13")
+#define AAM_TIME_INSET 0   // the clocks, in the middle of the dimmed picture
+// How each of the header's marks is scaled out of the canvas it was drawn on:
+// the mode glyph is 30 px and the star 32, and both are drawn at the row's own
+// size (AAM_HEAD_GLYPH) so that neither reads as the bigger button.
+#define AAM_MODE_SCALE (AAM_HEAD_GLYPH * 256 / 30)
+#define AAM_STAR_SCALE (AAM_HEAD_GLYPH * 256 / 32)
+// The menu's three lines: as wide as the marks are tall, so the glyph reads as
+// the third of a set rather than as a different kind of button.
+#define AAM_MENU_W 18
+#define AAM_MENU_BAR 3
+#define AAM_MENU_PITCH 6
+#define AAM_MENU_H (AAM_MENU_PITCH * 2 + AAM_MENU_BAR)
+
+// How far the picture drops while it is being scrubbed, and what the two clocks
+// are written in over it.
+#define AAM_SCRIM_OPA LV_OPA_50
+
 // What the sleeve's colour becomes once it has to be painted rather than
 // thrown.
 //
@@ -356,13 +398,41 @@ static int alt_pill_pad_v = ALT_PILL_PAD_V;
 // says what the user wants for their music, and `layout_alt_now` says whether
 // what is playing is music of that kind. Everything that draws asks the second.
 static player_layout_t layout_choice; // the setting, saved in the config
-static bool layout_alt_now;		// and whether the current source can use it
-static bool layout_studio_now;	// likewise for the third arrangement
+static bool layout_alt_now;		  // and whether the current source can use it
+static bool layout_studio_now;	  // likewise for the third arrangement
 static bool layout_immersive_now; // and for the fourth: the sleeve from edge to edge
-static bool layout_poster_now;  // and for the fifth: the sleeve at the width of the screen, the deck on its own ground
+static bool layout_poster_now;	  // and for the fifth: the sleeve at the width of the screen, the deck on its own ground
+static bool layout_aam_now;		  // and for the sixth: the sleeve over the page, the media controls traded for it
 // The shape of the track and the sleeve's colour: up with the alternative
 // layout, and kept when the words are shown over it.
 static bool layout_wave_now;
+
+// AAM keeps the shell's status bar, which the player otherwise hides so the
+// artwork can reach the bezel; this is its height, kept from the board profile
+// at start-up because the row above the page is measured from it. Zero outside
+// the V1, where AAM is not offered at all.
+static int aam_status_h;
+
+// And where its scrub bar stands: along the foot of the picture (false) or up
+// its left edge (true). The second is the concept's "Leftie".
+static bool aam_leftie;
+
+// The pieces Album Art Max owns. Declared here with the rest of the arrangement
+// state rather than beside the functions that build them, because the theme's
+// repaint (set_over_cover) reaches the two corners of the sleeve and runs long
+// before that section does.
+static lv_obj_t *aam_top;		 // the header row: format, mode, menu, star
+static lv_obj_t *aam_bar_host;	 // where the scrub bar stands, over the sleeve
+static lv_obj_t *aam_scrim;		 // the veil that drops while scrubbing
+static lv_obj_t *aam_time;		 // "1:16/2:46", in the middle of the veil
+// The strip at the foot: the title, the artist beside it in the record's
+// colour, and the place in the queue against the right edge. A row of its own
+// rather than the deck's column, so that the artist sits *after* a title of any
+// length instead of at a position worked out from the last one.
+static lv_obj_t *aam_strip;
+static lv_obj_t *aam_strip_space; // pushes the queue position to the right
+static lv_obj_t *aam_menu_glyph;  // three lines, in place of the ellipsis
+static lv_obj_t *aam_menu_bar[3];
 
 static uint32_t album_tone; // the sleeve's colour, 0 when there is no sleeve
 
@@ -429,6 +499,12 @@ static bool cover_shape_immersive;
 // going in or out of Immersive. `cover_shape_poster` says whether the picture
 // on hand was asked for at that width.
 static bool cover_shape_poster;
+
+// Album Art Max asks for the picture at the box the page draws it in -- the
+// width of the panel and whatever height the two rows around it leave, which
+// is not a square in either of its two shapes. `cover_shape_aam` says whether
+// the picture on hand was made for it.
+static bool cover_shape_aam;
 
 // Immersive asks for the blurred copy as the FOOT of the photograph, at the
 // size of the deck, rather than as the whole screen: it stands over the part
@@ -529,6 +605,19 @@ static void apply_live_mode(bool live) {
 			lv_obj_set_hidden(below_slider_obj, true);
 		} else {
 			lv_obj_set_hidden(below_slider_obj, false);
+		}
+	}
+
+	// Album Art Max keeps none of that deck: its row under the bar is outside
+	// the page here, and the strip at the foot carries the title and the
+	// queue position alone. Coming off a stream puts those rows back, so they
+	// go again -- before anything is drawn below.
+	if (layout_aam_now) {
+		if (below_slider_obj) {
+			lv_obj_set_hidden(below_slider_obj, true);
+		}
+		if (progress_slider) {
+			lv_obj_set_hidden(progress_slider, live);
 		}
 	}
 
@@ -902,6 +991,7 @@ static void update_queue_position(void) {
 		} else {
 			lv_label_set_text(queue_position_label, "");
 		}
+		aam_strip_fit();
 		return;
 	}
 
@@ -911,9 +1001,11 @@ static void update_queue_position(void) {
 
 	if (!worth_saying) {
 		lv_label_set_text(queue_position_label, "");
+		aam_strip_fit(); // the room it has given back is the names' again
 		return;
 	}
 	lv_label_set_text_fmt(queue_position_label, "%d/%d", (int)playlist_current_entry() + 1, count);
+	aam_strip_fit();
 }
 
 // Works out view_start and view_length for playback at `position` in a file
@@ -1098,6 +1190,22 @@ static void set_over_cover(bool on) {
 			lv_obj_remove_local_style_prop(dim_objs[i], LV_STYLE_TEXT_COLOR, 0);
 		}
 	}
+	// Album Art Max's strip and header are drawn in the record's colour: the
+	// artist's name beside the title, the format line and the place in the queue
+	// are all the sleeve's, and so is the band under them (paint_progress_tint).
+	// Set here, at the end of the dimming above, so that every path which
+	// recolours the chrome -- a new palette, a new sleeve -- leaves them saying
+	// the same thing.
+	if (layout_aam_now) {
+		lv_color_t ink = aam_accent();
+		lv_obj_t *const tinted[] = {song_artist_label, format_label, queue_position_label};
+		for (size_t i = 0; i < sizeof(tinted) / sizeof(tinted[0]); i++) {
+			if (tinted[i]) {
+				lv_obj_set_style_text_color(tinted[i], ink, 0);
+			}
+		}
+	}
+
 	for (size_t i = 0; i < sizeof(icon_objs) / sizeof(icon_objs[0]); i++) {
 		if (!icon_objs[i]) {
 			continue;
@@ -1236,11 +1344,20 @@ static lv_color_t chrome_accent(void) {
 // ring and the unplayed stretch are set when the page is built and when the
 // theme changes, and are no part of this either way.
 static lv_color_t progress_tint(void) {
-	if (cover_tint && album_tone) {
+	// Album Art Max is the record's page and not the theme's: there the sleeve's
+	// colour is the design, whether or not the cover tint is switched on for the
+	// rest of the player.
+	if (album_tone && (cover_tint || layout_aam_now)) {
 		return cover_mark(); // the switch's colour, on the monochrome palettes too
 	}
 	return theme_is_monochrome() ? theme_player_chrome_color(THEME_PLAYER_CHROME_PLAYBACK) : theme()->accent;
 }
+
+// What Album Art Max draws its own marks in: the band, the artist's name, the
+// heart, the format line and the place in the queue are all one colour, and that
+// colour is the sleeve's. The theme takes over only when there is no artwork to
+// take it from.
+static lv_color_t aam_accent(void) { return album_tone ? cover_mark() : chrome_accent(); }
 
 static void paint_progress_tint(void) {
 	if (!progress_slider) {
@@ -1249,6 +1366,16 @@ static void paint_progress_tint(void) {
 	lv_color_t tint = progress_tint();
 	lv_obj_set_style_bg_color(progress_slider, tint, LV_PART_INDICATOR);
 	lv_obj_set_style_bg_color(progress_slider, tint, LV_PART_KNOB);
+	if (layout_aam_now) {
+		// Album Art Max's band is read as a stretch of colour rather than as a
+		// line: the played part starts a step lighter at the first second and
+		// deepens to the accent at the head (the concept's peach into its
+		// pink). Written here because this is where the colour is decided --
+		// the theme's, or the sleeve's with the cover tint on.
+		lv_obj_set_style_bg_color(progress_slider, lv_color_lighten(tint, AAM_BAR_LIGHTEN), LV_PART_INDICATOR);
+		lv_obj_set_style_bg_grad_color(progress_slider, tint, LV_PART_INDICATOR);
+		lv_obj_set_style_bg_grad_dir(progress_slider, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
+	}
 }
 
 // The type on that surface. Worked out rather than fixed so that a change to
@@ -1282,6 +1409,14 @@ static void paint_overflow_tint(void) {
 	}
 	lv_obj_set_style_image_recolor(more_btn_icon, color, 0);
 	lv_obj_set_style_image_recolor_opa(more_btn_icon, LV_OPA_COVER, 0);
+	// Album Art Max's menu is three drawn lines rather than the ellipsis, and
+	// they are the one thing on that page that has to look like the same
+	// button: same colour, decided in the one place that decides it.
+	for (int i = 0; i < 3; i++) {
+		if (aam_menu_bar[i]) {
+			lv_obj_set_style_bg_color(aam_menu_bar[i], color, 0);
+		}
+	}
 }
 
 // The two glyphs that wear the accent, and the bar that wears its own,
@@ -2156,9 +2291,19 @@ static void lyrics_layout(void) {
 	}
 	int head_bottom = lyrics_head_top() + STUDIO_HEAD_H + STUDIO_BADGE_GAP;
 	int top = layout_alt_now || layout_studio_now ? head_bottom : back_btn_centre_y() + 28;
+	if (layout_aam_now) {
+		// Album Art Max has no head to keep clear of: the words take the
+		// sleeve's whole box, which is the panel here, and the strip under it
+		// is outside the panel already. What they do keep clear of is the
+		// band, which stands over the picture's foot in this arrangement and
+		// would otherwise run across the last line of them.
+		top = 0;
+	}
 	int pane_y = 0;
 	int x = 0, w = cover_box_w, h = cover_box_h - top;
-	if (layout_immersive_now) {
+	if (layout_aam_now) {
+		h -= AAM_BAR_H; // the band's own row, at the foot of the picture
+	} else if (layout_immersive_now) {
 		// The whole screen is the picture and the controls stand on its foot,
 		// as in the standard arrangement: the words fill what is above them
 		// rather than running under them.
@@ -3121,6 +3266,677 @@ static bool poster_take_back(void) {
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// Album Art Max: the sleeve over the page, the media controls traded for it
+//
+// The concept this comes from puts it plainly: "it trades media controls for
+// bigger AA (assumes you'll just use the physical controls)". So nothing on
+// this page is a transport button. The artwork is the page -- the full width of
+// the panel and everything from the status bar down to the strip -- and the
+// controls that are left are the ones that are not transport: the repeat mode,
+// the overflow menu and the star, in a row with the format under the status
+// bar, where the standard deck keeps them at the other end of the screen.
+//
+// The status bar comes back. The player hides it so that artwork can run to the
+// bezel, but here it is doing real work: with the transport gone, its play/pause
+// mark is the only thing on the panel saying which way the hardware key will
+// go. It is also, in the concept, drawn as part of the arrangement -- hence
+// back_btn_player_top_inset(), which puts the chevron under it rather than in
+// it.
+//
+// Progress is a minimal band along the foot of the picture -- a stretch of the
+// accent that deepens towards a tab-shaped head -- with the title, the artist in
+// the record's colour and the place in the queue on a black strip under it. The
+// two clocks are not on the page at all: they appear in the middle of the
+// artwork, large, while the track is being scrubbed and only for as long as
+// that lasts, with the picture dropped in brightness behind them so the numbers
+// read over any sleeve. Scrubbing is the hardware keys' hold
+// (device_state_scrub_active) or a drag on the band -- the same two routes the
+// rest of the player seeks by.
+//
+// Nothing is written over the photograph itself. The concept puts the artist
+// and the album in its top corners; the artist belongs on the strip beside the
+// track's name where it can be read at a full line's width, and the album is
+// not on this page at all.
+//
+// "Leftie", the concept's second drawing, stands the band up along the left
+// edge: the artwork gives up AAM_RAIL_W pixels of width and the thumb travels
+// vertically, which is the whole of the argument for it.
+//
+// Measured for the 240x320 V1 panel only. The wide panels fall back to the
+// standard arrangement (see update_layout), because every number here is the
+// V1's: a 24 px status bar, a 40 px header row and a strip the height of one
+// line of 14 px type.
+// ---------------------------------------------------------------------------
+
+static bool aam_up;
+// The strip's own index for the bar, so leaving the arrangement puts it back
+// between the waveform and the clocks rather than after the transport.
+static int aam_slider_index;
+// A finger on the band, as opposed to a held skip key: either one is a scrub.
+static bool aam_scrub_touch;
+static bool aam_scrub_shown;
+
+// What the chevron asks the shell for, so that it stands centred in the header
+// row rather than merely under the status bar: the player's own top offset and
+// padding are ten pixels together, and the row centres a 36 px button two
+// pixels into its own height. `inset` is what the status bar adds on top.
+static int aam_chevron_inset(void) { return aam_status_h > 10 ? aam_status_h - 8 : 0; }
+
+// The rows of this arrangement, measured from the widgets and the face in
+// force and handed to aam_layout_box() -- which is where the arithmetic lives,
+// and where it can be read (and tested) without a display.
+static aam_box_t aam_box(void) {
+	int screen_w = player_screen ? (int)lv_obj_get_width(player_screen) : 0;
+	int screen_h = player_screen ? (int)lv_obj_get_height(player_screen) : 0;
+	if (screen_w <= 0) {
+		screen_w = bp_screen_w();
+	}
+	if (screen_h <= 0) {
+		screen_h = bp_screen_h();
+	}
+	int strip_h = lv_font_get_line_height(bp_title_font()) + 2 * AAM_STRIP_PAD_V + 2;
+	return aam_layout_box(screen_w, screen_h, aam_status_h, LV_MAX(AAM_HEADER_H, bp_header_button_size()),
+						  strip_h, aam_leftie);
+}
+
+// The scrub bar's own dressing in this arrangement: a thin band with square
+// ends and a small round head, played part in the accent, the rest a dark
+// wash over the picture. The other arrangements' bar -- a 10 px track with a
+// ringed knob and a shadow under it -- is what aam_slider_style(false) puts
+// back, and the two sets are written out together so the return trip cannot
+// disagree with the page it returns to.
+static void aam_slider_style(bool aam) {
+	if (!progress_slider) {
+		return;
+	}
+	if (aam) {
+		// The band: square ends, no track round it, and a marker that is a
+		// tab across it rather than a knob on it -- the concept's playhead is
+		// a block of the accent standing the height of the band and a little
+		// wider, not a disc.
+		lv_obj_set_style_radius(progress_slider, 0, LV_PART_MAIN);
+		lv_obj_set_style_radius(progress_slider, 0, LV_PART_INDICATOR);
+		lv_obj_set_style_radius(progress_slider, 2, LV_PART_KNOB);
+		lv_obj_set_style_bg_color(progress_slider, lv_color_black(), LV_PART_MAIN);
+		lv_obj_set_style_bg_opa(progress_slider, LV_OPA_50, LV_PART_MAIN);
+		lv_obj_set_style_shadow_width(progress_slider, 0, LV_PART_MAIN);
+		lv_obj_set_style_border_width(progress_slider, 0, LV_PART_KNOB);
+		lv_obj_set_style_pad_all(progress_slider, 0, LV_PART_KNOB);
+		lv_obj_set_style_shadow_width(progress_slider, 0, LV_PART_KNOB);
+		lv_obj_set_style_width(progress_slider, AAM_BAR_TAB, LV_PART_KNOB);
+		lv_obj_set_style_height(progress_slider, AAM_BAR_H, LV_PART_KNOB);
+	} else {
+		// Back to the deck's own bar: a ringed disc on a rounded track, with
+		// the marker sized by its padding again rather than by a width.
+		lv_obj_set_style_width(progress_slider, LV_SIZE_CONTENT, LV_PART_KNOB);
+		lv_obj_set_style_height(progress_slider, LV_SIZE_CONTENT, LV_PART_KNOB);
+		lv_obj_set_style_bg_grad_dir(progress_slider, LV_GRAD_DIR_NONE, LV_PART_INDICATOR);
+		lv_obj_set_style_radius(progress_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+		lv_obj_set_style_radius(progress_slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+		lv_obj_set_style_radius(progress_slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+		lv_obj_set_style_bg_color(progress_slider, lv_color_white(), LV_PART_MAIN);
+		lv_obj_set_style_bg_opa(progress_slider, theme_is_monochrome() ? LV_OPA_COVER : LV_OPA_30,
+								LV_PART_MAIN);
+		lv_obj_set_style_border_width(progress_slider, bp_pick(2, PROGRESS_KNOB_RING), LV_PART_KNOB);
+		lv_obj_set_style_pad_all(progress_slider, bp_pick(4, PROGRESS_KNOB_GROW), LV_PART_KNOB);
+		lv_obj_set_style_shadow_width(progress_slider, 8, LV_PART_KNOB);
+	}
+	paint_progress_tint(); // the accent, or the sleeve's with the cover tint on
+}
+
+// How wide a label's words are on one line, in its own font. The strip shares
+// its width between two names and the queue position, and the point of the
+// sharing is that a name which fits is not made to scroll -- which cannot be
+// answered by the boxes, because the boxes are what is being set.
+static int aam_text_width(lv_obj_t *label) {
+	if (!label || lv_obj_is_hidden(label)) {
+		return 0;
+	}
+	const char *text = lv_label_get_text(label);
+	const lv_font_t *font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+	if (!text || !text[0] || !font) {
+		return 0;
+	}
+	lv_point_t size;
+	lv_text_get_size(&size, text, font, lv_obj_get_style_text_letter_space(label, LV_PART_MAIN),
+					 lv_obj_get_style_text_line_space(label, LV_PART_MAIN), LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+	return size.x;
+}
+
+// The two names and the queue position on one row: how wide each of them gets
+// for the words it is holding right now.
+//
+// The room is what the panel has left after the padding and the queue position,
+// and the split is aam_strip_shares()'s -- the artist first, and a name that
+// fits is never made to scroll. Measured rather than divided into thirds,
+// because a third of a 240 px panel is seven letters, which is what left the
+// artist of a real record reading \"Knxwled\".
+//
+// Called wherever either name or the count can change -- a new track, a new
+// place in the queue, the arrangement being entered -- and it writes only what
+// differs, since this is reached from the poll as well as from a track change.
+static void aam_strip_fit(void) {
+	if (!aam_strip) {
+		return;
+	}
+	int screen_w = (int)lv_obj_get_width(aam_strip);
+	if (screen_w <= 0 && player_screen) {
+		screen_w = (int)lv_obj_get_width(player_screen);
+	}
+	if (screen_w <= 0) {
+		return;
+	}
+
+	// The queue position is as wide as its own words, not as wide as the
+	// longest one it could ever hold: "3/13" and "12/123" are three pixels
+	// apart, and the room it does not need is room the names get -- which is
+	// the difference between a title that fits and one that has to scroll.
+	int queue_px = aam_text_width(queue_position_label);
+	if (queue_px < AAM_QUEUE_MIN) {
+		queue_px = AAM_QUEUE_MIN;
+	}
+	int room = screen_w - 2 * AAM_STRIP_PAD_H - queue_px - AAM_STRIP_GAPS * AAM_STRIP_GAP;
+	if (room < 40) {
+		room = 40;
+	}
+	int want[2];
+	aam_strip_shares(room, aam_text_width(song_artist_label), aam_text_width(song_title_label), want);
+
+	// A name with nothing to show keeps its zero: a width of 0 on an empty
+	// label is a divider with no words in it. Compared against the style's own
+	// answer rather than a copy kept here, so that a label whose width was taken
+	// off on the way out of the arrangement is always given it again on the way
+	// back in.
+	lv_obj_t *const named[] = {song_artist_label, song_title_label};
+	for (size_t i = 0; i < 2; i++) {
+		if (named[i] && want[i] > 0 && lv_obj_get_style_max_width(named[i], 0) != want[i]) {
+			lv_obj_set_style_max_width(named[i], want[i], 0);
+		}
+	}
+}
+
+// Where the pieces stand: the header under the status bar, the band along the
+// foot of the sleeve or up its left edge, and the strip at the bottom. Called
+// from the geometry, so it runs before the widgets have been moved here on the
+// way in and after they have been put back on the way out.
+static void aam_place(void) {
+	if (!aam_top || !aam_bar_host) {
+		return;
+	}
+	aam_box_t b = aam_box();
+	int screen_w = b.art_x + b.art_w;
+
+	lv_obj_set_size(aam_top, screen_w, b.header_h);
+	lv_obj_set_pos(aam_top, 0, b.status_h);
+
+	// The band is six pixels; the block it stands in is the band plus the room
+	// a thumb needs around it (AAM_BAR_REACH each side), because the way to an
+	// object is through its parent: LVGL looks for a press among a parent's
+	// children only while the press is inside the parent's own box, so a
+	// slider whose reach hangs outside the block can never be reached out
+	// there. The block itself takes no presses -- it is a shape, not a target
+	// -- so what it overlaps is only overlapped on the way past.
+	if (aam_leftie) {
+		// Up the left edge: the band down the middle of the rail, and the
+		// block a thumb's width wide, reaching into the picture past the rail.
+		int host_w = LV_MIN(b.art_x + AAM_BAR_REACH, b.art_w);
+		lv_obj_set_pos(aam_bar_host, 0, b.art_y);
+		lv_obj_set_size(aam_bar_host, host_w, b.art_h);
+	} else {
+		// Flush with the foot of the sleeve: the band's own foot keeps
+		// AAM_BAR_GAP off the picture's edge, so it reads as the picture's
+		// last line rather than as something floating over it.
+		int band_top = b.art_y + b.art_h - AAM_BAR_GAP - AAM_BAR_H;
+		lv_obj_set_pos(aam_bar_host, 0, band_top - AAM_BAR_REACH);
+		lv_obj_set_size(aam_bar_host, screen_w, AAM_BAR_H + 2 * AAM_BAR_REACH);
+	}
+
+	if (aam_up && progress_slider) {
+		// Vertical or horizontal is the slider's own business, decided from
+		// the shape it is given -- but said out loud here, because a slider
+		// that once stood up and was then handed a wide box is not always
+		// asked again by itself. It is then put in its place by hand rather
+		// than centred, so that the band stays where the page says it is
+		// whatever the reach around it comes to.
+		lv_slider_set_orientation(progress_slider, aam_leftie ? LV_SLIDER_ORIENTATION_VERTICAL
+															: LV_SLIDER_ORIENTATION_HORIZONTAL);
+		if (aam_leftie) {
+			lv_obj_set_size(progress_slider, AAM_BAR_H, b.art_h - 4);
+			lv_obj_align(progress_slider, LV_ALIGN_LEFT_MID, (AAM_RAIL_W - AAM_BAR_H) / 2, 0);
+		} else {
+			lv_obj_set_size(progress_slider, screen_w, AAM_BAR_H);
+			lv_obj_align(progress_slider, LV_ALIGN_TOP_MID, 0, AAM_BAR_REACH);
+		}
+	}
+
+	// The format has the header's left end, up to where the first of the three
+	// marks begins -- measured from the marks themselves (aam_head_slots), so a
+	// change to their size or spacing cannot leave the line running under them.
+	int format_room = aam_head_marks_left(screen_w) - AAM_FORMAT_X - 4;
+	if (format_label && format_room > 20) {
+		lv_obj_set_style_max_width(format_label, format_room, 0);
+	}
+
+	// The strip: the artist, the title beside it, the queue position at the
+	// right -- all three sharing one row of words (see aam_strip_shares).
+	if (aam_strip) {
+		lv_obj_set_size(aam_strip, screen_w, lv_pct(100));
+		aam_strip_fit();
+	}
+}
+
+// The two clocks, in the middle of the veil: the same pair the deck keeps under
+// the bar, read straight out of the labels that already know how to write
+// themselves -- a book's chapter included (set_progress_label).
+static void aam_time_update(void) {
+	if (!aam_time) {
+		return;
+	}
+	const char *elapsed = elapsed_label ? lv_label_get_text(elapsed_label) : "0:00";
+	const char *total = remaining_label ? lv_label_get_text(remaining_label) : "0:00";
+	lv_label_set_text_fmt(aam_time, "%s/%s", elapsed, total);
+}
+
+// The veil and the clocks, up while a scrub is running and down again the
+// moment it ends. Idempotent: the poll asks on every tick.
+static void aam_scrub_apply(bool on) {
+	if (!layout_aam_now || !aam_up) {
+		on = false;
+	}
+	if (on == aam_scrub_shown) {
+		if (on) {
+			aam_time_update();
+		}
+		return;
+	}
+	aam_scrub_shown = on;
+	if (aam_scrim) {
+		lv_obj_set_hidden(aam_scrim, !on);
+	}
+	if (aam_time) {
+		lv_obj_set_hidden(aam_time, !on);
+	}
+	if (on) {
+		aam_time_update();
+	}
+}
+
+// Puts the arrangement up. Reparenting and not rebuilding, as everywhere else
+// on this page: the title carries its scrolling, the buttons carry what they do
+// when pressed, and the slider carries the seeking.
+static void aam_put(void) {
+	if (!aam_top || !aam_bar_host) {
+		return;
+	}
+	aam_up = true;
+
+	// The deck, reduced to the strip under the sleeve. Its ground is the
+	// photograph's own foot rather than the theme's panel -- black, because
+	// that is what the concept puts the title on -- and both of those are
+	// local properties, taken off again in aam_take_back().
+	if (player_menu) {
+		lv_obj_set_style_bg_color(player_menu, lv_color_black(), 0);
+		lv_obj_set_style_bg_opa(player_menu, LV_OPA_COVER, 0);
+		lv_obj_set_style_bg_image_opa(player_menu, LV_OPA_TRANSP, 0);
+		// The deck keeps its rows in from the panel's edges and off its own top
+		// and bottom; the strip fills the deck it now *is*, so both of those are
+		// taken off and given back in aam_take_back().
+		lv_obj_set_style_pad_hor(player_menu, 0, 0);
+		lv_obj_set_style_pad_ver(player_menu, 0, 0);
+	}
+	// The strip: the artist in the record's colour, then the title in the
+	// theme's ink, then the place in the queue pushed out to the right. The
+	// three are reparented and then put in that order, because flex lays a row
+	// out in the order its children were made and not in the order they were
+	// handed over.
+	if (aam_strip) {
+		// The artist first, then the track: who it is before what it is called,
+		// in the record's colour against the title's plain ink.
+		if (song_artist_label) {
+			lv_obj_set_parent(song_artist_label, aam_strip);
+			lv_obj_set_ignore_layout(song_artist_label, false);
+			lv_obj_set_width(song_artist_label, LV_SIZE_CONTENT);
+			lv_obj_move_to_index(song_artist_label, 0);
+		}
+		if (song_title_label) {
+			lv_obj_set_parent(song_title_label, aam_strip);
+			lv_obj_set_ignore_layout(song_title_label, false); // the row places it
+			lv_obj_set_style_translate_y(song_title_label, 0, 0);
+			lv_obj_set_width(song_title_label, LV_SIZE_CONTENT);
+			lv_obj_move_to_index(song_title_label, 1);
+		}
+		if (aam_strip_space) {
+			lv_obj_move_to_index(aam_strip_space, 2);
+		}
+		if (queue_position_label) {
+			lv_obj_set_parent(queue_position_label, aam_strip);
+			lv_obj_set_ignore_layout(queue_position_label, false);
+			lv_obj_move_to_index(queue_position_label, 3);
+		}
+		lv_obj_set_hidden(aam_strip, false);
+	}
+	// What the deck used to carry and this arrangement does not.
+	lv_obj_t *const gone[] = {song_text_obj, song_side_obj, wave_box, below_slider_obj, controls_row};
+	for (size_t i = 0; i < sizeof(gone) / sizeof(gone[0]); i++) {
+		if (gone[i]) {
+			lv_obj_set_hidden(gone[i], true);
+		}
+	}
+
+	// The header: the format at the left, the three buttons at the right.
+	if (format_label) {
+		lv_obj_set_parent(format_label, aam_top);
+		lv_obj_set_ignore_layout(format_label, true);
+		lv_obj_set_width(format_label, LV_SIZE_CONTENT);
+		lv_obj_set_style_text_align(format_label, LV_TEXT_ALIGN_LEFT, 0);
+		lv_obj_align(format_label, LV_ALIGN_LEFT_MID, AAM_FORMAT_X, 0);
+		lv_obj_set_hidden(format_label, false);
+	}
+	// Three slots on one pitch, measured in from the right edge by the layout
+	// (aam_head_slots): the star, the menu, then the mode.
+	int slots[3];
+	aam_head_slots((int)lv_obj_get_width(player_screen), slots);
+	if (fav_btn_obj && aam_top) {
+		lv_obj_set_parent(fav_btn_obj, aam_top);
+		lv_obj_set_ignore_layout(fav_btn_obj, true);
+		lv_obj_align(fav_btn_obj, LV_ALIGN_RIGHT_MID, -slots[0], 0);
+	}
+	if (more_btn_obj && aam_top) {
+		lv_obj_set_parent(more_btn_obj, aam_top);
+		lv_obj_set_ignore_layout(more_btn_obj, true);
+		lv_obj_align(more_btn_obj, LV_ALIGN_RIGHT_MID, -slots[1], 0);
+	}
+	// The repeat mode and, on a book, the speed gauge stand in the same place.
+	lv_obj_t *const modes[] = {repeat_btn_obj, speed_btn_obj};
+	for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
+		if (modes[i] && aam_top) {
+			lv_obj_set_parent(modes[i], aam_top);
+			lv_obj_set_ignore_layout(modes[i], true);
+			lv_obj_align(modes[i], LV_ALIGN_RIGHT_MID, -slots[2], 0);
+		}
+	}
+	// The three marks are drawn at one weight: update_repeat_button() and
+	// update_fav_button() own their sizes and know this arrangement by name.
+
+	// The menu: three lines here, the ellipsis everywhere else (see aam_build).
+	if (more_btn_icon) {
+		lv_obj_set_hidden(more_btn_icon, true);
+	}
+	if (aam_menu_glyph) {
+		lv_obj_set_hidden(aam_menu_glyph, false);
+	}
+	paint_overflow_tint();
+
+	// The band, into the block that stands over the picture.
+	if (progress_slider) {
+		if (lv_obj_get_parent(progress_slider) == player_menu) {
+			aam_slider_index = lv_obj_get_index(progress_slider);
+		}
+		lv_obj_set_parent(progress_slider, aam_bar_host);
+		aam_slider_style(true);
+		// A six pixel band is a thing to look at, not a thing to hit. The
+		// reach grows around it without the band itself getting heavier, and
+		// what it takes is the sleeve's last few pixels, which is where a
+		// thumb after the end of a track goes anyway.
+		lv_obj_set_ext_click_area(progress_slider, 8);
+	}
+	if (aam_bar_host) {
+		lv_obj_set_hidden(aam_bar_host, false);
+	}
+	if (aam_top) {
+		lv_obj_set_hidden(aam_top, false);
+	}
+	if (aam_scrim) {
+		lv_obj_set_hidden(aam_scrim, true);
+	}
+	if (aam_time) {
+		lv_obj_set_hidden(aam_time, true);
+	}
+	aam_scrub_shown = false;
+
+	aam_place();
+	lv_obj_move_foreground(aam_top);
+	lv_obj_move_foreground(aam_bar_host);
+	cover_show(current_cover.pixels != NULL);
+	lyrics_layout(); // the words' page is measured against this one
+}
+
+// Gives everything back: the two labels to the deck, the buttons to the
+// transport row, the bar to its own row and its own shape, and the deck to the
+// theme's ground. Returns true when it was the arrangement in force, which is
+// what the geometry has to be told -- the sleeve is not the page's size any
+// more, and the geometry's own answer only changes when the deck does.
+static bool aam_take_back(void) {
+	if (!aam_up) {
+		return false;
+	}
+	aam_up = false;
+	aam_scrub_touch = false;
+	aam_scrub_shown = false;
+	if (aam_scrim) {
+		lv_obj_set_hidden(aam_scrim, true);
+	}
+	if (aam_time) {
+		lv_obj_set_hidden(aam_time, true);
+	}
+	if (aam_top) {
+		lv_obj_set_hidden(aam_top, true);
+	}
+	if (aam_bar_host) {
+		lv_obj_set_hidden(aam_bar_host, true);
+	}
+	if (aam_strip) {
+		lv_obj_set_hidden(aam_strip, true);
+	}
+	// The artist line goes back to the colour its own style gives it, and the
+	// three marks back to the sizes the deck draws them at.
+	if (song_artist_label) {
+		lv_obj_remove_local_style_prop(song_artist_label, LV_STYLE_TEXT_COLOR, 0);
+		lv_obj_set_style_max_width(song_artist_label, LV_COORD_MAX, 0);
+	}
+	if (song_title_label) {
+		lv_obj_set_style_max_width(song_title_label, LV_COORD_MAX, 0);
+	}
+	if (repeat_btn_icon) {
+		lv_image_set_scale(repeat_btn_icon, 256);
+	}
+
+	if (format_label && song_side_obj) {
+		lv_obj_set_parent(format_label, song_side_obj);
+		lv_obj_set_ignore_layout(format_label, false);
+		lv_obj_set_style_text_align(format_label, LV_TEXT_ALIGN_RIGHT, 0);
+		lv_obj_set_style_max_width(format_label, LV_COORD_MAX, 0);
+	}
+	if (more_btn_obj && controls_row) {
+		lv_obj_set_parent(more_btn_obj, controls_row);
+		lv_obj_set_ignore_layout(more_btn_obj, true);
+		lv_obj_align(more_btn_obj, LV_ALIGN_RIGHT_MID, 0, 0);
+	}
+	if (repeat_btn_obj && controls_row) {
+		lv_obj_set_parent(repeat_btn_obj, controls_row);
+		lv_obj_set_ignore_layout(repeat_btn_obj, true);
+		lv_obj_align(repeat_btn_obj, LV_ALIGN_LEFT_MID, 0, 0);
+	}
+	if (speed_btn_obj && controls_row) {
+		lv_obj_set_parent(speed_btn_obj, controls_row);
+		lv_obj_set_ignore_layout(speed_btn_obj, true);
+		lv_obj_align(speed_btn_obj, LV_ALIGN_LEFT_MID, 0, 0);
+	}
+	if (fav_btn_obj) {
+		// Laid out by its row again: apply_layout's standard branch decides
+		// which row that is.
+		lv_obj_set_ignore_layout(fav_btn_obj, false);
+	}
+	if (more_btn_icon) {
+		lv_obj_set_hidden(more_btn_icon, false);
+	}
+	if (aam_menu_glyph) {
+		lv_obj_set_hidden(aam_menu_glyph, true);
+	}
+
+	// The bar, back into the deck where it was built: between the shape of the
+	// track and the clocks.
+	if (progress_slider && player_menu) {
+		lv_slider_set_orientation(progress_slider, LV_SLIDER_ORIENTATION_HORIZONTAL);
+		lv_obj_set_parent(progress_slider, player_menu);
+		lv_obj_move_to_index(progress_slider, aam_slider_index);
+		lv_obj_set_size(progress_slider, compact_progress_width > 0 ? compact_progress_width : lv_pct(100),
+						PROGRESS_TRACK_HEIGHT);
+		lv_obj_set_ext_click_area(progress_slider, 0);
+		aam_slider_style(false);
+	}
+	if (queue_position_label && below_slider_obj) {
+		lv_obj_set_parent(queue_position_label, below_slider_obj);
+		lv_obj_set_ignore_layout(queue_position_label, false);
+		lv_obj_align(queue_position_label, LV_ALIGN_CENTER, 0, 0);
+	}
+	// The two labels are put back by the branch of apply_layout that follows:
+	// the column under the title, or the alternative arrangement's pills. All
+	// that is left to undo here is the room this arrangement gave them.
+	if (song_title_label) {
+		lv_obj_set_ignore_layout(song_title_label, false);
+	}
+
+	// The strip goes back to being the deck: the theme's ground (or the clear
+	// style this board wears) and the blurred copy behind its rows.
+	if (player_menu) {
+		lv_obj_remove_local_style_prop(player_menu, LV_STYLE_BG_COLOR, 0);
+		lv_obj_remove_local_style_prop(player_menu, LV_STYLE_BG_OPA, 0);
+		lv_obj_remove_local_style_prop(player_menu, LV_STYLE_BG_IMAGE_OPA, 0);
+		// The deck's own side inset, as player_init worked it out: the bar's
+		// width is the row's, and the two numbers differ by that inset twice.
+		int side = compact_progress_width > 0
+					   ? ((int)lv_obj_get_width(player_screen) - compact_progress_width) / 2
+					   : bp_padding();
+		lv_obj_set_style_pad_hor(player_menu, side, 0);
+		// The rows' own top and bottom, as player_init worked them out for the
+		// board in force (AAM is only ever offered on the compact one).
+		lv_obj_set_style_pad_ver(player_menu, menu_pad_ver, 0);
+		lv_obj_set_style_pad_bottom(player_menu, COMPACT_DECK_PAD_BOTTOM, 0);
+	}
+	if (below_slider_obj) {
+		lv_obj_set_hidden(below_slider_obj, live_mode && !live_custom_nav);
+	}
+	if (controls_row) {
+		lv_obj_set_hidden(controls_row, false);
+	}
+	if (song_text_obj) {
+		lv_obj_set_hidden(song_text_obj, false);
+	}
+	if (song_side_obj) {
+		lv_obj_set_hidden(song_side_obj, false);
+	}
+
+	// The page itself: the panel back at the top of the screen, at its own
+	// width, and the sleeve's corners where everything else keeps them. Its
+	// size is the geometry's, which is told to look again.
+	if (cover_panel) {
+		lv_obj_align(cover_panel, LV_ALIGN_TOP_MID, 0, 0);
+	}
+	cover_box_w = (int)lv_obj_get_width(player_screen);
+	if (cover_art_group) {
+		lv_obj_set_style_radius(cover_art_group, sleeve_radius, 0);
+	}
+	if (cover_img) {
+		lv_obj_set_style_radius(cover_img, sleeve_radius, 0);
+	}
+	placeholder_rescale();
+	cover_show(current_cover.pixels != NULL);
+	return true;
+}
+
+// Builds what this arrangement owns: the header row, the block the bar stands
+// in, the veil and the clocks over the sleeve, the two corners, and the three
+// lines that stand in for the ellipsis.
+//
+// The menu glyph is drawn rather than decoded from an icon: the three bars are
+// three rounded rectangles, which is the shape the concept draws and the one
+// shape a bitmap would only be a copy of. It also keeps the generated icon
+// table out of this change.
+static void aam_build(void) {
+	int screen_w = bp_screen_w();
+
+	aam_top = lv_obj_create(player_screen);
+	lv_obj_remove_style_all(aam_top);
+	lv_obj_set_size(aam_top, screen_w, AAM_HEADER_H);
+	lv_obj_set_pos(aam_top, 0, aam_status_h);
+	lv_obj_set_scrollable(aam_top, false);
+	lv_obj_set_clickable(aam_top, false);
+	lv_obj_set_hidden(aam_top, true);
+
+	aam_bar_host = lv_obj_create(player_screen);
+	lv_obj_remove_style_all(aam_bar_host);
+	lv_obj_set_size(aam_bar_host, screen_w, AAM_BAR_H + 2 * AAM_BAR_REACH);
+	lv_obj_set_scrollable(aam_bar_host, false);
+	lv_obj_set_clickable(aam_bar_host, false);
+	lv_obj_set_hidden(aam_bar_host, true);
+
+	// Over the picture, and under the clocks: the veil dims the sleeve while a
+	// scrub runs, and what has to stay legible over it is the time.
+	aam_scrim = lv_obj_create(cover_art_group);
+	lv_obj_remove_style_all(aam_scrim);
+	lv_obj_set_size(aam_scrim, lv_pct(100), lv_pct(100));
+	lv_obj_align(aam_scrim, LV_ALIGN_CENTER, 0, 0);
+	lv_obj_set_style_bg_color(aam_scrim, lv_color_black(), 0);
+	lv_obj_set_style_bg_opa(aam_scrim, AAM_SCRIM_OPA, 0);
+	lv_obj_set_clickable(aam_scrim, false);
+	lv_obj_set_hidden(aam_scrim, true);
+
+	// The strip at the foot: the artist, the title and the place in the queue
+	// against the right edge, in a row of its own. It lives in the deck (which
+	// is the strip's own height in this arrangement) but lays its children out
+	// itself, so that each name follows the other of any length instead of
+	// standing at a position worked out from the last one.
+	aam_strip = lv_obj_create(player_menu);
+	lv_obj_remove_style_all(aam_strip);
+	lv_obj_set_size(aam_strip, screen_w, lv_pct(100));
+	lv_obj_set_ignore_layout(aam_strip, true); // the deck's column does not place it
+	lv_obj_align(aam_strip, LV_ALIGN_CENTER, 0, 0);
+	lv_obj_set_style_pad_hor(aam_strip, AAM_STRIP_PAD_H, 0);
+	lv_obj_set_style_pad_column(aam_strip, AAM_STRIP_GAP, 0);
+	lv_obj_set_style_pad_ver(aam_strip, 0, 0);
+	lv_obj_set_scrollable(aam_strip, false);
+	lv_obj_set_clickable(aam_strip, false);
+	lv_obj_set_flex_flow(aam_strip, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(aam_strip, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_hidden(aam_strip, true);
+
+	// What pushes the queue position out to the right end of the row.
+	aam_strip_space = lv_obj_create(aam_strip);
+	lv_obj_remove_style_all(aam_strip_space);
+	lv_obj_set_size(aam_strip_space, 1, 1);
+	lv_obj_set_flex_grow(aam_strip_space, 1);
+	lv_obj_set_clickable(aam_strip_space, false);
+
+	aam_time = lv_label_create(cover_art_group);
+	lv_label_set_text(aam_time, "");
+	lv_obj_set_style_text_font(aam_time, &font_ui_32, 0); // the V1 draws 32 at 21 px
+	lv_obj_set_style_text_color(aam_time, lv_color_white(), 0);
+	lv_obj_align(aam_time, LV_ALIGN_CENTER, 0, AAM_TIME_INSET);
+	lv_obj_set_clickable(aam_time, false);
+	lv_obj_set_hidden(aam_time, true);
+
+	// The menu's three lines, inside the button the ellipsis already lives in.
+	aam_menu_glyph = lv_obj_create(more_btn_obj);
+	lv_obj_remove_style_all(aam_menu_glyph);
+	lv_obj_set_size(aam_menu_glyph, AAM_MENU_W, AAM_MENU_H);
+	lv_obj_center(aam_menu_glyph);
+	lv_obj_set_clickable(aam_menu_glyph, false);
+	lv_obj_set_hidden(aam_menu_glyph, true);
+	for (int i = 0; i < 3; i++) {
+		lv_obj_t *bar = lv_obj_create(aam_menu_glyph);
+		lv_obj_remove_style_all(bar);
+		lv_obj_set_size(bar, AAM_MENU_W, AAM_MENU_BAR);
+		lv_obj_set_pos(bar, 0, i * AAM_MENU_PITCH);
+		lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, 0);
+		lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+		lv_obj_set_style_bg_color(bar, lv_color_white(), 0);
+		lv_obj_set_clickable(bar, false);
+		aam_menu_bar[i] = bar;
+	}
+}
+
 static void apply_layout(void) {
 	if (!alt_title_pill || !song_text_obj) {
 		return;
@@ -3132,12 +3948,13 @@ static void apply_layout(void) {
 	studio_take_back();
 	bool was_immersive = immersive_take_back();
 	bool was_poster = poster_take_back();
+	bool was_aam = aam_take_back();
 
 	// The panel split follows the arrangement (the alternative one leaves the
 	// names on the sleeve, so its deck is shorter and the sleeve taller).
 	// Before the pill room is worked out below, which is measured from the
 	// sleeve.
-	player_apply_geometry(was_immersive || was_poster);
+	player_apply_geometry(was_immersive || was_poster || was_aam);
 
 	if (layout_alt_now) {
 		// A pill each, and not one pill with two lines in it: the title and the
@@ -3236,7 +4053,13 @@ static void apply_layout(void) {
 		}
 	}
 
-	if (layout_immersive_now) {
+	if (layout_aam_now) {
+		aam_put(); // which places the words' page with it
+		// The page's own ground behind the header row: the same screen-sized
+		// blur the standard arrangement stands the sleeve on, with the sleeve
+		// covering all but the two rows this arrangement leaves around it.
+		full_backdrop_apply();
+	} else if (layout_immersive_now) {
 		immersive_put(); // which places the words' page with it
 	} else if (layout_studio_now) {
 		studio_put(); // likewise, through studio_place()
@@ -3257,6 +4080,21 @@ static void apply_layout(void) {
 	placeholder_place();
 	paint_alt_tint();
 	update_fav_button(); // the marker's shape and size follow the arrangement
+
+	// Album Art Max keeps the shell's status bar, and the chevron belongs under
+	// it rather than in it; every other arrangement hides the bar so artwork
+	// can reach the top edge. Only while the sheet is actually up: the setting
+	// can be changed from a page the player is not on.
+	if (sheet_open) {
+		topbar_set_hidden(!layout_aam_now);
+		back_btn_player_top_inset(layout_aam_now ? aam_chevron_inset() : 0);
+		// And its stroke, not its button: the glyph is drawn with a third of its
+		// canvas empty on either side, so a chevron whose *button* starts where
+		// the star's does sits visibly further in. AAM_HEAD_END_PAD is the air
+		// the star's own stroke keeps from the edge, and the way back mirrors it.
+		back_btn_player_ink_inset(layout_aam_now ? AAM_HEAD_END_PAD : 0);
+		back_btn_player_mode(true);
+	}
 }
 
 // Decides which arrangement the thing now playing gets, and moves the pieces
@@ -3277,16 +4115,23 @@ static void update_layout(const device_state_t *state) {
 	bool studio = layout_choice == PLAYER_LAYOUT_STUDIO;
 	bool immersive = layout_choice == PLAYER_LAYOUT_IMMERSIVE;
 	bool poster = layout_choice == PLAYER_LAYOUT_POSTER;
+	// Album Art Max is measured for the 240x320 panel, and every number in it
+	// is one of that panel's. On the wide boards the choice is remembered but
+	// the page keeps the standard arrangement -- the same way Waveform falls
+	// back for a source with no file to draw.
+	bool aam = layout_choice == PLAYER_LAYOUT_ALBUM_ART_MAX && bp_is_tempotec_v1();
 	bool wave = layout_choice == PLAYER_LAYOUT_ALTERNATIVE && local;
 	bool alt = wave;
 
 	if (studio == layout_studio_now && immersive == layout_immersive_now && poster == layout_poster_now &&
-		alt == layout_alt_now && wave == layout_wave_now && lyrics == lyrics_allowed && alt_title_pill) {
+		aam == layout_aam_now && alt == layout_alt_now && wave == layout_wave_now &&
+		lyrics == lyrics_allowed && alt_title_pill) {
 		return;
 	}
 	layout_studio_now = studio;
 	layout_immersive_now = immersive;
 	layout_poster_now = poster;
+	layout_aam_now = aam;
 	layout_alt_now = alt;
 	layout_wave_now = wave;
 	lyrics_allowed = lyrics;
@@ -3303,10 +4148,11 @@ static void update_layout(const device_state_t *state) {
 
 	// The blurred copy is made at the shape of whatever shows it, and the
 	// sleeve at the size the arrangement draws it, so moving in or out of
-	// Studio, Immersive or Poster means the ones on hand are the wrong shape
-	// and the picture is asked for again. Only on a change of arrangement,
-	// which is a setting the user has just touched.
-	if ((studio != backdrop_is_studio || immersive != cover_shape_immersive || poster != cover_shape_poster) &&
+	// Studio, Immersive, Poster or Album Art Max means the ones on hand are the
+	// wrong shape and the picture is asked for again. Only on a change of
+	// arrangement, which is a setting the user has just touched.
+	if ((studio != backdrop_is_studio || immersive != cover_shape_immersive || poster != cover_shape_poster ||
+		 aam != cover_shape_aam) &&
 		cover_shown_path[0]) {
 		reload_cover(cover_shown_path);
 	}
@@ -3535,6 +4381,7 @@ static void reload_cover(const char *filepath) {
 		backdrop_is_full = backdrop_fills_screen() && !backdrop_is_band;
 		cover_shape_immersive = layout_immersive_now;
 		cover_shape_poster = layout_poster_now;
+		cover_shape_aam = layout_aam_now;
 		// The band faces the way the picture does, like every blur that is
 		// looked at rather than looked through, and it is cut from the foot of
 		// the photograph -- the part of it the deck stands over.
@@ -3794,6 +4641,12 @@ static void player_refresh_theme(void) {
 		lv_obj_set_style_bg_opa(progress_slider, mono ? LV_OPA_COVER : LV_OPA_30, LV_PART_MAIN);
 	}
 	paint_progress_tint(); // the theme's colour, or the sleeve's while the tint is on
+	// Album Art Max's band is not the deck's bar: it keeps its own shape and
+	// its dark wash over the photograph, and the two lines above have just
+	// given it the standard one back.
+	if (layout_aam_now) {
+		aam_slider_style(true);
+	}
 	set_over_cover(chrome_over_cover); // recolours the player chrome for the new palette
 	update_fav_button();
 	paint_overflow_tint(); // the muted menu grey, or the sleeve's with the tint on
@@ -3845,7 +4698,6 @@ static void refresh_now_playing(void) {
 	// a song.
 	apply_audiobook_mode(!state.live && audiobook_is_playing(),
 						 !state.live && podcastcache_is_episode(state.current_file));
-
 	if (state.live) {
 		// The station on top, what it says is on air underneath -- the same
 		// two lines as a track, carrying the two things a radio knows.
@@ -3866,6 +4718,7 @@ static void refresh_now_playing(void) {
 	const char *file = state.current_file;
 	const char *slash = strrchr(file, '/');
 	scrolltext_set(song_title_label, state.metadata.title[0] ? state.metadata.title : (slash ? slash + 1 : file));
+	aam_strip_fit(); // the strip shares its row by what the two names now say
 
 	// Whose name goes under the title: see metadata_shown_artist().
 	const char *artist = metadata_shown_artist(&state.metadata);
@@ -4071,7 +4924,12 @@ static void update_fav_button(void) {
 	// competing with the cream title and playback accent; OLED's in its muted
 	// grey, for the same reason.
 	lv_color_t favorite_color;
-	if (theme_is_tokyo_night()) {
+	if (layout_aam_now) {
+		// The sleeve's colour, as everything else on that page is: the star sits
+		// between two other marks drawn in it, and a grey one among them would
+		// read as the button being unavailable.
+		favorite_color = aam_accent();
+	} else if (theme_is_tokyo_night()) {
 		favorite_color = theme_semantic_color(THEME_SEMANTIC_CYAN);
 	} else if (theme_is_monochrome()) {
 		favorite_color = theme_player_chrome_color(THEME_PLAYER_CHROME_MUTED);
@@ -4081,7 +4939,11 @@ static void update_fav_button(void) {
 		favorite_color = layout_alt_now ? alt_ink() : lv_color_make(150, 150, 150);
 	}
 
-	const bool heart = layout_immersive_now || layout_poster_now;
+	// A heart in the arrangements that stand the page on the photograph -- and
+	// Album Art Max is one of them: its header has no transport to share the row
+	// with, and the mark that says "this one is mine" is the one thing in it that
+	// is about the record rather than about playing it.
+	const bool heart = layout_immersive_now || layout_poster_now || layout_aam_now;
 	const lv_image_dsc_t *favorite_icon = heart
 			? (starred ? &icon_heart_filled : &icon_heart_outline)
 			: (starred ? &icon_star_filled : &icon_star);
@@ -4092,8 +4954,13 @@ static void update_fav_button(void) {
 	// the row without leading it. Immersive keeps the star's size -- over
 	// the photograph the heart is the one mark on it, and a small one is a
 	// lost one. Leaving Poster puts the star's size back.
-	lv_image_set_scale(fav_btn_icon, layout_poster_now ? bp_pick(POSTER_HEART_SCALE, POSTER_HEART_SCALE_WIDE)
-														: bp_pick(FAV_STAR_SCALE, FAV_STAR_SCALE_WIDE));
+	// Album Art Max draws the star as one of three marks in a row of its own,
+	// all of them AAM_HEAD_GLYPH px, so it takes that size rather than the
+	// deck's here.
+	lv_image_set_scale(fav_btn_icon, layout_aam_now ? AAM_STAR_SCALE
+											: layout_poster_now
+												? bp_pick(POSTER_HEART_SCALE, POSTER_HEART_SCALE_WIDE)
+												: bp_pick(FAV_STAR_SCALE, FAV_STAR_SCALE_WIDE));
 	lv_obj_set_style_image_recolor(fav_btn_icon, favorite_color, 0);
 	lv_obj_set_style_image_recolor_opa(fav_btn_icon, LV_OPA_COVER, 0);
 }
@@ -4409,6 +5276,9 @@ static void update_repeat_button(void) {
 	}
 
 	lv_image_set_src(repeat_btn_icon, icon);
+	// And at the deck's size everywhere but in Album Art Max, whose header row
+	// carries it beside the star and the menu at one weight.
+	lv_image_set_scale(repeat_btn_icon, layout_aam_now ? AAM_MODE_SCALE : 256);
 	lv_obj_set_style_image_recolor(repeat_btn_icon, color, 0);
 	lv_obj_set_style_image_recolor_opa(repeat_btn_icon, LV_OPA_COVER, 0);
 }
@@ -4522,6 +5392,14 @@ static void update_progress(void) {
 	}
 
 	set_progress_label(state.progress_current_secs, current_total_length);
+	// Album Art Max: the two clocks are not on the page, and come up over the
+	// dimmed picture while a scrub is running. This poll can only see half of
+	// that -- a held skip key, which the playback side reports -- because a
+	// finger on the band pauses this very timer while it is down; that half is
+	// the slider's own callbacks (progress_slider_event_cb).
+	if (layout_aam_now) {
+		aam_scrub_apply(aam_scrub_touch || device_state_scrub_active(NULL));
+	}
 	wave_refresh(cover_shown_path, state.progress_current_secs);
 	lyrics_request(&state);
 	lyrics_follow(state.progress_current_secs);
@@ -4680,6 +5558,55 @@ static void next_btn_event_cb(lv_event_t *e) {
 	player_screen_next();
 }
 
+// --- the sleeve as transport (Album Art Max) ---
+//
+// That arrangement trades the on-screen buttons for the picture, so the picture
+// gets their two jobs: a double tap on its left side goes back a track, on its
+// right side forward. One tap does nothing -- the gesture has to be unambiguous,
+// because a finger meant to drag the player away or call the control centre down
+// starts the same way.
+//
+// Double taps are LVGL's own (LV_EVENT_DOUBLE_CLICKED): the indev already counts
+// short clicks in the same place within its configured double-click time, which
+// is the answer a page should be using rather than a second clock of its own.
+//
+// The handler hangs on the panel the sheet is dragged by rather than on the
+// sleeve frame: that frame is deliberately not clickable, and making it so would
+// take presses away from the drag. The panel already sees every press that lands
+// on the artwork; all this adds is a second one.
+#define AAM_TAP_EDGE_SHARE 3 // the sleeve is split into this many columns
+
+static void aam_sleeve_tap_cb(lv_event_t *e) {
+	(void)e;
+	if (!layout_aam_now || !cover_art_group || player_sheet_drag_active()) {
+		return;
+	}
+
+	lv_indev_t *indev = lv_indev_active();
+	if (!indev) {
+		return;
+	}
+	lv_point_t at;
+	lv_indev_get_point(indev, &at);
+
+	lv_area_t sleeve;
+	lv_obj_get_coords(cover_art_group, &sleeve);
+	if (at.x < sleeve.x1 || at.x > sleeve.x2 || at.y < sleeve.y1 || at.y > sleeve.y2) {
+		return; // not on the picture
+	}
+
+	// Which side of it the pair landed on. The middle column does nothing: the
+	// edges are where a thumb reaches without covering the sleeve, and a tap in
+	// the middle is more likely to be somebody looking at it.
+	int span = (sleeve.x2 - sleeve.x1 + 1) / AAM_TAP_EDGE_SHARE;
+	int x = at.x - sleeve.x1;
+	if (x < span) {
+		player_screen_prev();
+	} else if (x >= span * 2) {
+		player_screen_next();
+	}
+}
+
 // --- hardware transport keys ---
 //
 // They do exactly what the on-screen buttons do, whichever page is showing:
@@ -4821,6 +5748,10 @@ static void progress_slider_event_cb(lv_event_t *e) {
 		if (smooth_timer) {
 			lv_timer_pause(smooth_timer); // nor the smoothing, which would drag it back
 		}
+		// Album Art Max has no clocks on the page: they come up over the
+		// dimmed picture for as long as the scrub lasts (aam_scrub_apply).
+		aam_scrub_touch = true;
+		aam_scrub_apply(true);
 	}
 
 	if (code == LV_EVENT_RELEASED) {
@@ -4833,6 +5764,19 @@ static void progress_slider_event_cb(lv_event_t *e) {
 		device_state_seek(seconds);
 
 		lv_timer_resume(progress_slider_timer);
+
+		// The finger is up; a held skip key may still be running the track
+		// through, in which case the clocks stay up until it lets go.
+		aam_scrub_touch = false;
+		aam_scrub_apply(device_state_scrub_active(NULL));
+	}
+
+	if (code == LV_EVENT_PRESS_LOST) {
+		// The press went away without a release -- another object took the
+		// focus, or the sheet was dragged shut under the finger. Nothing was
+		// seeked, but the clocks over the picture must come down.
+		aam_scrub_touch = false;
+		aam_scrub_apply(device_state_scrub_active(NULL));
 	}
 
 	if (code == LV_EVENT_VALUE_CHANGED) {
@@ -4843,6 +5787,9 @@ static void progress_slider_event_cb(lv_event_t *e) {
 
 		formatDoubleSeconds(seconds - view_start, progress_label_text, sizeof(progress_label_text));
 		lv_label_set_text(elapsed_label, progress_label_text);
+		if (layout_aam_now && aam_scrub_shown) {
+			aam_time_update();
+		}
 
 		// And so does the waveform, when that is what is being dragged. The
 		// poll is paused for the duration of the press, so without this the
@@ -4940,6 +5887,28 @@ void player_layout_set(player_layout_t layout) {
 	device_state_t state;
 	device_state_get(&state);
 	update_layout(&state);
+}
+
+bool player_aam_leftie_get(void) { return aam_leftie; }
+
+void player_aam_leftie_set(bool enabled) {
+	if (enabled == aam_leftie) {
+		return;
+	}
+	aam_leftie = enabled;
+	config_set_bool("screen", "player_aam_leftie", enabled);
+	config_save();
+
+	if (!layout_aam_now) {
+		return; // nothing on screen moves until AAM is the arrangement in force
+	}
+	// The artwork gives up or takes back a strip of its width, so the page is
+	// measured again and the picture asked for at the box it will be drawn in
+	// -- looked at one pixel to one rather than resampled on every frame.
+	apply_layout();
+	if (cover_shown_path[0]) {
+		reload_cover(cover_shown_path);
+	}
 }
 
 bool player_cover_tint_get(void) { return cover_tint; }
@@ -5129,7 +6098,16 @@ void player_sheet_open(bool animate) {
 
 	// Artwork runs to the top edge here, so the bar steps aside. It is hidden
 	// rather than moved, which is why nothing slides during the drag.
-	topbar_set_hidden(true);
+	//
+	// Album Art Max is the one arrangement that keeps it: with the transport
+	// traded for the sleeve, the bar's play/pause mark is the only thing
+	// saying which way the hardware key will go, and its row is where the
+	// chevron and the format line are aligned from. The chevron moves under
+	// it for the same reason (see apply_layout).
+	topbar_set_hidden(!layout_aam_now);
+	back_btn_player_top_inset(layout_aam_now ? aam_chevron_inset() : 0);
+	back_btn_player_ink_inset(layout_aam_now ? AAM_HEAD_END_PAD : 0);
+	back_btn_player_mode(true);
 
 	sheet_move_to(0, animate);
 }
@@ -5148,6 +6126,7 @@ static void sheet_hidden_anim_ready_cb(lv_anim_t *a) {
 void player_sheet_close(bool animate) {
 	bool was_open = sheet_open;
 	sheet_open = false;
+	back_btn_player_ink_inset(0); // the chevron back in the middle of its slot
 	back_btn_player_mode(false);
 	lyrics_screen_hold_update();
 	topbar_set_hidden(false);
@@ -5463,6 +6442,10 @@ static void placeholder_place(void) {
 		// seen of it is the panel's own rectangle: the mark centres in that,
 		// which is where the align already puts it.
 		dy = 0;
+	} else if (layout_aam_now) {
+		// The frame IS the picture here -- the panel is placed at the sleeve's
+		// own box -- so the panel's middle is the sleeve's middle.
+		dy = 0;
 	} else if (bp_is_tempotec_v1()) {
 		dy = compact_sleeve_top() + cover_art_h / 2 - cover_box_h / 2;
 	}
@@ -5482,6 +6465,38 @@ static void player_apply_geometry(bool force) {
 	if (!player_menu || !cover_panel || !bp_is_tempotec_v1()) {
 		return;
 	}
+
+	// Album Art Max is not a split of the screen at all: the sleeve takes
+	// everything between the header row and the strip, the strip is the deck,
+	// and the header is a row of its own above both. Its numbers come from
+	// aam_box(), which is what the picture is asked for at, so this is not a
+	// case of the usual geometry with other constants -- it is answered and
+	// returned before the deck's height is worked out at all.
+	if (layout_aam_now) {
+		aam_box_t b = aam_box();
+		int screen_w = b.art_x + b.art_w;
+		int screen_h = (int)lv_obj_get_height(player_screen);
+		menu_height = b.strip_h;
+		cover_box_w = b.art_w;
+		cover_box_h = b.art_h;
+		cover_art_w = b.art_w;
+		cover_art_h = b.art_h;
+		// What the page keeps behind the sleeve: the header above it and the
+		// strip below. The blur itself is asked for at the screen.
+		backdrop_h = screen_h - b.art_h;
+
+		lv_obj_set_size(player_menu, screen_w, menu_height);
+		lv_obj_set_size(cover_panel, cover_box_w, cover_box_h);
+		lv_obj_set_pos(cover_panel, b.art_x, b.art_y);
+		lv_obj_set_size(cover_art_group, cover_art_w, cover_art_h);
+		lv_obj_align(cover_art_group, LV_ALIGN_TOP_MID, 0, 0);
+		placeholder_rescale();
+		placeholder_place();
+		aam_place();
+		immersive_blur_apply();
+		return;
+	}
+
 	int want_menu = compact_deck_height(layout_alt_now);
 	if (want_menu == menu_height && !force) {
 		return; // the arrangement did not change the deck
@@ -6007,6 +7022,11 @@ void player_init(gui_config_t *cfg) {
 	cover_panel = lv_obj_create(player_screen);
 	// Dragging the artwork to the right pushes the player back off screen.
 	player_sheet_attach_drag(cover_panel, false);
+	// And the two taps that stand in for the transport in Album Art Max. On the
+	// panel rather than on the sleeve so that the drag above keeps seeing its
+	// presses; the callback decides for itself whether the pair landed on the
+	// picture.
+	lv_obj_add_event_cb(cover_panel, aam_sleeve_tap_cb, LV_EVENT_DOUBLE_CLICKED, NULL);
 	// Studio stretches the panel down over the top of the controls, where the
 	// taller shape of the track can reach: presses there go to the slider.
 	lv_obj_set_adv_hittest(cover_panel, true);
@@ -6307,6 +7327,14 @@ void player_init(gui_config_t *cfg) {
 
 	lyrics_build();
 
+	// Album Art Max's own pieces: the header row, the block the band stands
+	// in, the veil and the clocks, the two corners of the sleeve, and the
+	// three lines that stand in for the ellipsis. Built in every arrangement
+	// and hidden in all but one, as Poster's are: they are moved into place by
+	// apply_layout(), so they have to exist before it can run.
+	aam_status_h = compact ? cfg->top_bar_height : 0;
+	aam_build();
+
 	// Last, so it is above the artwork: an invisible strip exactly where the
 	// status bar would be, owning the pull-down that opens the control centre.
 	lv_obj_t *panel_edge = lv_obj_create(player_screen);
@@ -6329,18 +7357,21 @@ void player_init(gui_config_t *cfg) {
 	// exists -- and whether the controls follow the sleeve's colour, which is
 	// off unless it was switched on.
 	cover_tint = config_get_bool("screen", "player_cover_tint", false);
+	aam_leftie = config_get_bool("screen", "player_aam_leftie", false);
 	int saved = (int)config_get_int("screen", "player_layout_alt", 0);
 	layout_choice = (saved == (int)PLAYER_LAYOUT_ALTERNATIVE)  ? PLAYER_LAYOUT_ALTERNATIVE
 						: (saved == (int)PLAYER_LAYOUT_STUDIO)	   ? PLAYER_LAYOUT_STUDIO
 						: (saved == (int)PLAYER_LAYOUT_IMMERSIVE) ? PLAYER_LAYOUT_IMMERSIVE
 						: (saved == (int)PLAYER_LAYOUT_POSTER)	   ? PLAYER_LAYOUT_POSTER
+						: (saved == (int)PLAYER_LAYOUT_ALBUM_ART_MAX) ? PLAYER_LAYOUT_ALBUM_ART_MAX
 																  : PLAYER_LAYOUT_STANDARD;
-	// apply_layout() below puts the standard one up first: none of the four
-	// others is in force until it says so.
+	// apply_layout() below puts the standard one up first: none of the others
+	// is in force until it says so.
 	layout_alt_now = false;
 	layout_studio_now = false;
 	layout_immersive_now = false;
 	layout_poster_now = false;
+	layout_aam_now = false;
 	apply_layout();
 
 	theme_register_refresh(player_refresh_theme);

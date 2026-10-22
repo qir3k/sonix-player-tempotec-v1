@@ -29,7 +29,7 @@ void player_refresh_artist(void);
 bool player_queue_position(int *position, int *count);
 
 // ---------------------------------------------------------------------------
-// The four arrangements of the now-playing page
+// The arrangements of the now-playing page
 //
 // Standard is the one this player has always had. Waveform moves the title and
 // the star onto the sleeve and turns the progress bar into the shape of the
@@ -37,7 +37,21 @@ bool player_queue_position(int *position, int *count);
 // with the title across the top and the format under it, over a blurred copy of
 // the same artwork filling the screen. Immersive asks for the artwork at the
 // shape of the screen and crops it to fill it edge to edge, with the controls
-// drawn on a fade over its lower part.
+// drawn on a fade over its lower part. Poster scales the sleeve to the width of
+// the screen and puts the deck below it on its own ground.
+//
+// Album Art Max -- AAM -- trades the media controls for the artwork, which is
+// the whole of it: the sleeve at the width of the screen, the format and the
+// three buttons in a row under the status bar, the artist and the album in the
+// two top corners of the picture, and a minimal scrub bar along its foot over a
+// quiet strip carrying the title and the place in the queue. The transport is
+// not on screen at all; the physical keys are the transport, which is what the
+// arrangement is a bet on (the status bar's own play/pause mark says which way
+// they will go). Holding a skip key, or dragging the bar, drops the picture's
+// brightness and puts the two clocks in the middle of it for as long as the
+// scrub lasts. "Leftie" stands the scrub bar on the left edge instead of along
+// the foot: the artwork gives up a few pixels of width, and the thumb travels
+// the way a thumb prefers to travel.
 //
 // The setting lives in Music > Display options; these are how that page reads
 // and writes it. The numbers are what goes in the config, so the first three
@@ -45,11 +59,14 @@ bool player_queue_position(int *position, int *count);
 //
 // Which one is actually in force also depends on what is playing: see the note
 // on layout_alternative in player.c. Waveform is for a file on the card; Studio,
-// Immersive and Poster take whatever is playing, a station included.
+// Immersive, Poster and AAM take whatever is playing, a station included. AAM
+// is measured for the 240x320 V1 panel and is only offered on it; the wide
+// panels fall back to the standard arrangement.
 //
 // The names below are the ones the code has always used; the pills say
-// Normale, Waveform, Alternativo, Immersiva and Poster. ALTERNATIVE is the one
-// the pill calls Waveform, and STUDIO the one it calls Alternativo.
+// Normale, Waveform, Alternativo, Immersiva, Poster and Album Art Max.
+// ALTERNATIVE is the one the pill calls Waveform, and STUDIO the one it calls
+// Alternativo.
 // ---------------------------------------------------------------------------
 typedef enum {
 	PLAYER_LAYOUT_STANDARD = 0,
@@ -57,6 +74,7 @@ typedef enum {
 	PLAYER_LAYOUT_STUDIO = 2,
 	PLAYER_LAYOUT_IMMERSIVE = 3, // the sleeve from edge to edge, the controls on a fade over it
 	PLAYER_LAYOUT_POSTER = 4,	 // the sleeve at the width of the screen, whole from side to side, the deck below it
+	PLAYER_LAYOUT_ALBUM_ART_MAX = 5, // the sleeve over the screen, the media controls traded for it
 } player_layout_t;
 
 player_layout_t player_layout_get(void);
@@ -72,6 +90,18 @@ void player_layout_set(player_layout_t layout);
 // artwork on screen, so nothing is decoded and playback is untouched.
 bool player_cover_tint_get(void);
 void player_cover_tint_set(bool enabled);
+
+// Where AAM's scrub bar stands: along the foot of the artwork (false, the
+// default) or up its left edge (true, the "Leftie" of the concept). It is
+// asked for in the same Display options page as the arrangement itself, and
+// has no meaning in any of the others -- the standard bar is where it is, and
+// changing this repaints nothing until AAM is the arrangement in force.
+//
+// Changing it while AAM is up moves the bar, re-measures the artwork (Leftie
+// gives up a few pixels of width) and asks the worker for the picture again at
+// the new box, so the sleeve is never resampled on every frame.
+bool player_aam_leftie_get(void);
+void player_aam_leftie_set(bool enabled);
 
 // The output the music was going to has just been unplugged -- a jack pulled
 // out, a USB-C DAC removed, headphones that walked out of range. Pauses, so

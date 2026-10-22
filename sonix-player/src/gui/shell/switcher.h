@@ -55,6 +55,22 @@ void back_btn_translate(int32_t x);
 // the way back -- the player's Studio arrangement puts the ellipsis there.
 int back_btn_centre_y(void);
 
+// How far under the top edge the chevron sits while the player is open, over
+// the offset the panel already keeps. Zero is the player as it has always
+// been, with the status bar hidden and the artwork running to the bezel.
+//
+// Album Art Max keeps the status bar, so there is a row of the shell above the
+// player's own; the chevron has to start under it rather than in it. Callers
+// pass the status bar's height, and 0 to put the chevron back.
+void back_btn_player_top_inset(int inset);
+
+// How far the chevron's own stroke stands from the left edge of the panel, in
+// px. The glyph does not fill its 36 px button -- the arrow sits in the middle
+// third of the canvas -- so a page that lines it up with marks of its own has
+// to measure from the stroke. 0 puts the glyph back in the middle of its slot,
+// which is where every other page has it.
+void back_btn_player_ink_inset(int inset);
+
 // Re-asserts the chevron's visibility against the page actually on screen:
 // hidden on the main menu and the scan pages, shown everywhere else. Cheap and
 // idempotent, and called from every animation-completion path, since otherwise

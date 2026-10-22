@@ -102,6 +102,21 @@ $(BUILD)/test_notes: $(NOTES_SRC) $(ROOT)/src/system/notes/notesstore.h $(ROOT)/
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(NOTES_SRC) $(LDFLAGS) $(LDLIBS)
 
+# The rows of Album Art Max: the now-playing arrangement that trades the media
+# controls for the artwork. The sleeve is asked for at the size this gives
+# before anything has been laid out, so the arithmetic is its own module -- and
+# that module is plain C, which is what this checks: the rows add up to the
+# panel, Leftie costs exactly its rail, and a panel too short or too narrow
+# still answers with something drawable.
+AAM_SRC = test_aamlayout.c $(ROOT)/src/gui/nowplaying/aamlayout.c
+.PHONY: aamlayout
+aamlayout: $(BUILD)/test_aamlayout
+	$(BUILD)/test_aamlayout
+
+$(BUILD)/test_aamlayout: $(AAM_SRC) $(ROOT)/src/gui/nowplaying/aamlayout.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(AAM_SRC) $(LDFLAGS) $(LDLIBS)
+
 # The dates tags carry: every shape the taggers write, the precision they
 # keep, and the moment they resolve to. The podcast lists order episodes and
 # write "12 March 2026" from this, so a misread date is a row in the wrong

@@ -157,6 +157,147 @@ keeps its own foot, and the other arrangements keep the edges they have. Without
 cover's own colour from edge to edge, and the blurred copy stays down: the
 deck no longer shows it through, and the sleeve covers everything above it.
 
+The sixth arrangement, **Album Art Max** ("AAM"), is the sleeve instead of the
+controls: the picture at the full width of the panel and everything between the
+status bar and the strip under it, with the transport gone and the first row's
+worth of chrome above it. It is the one arrangement built for the physical
+keys — the concept it comes from says so in as many words ("it trades media
+controls for bigger AA (assumes you'll just use the physical controls)") — so
+what is left on the page is what is *not* transport: the repeat mode, the
+overflow menu and the star, in a 40 px row under the status bar with the format
+line at its left end, and the title with the place in the queue on a black
+strip at the foot. That strip is the deck itself, made one line tall, so nothing
+above it is a panel: the sleeve reaches the strip's top edge and the blur behind
+the page shows only through the header row. The rows are worked out in
+`aamlayout.c`, which knows nothing about LVGL: the sleeve is decoded at the box
+it will be drawn in before anything has been laid out, so the arithmetic cannot
+be read back off the widgets and is a module of its own -- with the tests that
+hold it to the V1's numbers (`make -C sonix-player/tests aamlayout`). On the V1
+the sleeve comes back 240 x 235 in the flat shape and 228 x 235 in Leftie.
+
+It is also the one arrangement that **keeps the status bar**, which the player
+otherwise hides so that artwork can run to the bezel. With the transport off
+the panel, the bar's play/pause mark is the only thing saying which way the
+hardware key will go, and in the concept the bar is part of the drawing. The
+chevron moves with it: `back_btn_player_top_inset()` in `switcher.c`, which is
+the player's own top offset plus whatever the arrangement needs above it, so
+the way back sits centred in the header row rather than in the status bar.
+
+The three marks of that row are laid out as a set and not three times by eye:
+three 36 px slots on one pitch (`AAM_HEAD_PITCH`, 30 px), the rightmost of them
+keeping `AAM_HEAD_END_PAD` (10 px) between the star and the panel's edge, and
+all three glyphs drawn at the same `AAM_HEAD_GLYPH` (20 px) out of the canvases
+they were generated on -- the mode glyph is 30 px and the star 32, and at their
+native sizes inside equal slots the mode read as the heavier button, which is
+what it looked like on the device. The pitch is what puts air between them: at
+26 px each glyph had 6 px of black on either side and the row read as three
+marks crowding one another, so it is 30 px now -- half a glyph of air apiece --
+and the test holds the pitch to that rather than to the slot positions alone.
+The format line still has its 84 px beside the row (the marks begin at 142). The way back keeps the same air as the
+outermost of them, and measured the same way: the chevron is drawn in the middle
+third of its 36 px canvas, so padding its *button* to match the star's put the
+stroke visibly further in. `back_btn_player_ink_inset()` shifts the glyph by
+what the padding asks minus where its own stroke begins -- read out of the image
+at run time, so regenerating the icons cannot leave a stale number behind. The menu's three lines are drawn to match:
+18 px wide, 3 px to a line, on a 6 px pitch. The format line's room is measured
+from the marks themselves (`aam_head_marks_left()`), so the line cannot run
+under them. Both numbers live in `aamlayout.c` with the rows, and the test that
+holds them also holds the row to the 6 px between glyphs it is drawn with.
+
+Progress is the concept's "very minimal scrub bar": an 8 px band along the foot
+of the picture, its foot on the picture's own edge, square-ended, and **a
+stretch of colour** rather than a line -- the played part starts a step lighter
+than the accent at the first second and deepens to it as it runs to the head
+(`paint_progress_tint()`, which is also where the theme's colour or the sleeve's
+is decided). The head is a tab, a block of the accent the height of the band and
+a little wider, not a disc. The unplayed part is the picture under half black,
+so the band reads on any sleeve without a track being drawn round it
+(`aam_slider_style()`; the deck's own ringed, shadowed bar is put back by the
+other half of the same function). The band is 8 px and its reach is not: an
+`lv_obj_set_ext_click_area()` of 8 around it gives the thumb something to find
+without the band itself getting heavier -- and the block the band stands in is
+cut to that same reach, because a press is looked for among a parent's children
+only while it is inside the parent's own box, and a reach that hung outside the
+block would be a reach into nothing. The block takes no presses itself, so the
+8 px it borrows from the foot of the sleeve is borrowed only on the way past.
+
+The two clocks are not on the page at all. They come up in the middle of the
+artwork, large, **only while the track is being scrubbed** — the picture dropped
+to half its brightness behind them — and that is either a finger on the band
+(the slider's own press events) or a held skip key, which the playback side
+already reports through `device_state_scrub_active()`. Both ask the same
+function, `aam_scrub_apply()`, from the poll and from the slider's callback, so
+the veil is right whichever route a scrub takes.
+
+**Leftie**, the concept's second drawing, stands the band up along the left
+edge instead of laying it along the foot: the artwork gives up `AAM_RAIL_W`
+(12 px) of width and the thumb travels vertically, which is the whole of the
+argument for it. It is a setting of its own in the same Display options page
+(`screen/player_aam_leftie`), and because the picture is then a different
+shape, changing it re-measures the page and asks for the artwork again at the
+new box rather than letting LVGL resample it on every frame.
+
+The strip carries **the artist first, then the title**, the place in the queue
+against its right edge: `Motorcycle` in the record's colour, `Big Ideas` in the
+theme's ink, `3/13` in the record's colour too. Who it is before what it is
+called -- the order the concept's own strip is read in.
+
+The row is shared out by measurement rather than in thirds
+(`aam_strip_shares()`, in `aamlayout.c` and under test): a name that fits gets
+exactly the width of its own words and is not made to scroll; when the two
+together overrun the row, whichever of them is short keeps its words whole and
+the other takes what is left, and only when both are long is the row split in
+proportion to what they need. Thirds are what the first attempt did, and a third
+of a 240 px panel is seven letters -- on the device the artist of a real record
+came up `Knxwled`. The queue position is measured too, rather than reserving the
+width of the longest count it could ever hold: the pixels it does not need are
+pixels the names get. It is re-shared on every track change and every change of
+place in the queue, from `aam_strip_fit()`.
+
+Nothing on that row scrolls unless it has to. `scrolltext.c` now decides the
+long mode itself, from the width of the words against the width of the box, and
+decides it again whenever either changes (`scroll_fit()`); before, every one of
+its labels was a circular scroll whether or not it fitted, which left a short
+line measured for an animation it never needed.
+
+Album Art Max draws its marks in the sleeve's colour, and the theme only when
+there is no artwork to take a colour from (`aam_accent()`): the band, the
+artist's name, the heart, the format line and the count are one ink, by
+construction rather than by three matching edits. The favourite mark is a
+**heart** in this arrangement, not the star: there is no transport in the row to
+outweigh it, and the one thing up there that is about the record rather than
+about playing it may as well look like it.
+
+The strip is a row of its own inside the deck rather than three children of the
+deck's column, so the artist follows a title of any length instead of standing
+at a position worked out from the last one; a one-pixel strut with flex-grow
+pushes the queue position to the right end. Everything is reparented and
+re-styled rather than rebuilt, as in every other arrangement on this page, and
+`aam_take_back()` gives each widget back to the row it was built in -- the title
+and the artist to the column (or to the alternative arrangement's pills), in
+their original order, the queue position under the bar, and the artist line's
+colour to its own style.
+
+The transport the arrangement trades away comes back **on the picture**: a
+double tap on the left third of the sleeve is the previous button, a double tap
+on the right third the next one (`aam_sleeve_tap_cb()`), both routed through
+`player_screen_prev()` / `player_screen_next()` so that a station, a podcast, a
+book and the three-second rule behave exactly as they do everywhere else. One
+tap does nothing, and the middle third does nothing either -- the gesture has to
+be unambiguous, because the same press begins the drag that puts the player
+away. The pair is LVGL's own `LV_EVENT_DOUBLE_CLICKED`, counted by the input
+device in its configured double-click time rather than by a timer here. It hangs on the panel the sheet is dragged by, not on the sleeve frame:
+that frame is deliberately not clickable, and making it so would take the drag's
+presses away from it. The band, which sits over the foot of the picture with a
+reach of its own, keeps its presses.
+
+AAM is measured for the 240 × 320 V1 panel and offered only there
+(`bp_is_tempotec_v1()` builds the pill, and `update_layout()` falls back to the
+standard arrangement elsewhere); every number in it is one of the 24 px status
+bar, the 40 px header row and the strip's one line of 15 px type. The three keys
+it adds to the language files are `musicsettings_layout_aam` and
+`musicsettings_aam_leftie` with its note, in all eleven of them.
+
 The **screensaver** follows the same split. Dark and Light keep the arrangement
 they have always had: the artwork stops where the blurred strip begins, and the
 title, the artist and the time are read on the player's own blurred copy in

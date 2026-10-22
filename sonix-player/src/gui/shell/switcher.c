@@ -45,7 +45,13 @@ static int8_t back_btn_top_bar_height;
 // air it keeps instead, and what the player's own header row is aligned to.
 #define BACK_BTN_PLAYER_TOP 14
 
-static int back_btn_player_top(void) { return bp_is_tempotec_v1() ? 4 : BACK_BTN_PLAYER_TOP; }
+// An arrangement that keeps the status bar (Album Art Max) leaves the chevron
+// no such air: the row is there, and the chevron belongs under it.
+static int8_t back_btn_player_inset;
+
+static int back_btn_player_top(void) {
+	return (bp_is_tempotec_v1() ? 4 : BACK_BTN_PLAYER_TOP) + back_btn_player_inset;
+}
 
 static void place_back_btn(bool below_top_bar) {
 	// Same offsets as the corner buttons on the right (playlists, settings,
@@ -54,6 +60,66 @@ static void place_back_btn(bool below_top_bar) {
 	// under, so the chevron takes the offset above.
 	int y = back_btn_padding + (below_top_bar ? back_btn_top_bar_height : back_btn_player_top());
 	lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, back_btn_padding, y);
+}
+
+void back_btn_player_top_inset(int inset) {
+	if (inset < 0) {
+		inset = 0;
+	}
+	if (inset == back_btn_player_inset) {
+		return;
+	}
+	back_btn_player_inset = (int8_t)inset;
+	if (back_btn && chevron_in_player) {
+		place_back_btn(false);
+	}
+}
+
+// Where the chevron's own stroke begins inside its canvas.
+//
+// The icon is a 36 px square drawn from a 24 px viewBox with the arrow in the
+// middle third, so a third of the button is empty margin on either side. A page
+// that lines the chevron up with its own marks -- Album Art Max puts the star
+// the same distance from the right edge -- has to measure from the stroke, not
+// from the canvas, or the way back reads as pushed in towards the middle.
+//
+// Read out of the image rather than assumed: the number belongs to the
+// generated asset, and regenerating the icons would otherwise leave this
+// pointing at the wrong place.
+static int chevron_ink_left(void) {
+	const lv_image_dsc_t *dsc = &icon_chevron_left;
+	if (!dsc->data || dsc->header.cf != LV_COLOR_FORMAT_ARGB8888) {
+		return 0;
+	}
+	int w = (int)dsc->header.w;
+	int h = (int)dsc->header.h;
+	const uint8_t *px = (const uint8_t *)dsc->data;
+	for (int x = 0; x < w; x++) {
+		for (int y = 0; y < h; y++) {
+			if (px[((size_t)y * (size_t)w + (size_t)x) * 4 + 3] > 24) {
+				return x;
+			}
+		}
+	}
+	return 0;
+}
+
+static int8_t back_btn_ink_inset;
+
+void back_btn_player_ink_inset(int inset) {
+	if (inset < 0) {
+		inset = 0;
+	}
+	back_btn_ink_inset = (int8_t)inset;
+	if (!back_btn_icon) {
+		return;
+	}
+	// Zero is the button as it was built: the glyph centred in its slot.
+	int dx = 0;
+	if (back_btn_ink_inset > 0) {
+		dx = (int)back_btn_ink_inset - back_btn_padding - chevron_ink_left();
+	}
+	lv_obj_set_style_translate_x(back_btn_icon, dx, 0);
 }
 
 // Where the back button goes. A page can be reached by more than one route --
