@@ -1285,3 +1285,42 @@ panel above its edge instead of a twelfth, and its top stop is two thirds of the
 field's own weight rather than nothing -- a shade that is plainly darker than the
 picture, and still short of the film the words sit on, which is where a photograph
 would stop reading as one and read as a black bar instead.
+
+## A hesitant interface: what the log now names
+
+The report was "it lags for a while, then I just have to wait" -- sometimes on the
+power key, sometimes on a track change, sometimes on a page. The log said nothing
+at all: the watchdog only writes its thread dump once the interface has stopped
+for five seconds, and what was being described is a third of a second repeated.
+
+**Every pass of the event loop is timed.** `lv_timer_handler()` is what reads the
+touch, runs the timers and draws the frame, and on this device it runs on one
+thread: a pass that takes 300 ms is the hesitation itself. A pass that takes
+`UI_SLOW_PASS_MS` (120 ms, well below what a hand notices) now writes one line
+saying how long it took and what ran inside it:
+
+```
+ui: a pass of the event loop took 342 ms (next wake in 0 ms), screen 0x2f1c8 240x320
+ui:   timer period 120 ms, callback 0x4a1b90, user (nil), ran 3 ms ago
+ui:   timer period 1000 ms, callback 0x4c05e4, user (nil), ran 340 ms ago
+```
+
+The screen, the period and the callback are the three things that place a slow
+pass: a 120 ms timer on the list pages is the artwork poll, a 500 ms one on the
+player is a cover, and a pass whose timers are all quick still names the one that
+was in the middle of a card read. The callback addresses are in the unstripped
+`sonix_player_debug` the build leaves beside the stripped binary, so
+`addr2line -f -e sonix_player_debug 0x4a1b90` names the function. One line a
+second at most: a page that is slow for a while must not turn the log, and the
+card it may be written to, into the reason it is slow. The watchdog's dump now
+also carries `ui: N slow event-loop passes so far, the last took Y ms`, which
+separates a device that had been hesitating for a while from one that went from
+fine to stopped in a single pass.
+
+**The card sync after a podcast delete is no longer the interface's to wait for.**
+`sync()` returns only when every pending write in the filesystem has reached the
+card -- including whatever a download in progress is in the middle of -- and it
+was called on the interface thread from the delete handler, so deleting a
+downloaded episode could freeze the page for as long as the card took. It runs on
+a thread of its own at background priority now; the file is already gone, and the
+rest is bookkeeping the card gets round to on its own.

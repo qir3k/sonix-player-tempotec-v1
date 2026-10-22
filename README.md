@@ -6,6 +6,9 @@
 
 - **The equalisers on the DAC page** — EQ, PEQ and MSEB as one card of pills, reachable while DAC mode holds the screen.
 - **Podcasts: heard marks and the order of the list** — an episode played to its end is ticked and dimmed, kept by episode id in `podcast.db`; a long press marks one by hand; the heading's order button turns the list round, and both episode lists share the setting.
+- **The Tidal tab and the Podcasts tab, rebuilt for the 240 px panel** — the V1's rows and pills, a search page with history, the status bar kept clear, and both lists read back from a cache on the card instead of rebuilt from the network on every visit.
+- **The podcast chart from your own region** — Podcast settings → Region picks the language the trending list is asked for, so the pill shows what is trending where you are rather than worldwide.
+- **An interface that says when it hesitates** — a pass of the event loop that takes over 120 ms writes down what ran in it, so a report of "it lags for a while" comes with the screen, the timer period and the callback that caused it ([how to read it](docs/collecting-logs.md#the-interfaces-own-timing-ui-lines)).
 - **One favourite mark** — the heart, everywhere: the player in every layout, the control centre, the Music page and selection mode.
 - **A trimmed personal build** — a branch that ships English and Polish with MiSans only, and builds its own image. [How it is kept apart from the upstream tree](https://github.com/qir3k/sonix-player-tempotec-v1/blob/personal/docs/PERSONAL-BUILD.md).
 

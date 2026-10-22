@@ -94,7 +94,7 @@
 ## Streaming
 
 - **Subsonic / Gonic** - a new Streaming destination for your own server. Test the connection, browse music folders or artists/albums in pages of 200, and play the page as a queue. MP3 256/320, Opus, or original FLAC/MP3/Opus; transcoding runs on the server. Two fixed 1 MiB RAM rings isolate HTTP/TLS from decoding, refill near 50%, and pre-cache 512 KiB of the upcoming track near 90%. No growing disk cache or playback seeking; compatible-format gapless uses the existing ALSA handoff. Remembering credentials is optional and stores an unencrypted private file. See [setup and limitations](docs/subsonic.md).
-- **Tidal** - sign in with the code on screen or with the QR-Code; Low, High, CD and Hi-res quality. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player. A list's first page is kept on the card, so opening a tab shows its names at once instead of fetching them again; a change made on the page drops the copy it made wrong, and a copy nobody has touched is read for half a day. A long press on a row of the favourites, of an album's tracks or of search results starts a selection: tick as many rows as wanted, then favourite or unfavourite all of them from the corner. Playlist tracks and whole playlists stay single-row actions, since one is removed by position and the other deleted outright.
+- **Tidal** - sign in with the code on screen or with the QR-Code; Low, High, CD and Hi-res quality. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player. Search is a page of its own with a field under the pills (Tracks, Albums, Artists) and the last ten searches kept beneath it, and the rows, pills and titles follow the V1's 240 px panel rather than the 480 px one. A list's first page is kept on the card, so opening a tab shows its names at once instead of fetching them again; a change made on the page drops the copy it made wrong, and a copy nobody has touched is read for half a day. A long press on a row of the favourites, of an album's tracks or of search results starts a selection: tick as many rows as wanted, then favourite or unfavourite all of them from the corner. Playlist tracks and whole playlists stay single-row actions, since one is removed by position and the other deleted outright.
 - **Qobuz** - sign in with the account; MP3 320, FLAC 16/44.1, 24/96 and 24/192. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player.
 - **Podcasts** - the Podcast Index catalogue: search, trending, follow up to 100
 shows kept on the device. Downloaded episodes land in the card's `Podcast`
@@ -104,7 +104,12 @@ how much of each podcast has been listened to on this device, most first, with
 A–Z and Z–A beside it under Podcast settings → Order; the chart and a podcast's
 episodes are kept on the card, so a tab opens on the names it showed last time.
 A row's menu has **Select**: tick several podcasts (or episodes) and follow,
-unfollow or tick them off as a group from the corner.
+unfollow or tick them off as a group from the corner. **Podcast settings →
+Region** picks the language the trending chart is asked for, so the pill shows
+what is trending where you are instead of the whole world's list (the
+catalogue has no country filter; the language is what it does have). The rows
+are drawn at the same pitch as the Tidal tab's, with the artwork a step smaller,
+so a screen of the panel holds one more of them.
 - **Episodes heard and unheard** - an episode played to its end is ticked and
 dimmed in the list, kept in `podcast.db` by episode id, so it reads the same
 whether it was streamed or downloaded. A long press marks one heard (or heard
