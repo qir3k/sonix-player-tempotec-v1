@@ -88,6 +88,9 @@ jobs:
           # with build_ref set to a tag builds the tag, not the branch. Left
           # empty, this is the run's own ref, as it always was.
           ref: ${{ inputs.build_ref || github.sha }}
+          # The release step below bumps a tag, and it reads the tags from
+          # this checkout: a shallow clone carries none of them.
+          fetch-depth: 0
 
       # The one line every later step and every report reads. GITHUB_SHA is
       # the ref the run was STARTED on, which is not the ref that was built
@@ -272,6 +275,67 @@ jobs:
             echo "### Published to release $RELEASE_TAG"
             echo "v1.upt, $local_size bytes, built from $BUILT_SHA."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Every image built from the personal branch becomes a release, with
+      # the patch bumped and the notes drawn from the commits since the last
+      # one. It happens before the boot-script report is pushed below, because
+      # that push moves the branch past this commit, and the tag has to name
+      # the commit the image was built from -- the same rule the step above
+      # holds a hand-published tag to.
+      - name: Bump the version for a personal build
+        id: version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A patch for every push; a commit saying #major or #minor wins over
+          # this, and #none refuses to tag. BRANCH_HISTORY=last reads the
+          # pushed commit rather than the whole history.
+          DEFAULT_BUMP: patch
+          BRANCH_HISTORY: last
+          # Only personal releases. Without this the action treats a branch
+          # that is not the default one as a prerelease (v1.0.1-beta.1).
+          RELEASE_BRANCHES: personal
+          TAG_PREFIX: v
+          # A fork with no tags starts here, so the first push makes v1.0.1.
+          # The versions the upstream project tags (1.4.3, ...) are not in
+          # this repository's tags.
+          INITIAL_VERSION: 1.0.0
+
+      - name: Check the tag names this build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
+        env:
+          TAG: ${{ steps.version.outputs.new_tag }}
+          BUILT_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # A commit saying #none leaves the action with a tag it never made:
+          # no release can be published for it, and saying so beats a release
+          # page that points at a version nobody can check out.
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::no tag ${TAG} was created for this build; nothing was released."
+            exit 1
+          fi
+          tag_sha="$(git rev-parse "refs/tags/${TAG}")"
+          if [ "$tag_sha" != "$BUILT_SHA" ]; then
+            echo "::error::${TAG} names ${tag_sha} and this image was built from ${BUILT_SHA}."
+            exit 1
+          fi
+
+      - name: Publish the release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.new_tag }}
+          # The body is GitHub's own generated notes: the commits and merged
+          # pull requests since the last release, from their messages.
+          generate_release_notes: true
+          # The image and its checksum: both are needed to flash it, and a
+          # release missing either is caught here rather than after a download.
+          files: |
+            sonix-packer/v1.upt
+            sonix-packer/v1_md5.txt
+          fail_on_unmatched_files: true
 
       # Working branches only: main is not a branch anybody builds as a
       # scratch pad, and a report pushed there would be a commit on main for
