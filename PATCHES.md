@@ -1405,3 +1405,29 @@ reopened.
 **"No podcasts on the card" sits in the middle.** The notice was placed 140 px
 down from the heading, which on the V1's 320 px put it near the foot of the page;
 it is centred in the list's own area now, both ways.
+
+## A chart for the region, and less furniture
+
+**A region with no chart of its own falls back instead of emptying the tab.** The
+trending request asks for one language, and the fallback to English used to be
+taken only when the answer was an empty list. A language the directory does not
+recognise answers with an error instead, so choosing it left the page saying
+there was nothing to show -- which reads as "this region has no podcasts" rather
+than "this code is not known here". Both now fall back: an empty answer and a
+failed one.
+
+**The chart's cache is per region.** One `pod_trending` file served every
+language, so a chart fetched for one region could be read back under another's
+name after the setting changed. The file is `pod_trending_<language>` now, still
+dropped when a region is picked, and picking one marks the list on screen stale:
+returning to the section asks for the new region's chart instead of leaving the
+old list under a pill that now means somewhere else.
+
+**The order pills sit closer.** The gaps inside the Order card and between its
+pills were 10 and 8 px on the V1; they are 8 and 6, which keeps *Most listened*
+and the two date sorts on the card's lines without the air of a settings list.
+
+**The Music tab's browse card has no heading.** It said *Browse* over the
+destinations that are the tab, repeating what the title and the rows' icons
+already said, and cost the 240-px panel 19 px of its first card. The grid starts
+at the card's top edge now.

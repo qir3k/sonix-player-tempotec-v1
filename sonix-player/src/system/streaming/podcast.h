@@ -93,6 +93,13 @@ int podcast_trending(podcast_feed_t *out, int max);
 const char *podcast_trending_lang(void);
 void podcast_set_trending_lang(const char *code);
 
+// The language the chart is really asked for: the chosen one, or the
+// interface's own when none was chosen.
+const char *podcast_trending_lang_effective(void);
+
+// The name the chart is kept under on the card -- one per language.
+const char *podcast_trending_cache_key(void);
+
 // A podcast's episodes, most recent first.
 int podcast_episodes(long long feed_id, podcast_episode_t *out, int max);
 

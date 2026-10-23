@@ -298,6 +298,21 @@ void podcast_set_trending_lang(const char *code) {
 	config_save();
 }
 
+const char *podcast_trending_lang_effective(void) {
+	const char *want = podcast_trending_lang();
+	return want[0] ? want : interface_language_code();
+}
+
+// The name the chart is kept under on the card. One per language, and not one
+// for every chart: an English list and an Italian one are different lists, and a
+// file written for the region chosen a moment ago must not be read back as this
+// one's.
+const char *podcast_trending_cache_key(void) {
+	static char key[64];
+	snprintf(key, sizeof(key), "pod_trending_%s", podcast_trending_lang_effective());
+	return key;
+}
+
 int podcast_trending(podcast_feed_t *out, int max) {
 	if (!out || max <= 0) {
 		return -1;
@@ -310,14 +325,16 @@ int podcast_trending(podcast_feed_t *out, int max) {
 	// the interface's own when nothing was chosen. When the chosen language
 	// yields nothing at all, fall back to English: a foreign chart beats an empty
 	// page.
-	const char *want = podcast_trending_lang();
-	if (!want[0]) {
-		want = interface_language_code();
-	}
+	//
+	// A language the directory has no chart for comes back empty, and one it does
+	// not recognise comes back as an error; both leave the page saying there is
+	// nothing to show, so both fall back. That is the difference between choosing
+	// a region and losing the tab.
+	const char *want = podcast_trending_lang_effective();
 	snprintf(path, sizeof(path), "/podcasts/trending?max=%d&lang=%s",
 			 max > PODCAST_API_MAX ? PODCAST_API_MAX : max, want);
 	int n = fetch_list(path, "feeds", out, max, false);
-	if (n == 0 && strcmp(want, "en") != 0) {
+	if (n <= 0 && strcmp(want, "en") != 0) {
 		snprintf(path, sizeof(path), "/podcasts/trending?max=%d&lang=en",
 				 max > PODCAST_API_MAX ? PODCAST_API_MAX : max);
 		n = fetch_list(path, "feeds", out, max, false);

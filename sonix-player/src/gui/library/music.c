@@ -606,11 +606,9 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_flex_flow(browse_card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(browse_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
-	lv_obj_t *browse_heading = lv_label_create(browse_card);
-	lv_label_set_text(browse_heading, tr("music_browse"));
-	lv_obj_add_style(browse_heading, &theme_style_text, 0);
-	lv_obj_set_style_text_font(browse_heading, &font_ui_14, 0);
-
+	// No heading on the card: the music tab IS the browse destinations, and a
+	// word over them repeated what the tab's own title and the rows' icons
+	// already said -- 19 px of a 296 px panel that the grid could use.
 	tokyo_browse_grid = lv_obj_create(browse_card);
 	music_remove_edges(tokyo_browse_grid);
 	lv_obj_set_size(tokyo_browse_grid, lv_pct(100), LV_SIZE_CONTENT);

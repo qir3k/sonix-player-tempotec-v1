@@ -1819,7 +1819,10 @@ static void job_done_cb(void *user) {
 static void podcast_cache_key(const job_t *job, char *out, size_t size) {
 	out[0] = '\0';
 	if (job->kind == JOB_TRENDING) {
-		snprintf(out, size, "pod_trending");
+		// One file per region: the chart of a language somebody chose is a
+		// different list from another's, and reading the wrong one back would
+		// show a chart the settings page says is not the one being drawn.
+		snprintf(out, size, "%s", podcast_trending_cache_key());
 	} else if (job->kind == JOB_EPISODES && job->id > 0) {
 		snprintf(out, size, "pod_feed_%lld", job->id);
 	}
@@ -3396,6 +3399,11 @@ static bool refresh_notes(void) {
 	return true;
 }
 
+// A region was chosen, so the chart on screen is the old region's. Re-entering
+// the section asks for the new one instead of leaving the old list under a pill
+// that now means somewhere else.
+static bool trending_stale;
+
 static void refresh_page_state(void) {
 	if (!refresh_notes()) {
 		return;
@@ -3413,6 +3421,12 @@ static void refresh_page_state(void) {
 	// elsewhere.
 	if (current_list_job.kind == JOB_FOLLOWED) {
 		run_home_view(JOB_FOLLOWED);
+		return;
+	}
+
+	if (current_list_job.kind == JOB_TRENDING && trending_stale) {
+		trending_stale = false;
+		run_home_view(JOB_TRENDING);
 	}
 }
 
@@ -3629,7 +3643,7 @@ static void build_order_card(lv_obj_t *parent) {
 	lv_obj_set_style_border_width(card, 0, 0);
 	lv_obj_set_style_shadow_width(card, 0, 0);
 	lv_obj_set_style_pad_all(card, 20, 0);
-	lv_obj_set_style_pad_gap(card, bp_pick(10, 18), 0);
+	lv_obj_set_style_pad_gap(card, bp_pick(8, 18), 0);
 	lv_obj_set_scrollable(card, false);
 	lv_obj_set_event_bubble(card, true);
 	lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -3645,8 +3659,8 @@ static void build_order_card(lv_obj_t *parent) {
 	lv_obj_set_style_bg_opa(row, 0, 0);
 	lv_obj_set_style_border_width(row, 0, 0);
 	lv_obj_set_style_pad_all(row, 0, 0);
-	lv_obj_set_style_pad_gap(row, bp_pick(8, 14), 0);
-	lv_obj_set_style_pad_row(row, bp_pick(8, 14), 0);
+	lv_obj_set_style_pad_gap(row, bp_pick(6, 14), 0);
+	lv_obj_set_style_pad_row(row, bp_pick(6, 14), 0);
 	lv_obj_set_scrollable(row, false);
 	lv_obj_set_event_bubble(row, true);
 	lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
@@ -3727,7 +3741,8 @@ static void region_pick_cb(lv_event_t *e) {
 	}
 	podcast_set_trending_lang(REGIONS[index].code);
 	// The chart on the card is from the region that was chosen a moment ago.
-	listcache_drop("pod_trending");
+	listcache_drop(podcast_trending_cache_key());
+	trending_stale = true;
 	if (region_value) {
 		lv_label_set_text(region_value, tr(REGIONS[index].label));
 	}
