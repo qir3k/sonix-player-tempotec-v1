@@ -199,7 +199,7 @@ UI_SRC = $(ROOT)/tests/ui/test_main_menu.c $(ROOT)/src/gui/shell/main_menu.c \
          $(ROOT)/src/gui/shell/corners.c $(ROOT)/src/gui/shell/settingsrow.c \
          $(ROOT)/src/gui/shell/theme.c \
          $(ROOT)/src/gui/shell/icons.c $(ROOT)/src/gui/shell/main_menu_icons.c \
-         $(ROOT)/src/gui/board_profile.c \
+         \
          $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
 UI_LVGL_SRC = $(shell find $(ROOT)/lvgl/src -name '*.c' 2>/dev/null)
 UI_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_SRC)) \
@@ -214,7 +214,7 @@ WIFIPAGE_SRC = $(ROOT)/tests/ui/test_wifi_pages.c $(ROOT)/src/gui/wireless/wifis
             $(ROOT)/src/gui/shell/settingsrow.c $(ROOT)/src/gui/shell/keyboard.c \
             $(ROOT)/src/gui/shell/popover.c $(ROOT)/src/gui/shell/spinner.c \
             $(ROOT)/src/gui/shell/theme.c $(ROOT)/src/gui/shell/icons.c \
-            $(ROOT)/src/gui/board_profile.c $(ROOT)/src/system/input/kblayout.c \
+            $(ROOT)/src/system/input/kblayout.c \
             $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
 WIFIPAGE_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(WIFIPAGE_SRC)) \
             $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
@@ -222,7 +222,7 @@ WIFIPAGE_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(WIFIPAGE_SRC)) \
 SAVER_SRC = $(ROOT)/tests/ui/test_screensaver.c $(ROOT)/src/gui/settings/screensaver.c \
             $(ROOT)/src/gui/shell/scrolltext.c $(ROOT)/src/gui/shell/settingsrow.c \
             $(ROOT)/src/gui/shell/theme.c $(ROOT)/src/gui/shell/icons.c \
-            $(ROOT)/src/gui/board_profile.c \
+            \
             $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
 SAVER_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(SAVER_SRC)) \
             $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
@@ -238,25 +238,23 @@ TOOLS_SRC = $(ROOT)/tests/ui/test_tools_pages.c \
             $(ROOT)/src/gui/shell/settingsrow.c $(ROOT)/src/gui/shell/keyboard.c \
             $(ROOT)/src/gui/shell/popover.c $(ROOT)/src/system/input/kblayout.c \
             $(ROOT)/src/gui/shell/theme.c $(ROOT)/src/gui/shell/icons.c \
-            $(ROOT)/src/gui/board_profile.c \
+            \
             $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
 TOOLS_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(TOOLS_SRC)) \
             $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
 
+# One board, one language directory: the V1 image is the only thing this tree
+# builds, so each page is rendered once and once saved.
+UI_LANG = ../../sonix-packer/assets/V1/usr/resource/sonix/language
+
 .PHONY: ui
 ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages $(BUILD)/test_wifi_pages
-	BOARD=tempotec_v1 $(BUILD)/test_main_menu ../../sonix-packer/assets/R1/usr/resource/sonix/language
-	BOARD=tempotec_v1 $(BUILD)/test_main_menu ../../sonix-packer/assets/R1/usr/resource/sonix/language saved
-	BOARD=hiby_r1 $(BUILD)/test_main_menu ../../sonix-packer/assets/R3PII/usr/resource/sonix/language
-	BOARD=hiby_r1 $(BUILD)/test_main_menu ../../sonix-packer/assets/R3PII/usr/resource/sonix/language saved
-	BOARD=tempotec_v1 $(BUILD)/test_screensaver ../../sonix-packer/assets/R1/usr/resource/sonix/language
-	BOARD=tempotec_v1 $(BUILD)/test_screensaver ../../sonix-packer/assets/R1/usr/resource/sonix/language saved
-	BOARD=hiby_r1 $(BUILD)/test_screensaver ../../sonix-packer/assets/R3PII/usr/resource/sonix/language
-	BOARD=hiby_r1 $(BUILD)/test_screensaver ../../sonix-packer/assets/R3PII/usr/resource/sonix/language saved
-	BOARD=tempotec_v1 $(BUILD)/test_tools_pages ../../sonix-packer/assets/R1/usr/resource/sonix/language
-	BOARD=hiby_r1 $(BUILD)/test_tools_pages ../../sonix-packer/assets/R3PII/usr/resource/sonix/language
-	BOARD=tempotec_v1 $(BUILD)/test_wifi_pages ../../sonix-packer/assets/R1/usr/resource/sonix/language
-	BOARD=hiby_r1 $(BUILD)/test_wifi_pages ../../sonix-packer/assets/R3PII/usr/resource/sonix/language
+	$(BUILD)/test_main_menu $(UI_LANG)
+	$(BUILD)/test_main_menu $(UI_LANG) saved
+	$(BUILD)/test_screensaver $(UI_LANG)
+	$(BUILD)/test_screensaver $(UI_LANG) saved
+	$(BUILD)/test_tools_pages $(UI_LANG)
+	$(BUILD)/test_wifi_pages $(UI_LANG)
 
 $(BUILD)/test_main_menu: $(UI_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)

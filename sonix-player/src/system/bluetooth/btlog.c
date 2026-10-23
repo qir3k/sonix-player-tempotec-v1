@@ -44,7 +44,11 @@
 // that stalls for a second must never stall bluetoothd, which waits on its
 // syslog() for as long as nobody reads the socket. Lines that find it full
 // are counted and the count written instead.
-#define RING_SIZE (256 * 1024)
+//
+// 128 KB is a few thousand lines -- far more than a stalled card's second
+// produces -- and it is memory the device pays for while the log is on, so
+// there is no reason to hold a quarter of a megabyte for it.
+#define RING_SIZE (128 * 1024)
 
 #define LINE_MAX_LEN 512
 

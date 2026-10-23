@@ -2544,7 +2544,7 @@ library_index_t *library_index_open(library_list_t kind, library_filter_t filter
 	// what does not fit spills to a scratch file on the card. The budget is the
 	// page cache, held at 256 KB for the rest of the player's life. It is given
 	// back on the way out.
-	exec("PRAGMA cache_size=-2048");
+	exec("PRAGMA cache_size=-512"); // 512 KB: this is a read-mostly pass over an index that is already on the card
 	uint32_t started_ms = now_ms();
 
 	// The count first, so the row ids land in one allocation of the right size
@@ -5590,7 +5590,7 @@ static void update_run(void) {
 	scan_id_base = count_rows("SELECT MAX(id) FROM MEDIA_TABLE");
 	// Room for the path index, which every folder looked into is compared
 	// against. Given back below.
-	exec("PRAGMA cache_size=-2048");
+	exec("PRAGMA cache_size=-512"); // 512 KB: this is a read-mostly pass over an index that is already on the card
 	pthread_mutex_unlock(&db_lock);
 
 	int before = library_track_count();

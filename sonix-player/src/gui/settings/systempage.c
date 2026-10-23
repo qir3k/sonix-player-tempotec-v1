@@ -337,7 +337,7 @@ static void build_sysinfo_page(gui_config_t *cfg) {
 	lv_label_set_text(dac_value, dac[0] ? dac : "\xE2\x80\x94");
 
 	// The serial number, from the SoC efuse: the same one printed on the box
-	// ("R3PII" plus the first eight hex digits of the chip id). Not translated,
+	// ("V1" plus the first eight hex digits of the chip id). Not translated,
 	// being an identifier.
 	lv_obj_t *serial_value = NULL;
 	info_row(container, "system_serial_number", &serial_value);
@@ -410,6 +410,15 @@ static void build_sysinfo_page(gui_config_t *cfg) {
 	lv_obj_t *build_value = NULL;
 	system_value_row(container, "system_build_number", &build_value, build_tapped_cb, NULL, true);
 	lv_label_set_text(build_value, build[0] ? build : "\xE2\x80\x94");
+
+	// The kernel under it, read with uname() at startup. It is the vendor's
+	// kernel -- the image does not replace it -- so this is the number a bug
+	// report has to quote, and it belongs beside the two versions rather than
+	// behind the developer options.
+	lv_obj_t *kernel_value = NULL;
+	info_row(container, "system_kernel", &kernel_value);
+	const char *kernel = sysinfo_kernel_version();
+	lv_label_set_text(kernel_value, kernel[0] ? kernel : "\xE2\x80\x94");
 
 	// --- the credits ---
 	// Proper names, the same in every language, so they come in as written and
