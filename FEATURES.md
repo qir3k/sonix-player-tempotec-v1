@@ -276,14 +276,6 @@ a self-signed certificate), and HLS.
 
 ## Keyboard
 
-- **Swipe typing** - drag a finger from letter to letter and the word it spells
-  is typed, with a space after it. Turned on and off in Settings → More, beside
-  **Swipe language** (English, Polish, both). The dictionaries are plain text on
-  the card, `<card>/Dictionaries/en.txt` and `pl.txt`, one word per line; the
-  player ships none, and a missing list simply types nothing. Polish words are
-  matched without their tails and typed with them. The same language decides
-  which accent a held key offers first (ę before é in Polish, é before ę in
-  English); every accent stays in the strip either way.
 - **Layouts** - which alphabets are within reach, in the order they are offered
   (Settings → More → Keyboard layout). Holding the "123" key switches a
   keyboard to another of them for that keyboard only.

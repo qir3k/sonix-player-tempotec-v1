@@ -24,10 +24,9 @@
 #include "src/gui/settings/systempage.h"
 #include "src/gui/shell/theme.h"
 #include "src/gui/settings/timeset.h"
-#include "src/system/audio/headset.h"
 #include "src/system/core/config.h"
+#include "src/system/audio/headset.h"
 #include "src/system/core/lang.h"
-#include "src/system/input/swipedict.h"
 #include "src/system/device/power.h"
 #include "src/system/device/screenshot.h"
 #include "src/system/device/system.h"
@@ -432,49 +431,6 @@ static lv_obj_t *make_kbtype_pill(lv_obj_t *parent, const char *text, int t9) {
 	return btn;
 }
 
-// ---------------------------------------------------------------------------
-// swipe typing
-//
-// One switch and one row that cycles the language the swipe reads: English,
-// Polish, or both. The lists themselves are the card's own files (see
-// swipedict.h), so the row says which language, not which dictionary -- the
-// status line under it says which lists were actually found.
-// ---------------------------------------------------------------------------
-
-static lv_obj_t *swipe_switch;
-static lv_obj_t *swipe_lang_value;
-
-static void refresh_swipe_language(void) {
-	int choice = (int)config_get_int("keyboard", "swipe_lang", 0);
-	const char *key = choice == 1 ? "swipe_polish" : (choice == 2 ? "swipe_both" : "swipe_english");
-	if (swipe_lang_value) {
-		lv_label_set_text(swipe_lang_value, tr(key));
-	}
-}
-
-static void swipe_lang_cb(lv_event_t *e) {
-	(void)e;
-	int choice = ((int)config_get_int("keyboard", "swipe_lang", 0) + 1) % 3;
-	config_set_int("keyboard", "swipe_lang", choice);
-	config_save();
-	// The lists that are needed have changed, and so has the order of a held
-	// key's accents (kblayout reads the same setting). Read now rather than on
-	// the first swipe, which is a finger waiting on the card.
-	swipedict_forget();
-	swipedict_load();
-	refresh_swipe_language();
-}
-
-static void swipe_toggled_cb(lv_event_t *e) {
-	(void)e;
-	bool on = lv_obj_has_state(swipe_switch, LV_STATE_CHECKED);
-	config_set_int("keyboard", "swipe", on ? 1 : 0);
-	config_save();
-	if (on) {
-		swipedict_load();
-	}
-}
-
 // Screenshots, on the keys shown under the switch.
 static lv_obj_t *screenshot_switch;
 
@@ -493,20 +449,12 @@ static void build_other_page(gui_config_t *cfg) {
 	}
 
 	settingsrow_add(container, "remap_buttons", NULL, switch_screen_cb, remap_screen);
-	settingsrow_add(container, "control_centre", NULL, switch_screen_cb, ccsettings_screen);		// Which alphabets the keyboard can be laid out in, above the shape of the
+	settingsrow_add(container, "control_centre", NULL, switch_screen_cb, ccsettings_screen);
+
+	// Which alphabets the keyboard can be laid out in, above the shape of the
 	// keys: the letters matter more than whether they come ten to a row or
 	// three to a key.
 	settingsrow_add(container, "keyboard_layout", NULL, switch_screen_cb, kblayoutpage_screen);
-
-	// Swipe typing, and the language a swipe reads. Both are on this page rather
-	// than behind another: they are two rows, and the first thing anyone needs
-	// after turning it on is the language.
-	settingsrow_toggle(container, "settings_swipe_typing", &swipe_switch, swipe_toggled_cb);
-	if (config_get_int("keyboard", "swipe", 1) != 0) {
-		lv_obj_add_state(swipe_switch, LV_STATE_CHECKED);
-	}
-	settingsrow_add(container, "settings_swipe_language", &swipe_lang_value, swipe_lang_cb, NULL);
-	refresh_swipe_language();
 
 	// Keyboard type: the two pills on a card, like the MSEB radius control.
 	lv_obj_t *kb_card = lv_obj_create(container);
