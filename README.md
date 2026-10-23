@@ -230,7 +230,7 @@ It is a local music library and file browser with album artwork, playlists, lyri
 
 Local audio decoder inputs include WAV, FLAC, MP3, Ogg Vorbis, Opus, M4A/M4B/MP4, AAC, ALAC, WavPack, APE, AIFF/AIFC, CAF and DSD (DSF/DFF) files. DSP features include a 10-band graphic equalizer, parametric EQ, MSEB, crossfeed, channel balance and ReplayGain. The graphic EQ, PEQ and MSEB also run on internet radio stations.
 
-The interface font is a setting (Settings → Appearance → Font): MiSans, Neon 80s and Roboto (Roboto Mono on the R3 Pro II), plus any `.ttf`/`.otf` file put in the `Fonts` folder on the card. Whatever a face is missing — Cyrillic, Greek, Hangul, kanji, Arabic — is drawn by MiSans behind it, so the whole interface stays legible in every language. The added family is under the SIL Open Font License; see [`sonix-player/assets/fonts/FONT-LICENSES.txt`](sonix-player/assets/fonts/FONT-LICENSES.txt) for the copyright notices and the exact files.
+The interface font is a setting (Settings → Appearance → Font): MiSans, Neon 80s and Roboto, plus any `.ttf`/`.otf` file put in the `Fonts` folder on the card. Whatever a face is missing — Cyrillic, Greek, Hangul, kanji, Arabic — is drawn by MiSans behind it, so the whole interface stays legible in every language. The added family is under the SIL Open Font License; see [`sonix-player/assets/fonts/FONT-LICENSES.txt`](sonix-player/assets/fonts/FONT-LICENSES.txt) for the copyright notices and the exact files.
 
 The boot screen is a setting too (Settings → Appearance → Boot screen): **Retrospace**, the default, **Space**, **Travelling in space**, or **Stock**, the firmware's own light and dark pictures. The choice cannot live in the config — the script that draws the logo runs before any filesystem holding a config is mounted — so it is written to the same flash marker the theme uses, and appears from the next power-on.
 
@@ -324,9 +324,12 @@ See [setup, design, limitations and the V1 validation checklist](docs/subsonic.m
 sudo apt install build-essential pkg-config libsdl2-dev libfreetype-dev \
     libopusfile-dev libwavpack-dev libasound2-dev
 cd sonix-player
-make host                                  # ./sonix_player_host, 480x720
-SONIX_PANEL=240x320 ./sonix_player_host    # the V1's layout and fonts
+make host            # ./sonix_player_host, at the V1's 240x320
+./sonix_player_host
 ```
+
+The simulator draws the same profile as the device: the 480-pixel layout the
+upstream tree also carried is not built here any more.
 
 **The device binary (target).** Needs the MIPS toolchain built from `sonix-player/rockboxdev/`; the workflow caches it, and building it by hand is a long first run.
 

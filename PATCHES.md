@@ -8,13 +8,16 @@
 
 ## TempoTec V1 240×320 interface profile
 
-The target build of this fork defaults to the TempoTec V1 profile. At runtime,
-`BOARD=tempotec_v1` (also `tempotec-v1` or `tv1`) selects it explicitly, while
-`BOARD=hiby_r1` or `BOARD=hiby_r3proii` forces the regular layout. For the host
-simulator, this is enough to exercise the V1 path:
+This fork is the TempoTec V1's and nothing else, so the profile is no longer a
+choice: `src/gui/board_profile.h` is a set of inline constants (240x320 panel,
+24 px status bar, 6 px padding), and `bp_pick(compact, regular)` folds to the
+compact value at compile time. The `BOARD=hiby_r1` / `BOARD=hiby_r3proii`
+switch and the 480-pixel layout functions went with the versions of the player
+that used them -- see "One board, and less of it" below. The host simulator
+builds through the same profile:
 
 ```bash
-SONIX_PANEL=240x320 ./sonix_player_host
+./sonix_player_host
 ```
 
 The profile is more than a font substitution. It makes `gui_config_t` use the
@@ -24,10 +27,10 @@ grids and status icons compact geometry.
 
 Rounded screen corners, the optional black quarter-circles on the system layer
 in Settings → Appearance, use **16 px** on this board (`bp_screen_corner_radius()`).
-The original mask is 28 px on the 480-wide HiBy panels; 28 px here would swallow
-the 24 px status bar, and 14 px (half of 28 by pixel count) undershoots the 2"
-IPS, whose visible corner is about 2 mm. The masks are A8, built the first time
-the option is turned on, and stay above busy veils and the screensaver.
+The original mask was 28 px on the 480-wide HiBy panels; 28 px here would
+swallow the 24 px status bar, and 14 px (half of 28 by pixel count) undershoots
+the 2" IPS, whose visible corner is about 2 mm. The masks are A8, built the first
+time the option is turned on, and stay above busy veils and the screensaver.
 
 The face those sizes are drawn from is not part of the profile any more. The V1
 had Neon 80s as its primary face; it is now one of the choices in
