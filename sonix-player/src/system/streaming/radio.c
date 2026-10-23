@@ -17,6 +17,7 @@
 #include "src/system/decode/aacdec.h"
 #include "src/system/net/hls.h"
 #include "src/system/net/http.h"
+#include "src/system/core/md5.h"
 #include "src/system/core/lang.h"
 #include "src/system/net/tls.h"
 #include "src/system/streaming/onair.h"
@@ -1906,20 +1907,73 @@ static void radio_buffer_prefill(radio_buffer_t *b, unsigned mine) {
 	printf("radio: %d KB buffered before the first frame\n", level / 1024);
 }
 
+// Where a station's icon is kept: <card>/.local/radio-art/<md5 of its
+// address>.img, the shape the streaming lists' covers use for the same reason.
+//
+// The download used to go to /tmp on every station change, so the same icon was
+// fetched again at every listen and the file was gone after a reboot. The
+// address a station reports is stable for as long as its icon is, which makes it
+// the whole cache key.
+#define RADIO_ART_DIR ".local/radio-art"
+
+static bool radio_art_path(const char *url, char *out, size_t size) {
+	char root[sizeof(store_root)];
+	pthread_mutex_lock(&store_lock);
+	snprintf(root, sizeof(root), "%s", store_root);
+	pthread_mutex_unlock(&store_lock);
+	if (!root[0] || !url || !url[0]) {
+		out[0] = '\0';
+		return false;
+	}
+
+	char hash[MD5_HEX_LEN];
+	md5_hex(url, strlen(url), hash);
+	snprintf(out, size, "%s/%s/%.32s.img", root, RADIO_ART_DIR, hash);
+	return true;
+}
+
+// The folder beside the one the station list lives in; it may not exist yet on
+// a card that has only ever played music.
+static bool radio_art_dir_make(const char *path) {
+	char dir[512];
+	snprintf(dir, sizeof(dir), "%s", path);
+	char *slash = strrchr(dir, '/');
+	if (!slash) {
+		return false;
+	}
+	*slash = '\0';
+	mkdir(dir, 0777);
+	return true;
+}
+
 // Pulls the station's icon down so the player has something to show. Best
 // effort in every sense: no icon, an icon that is not an image, a server that
 // does not answer -- all of them just mean the radio placeholder stays up.
 static void fetch_favicon(const char *url) {
-	if (!url || strncasecmp(url, "http://", 7) != 0) {
+	// https as well as http: the directory's icons are served from both, and
+	// refusing the secure half of them left those stations with no artwork at
+	// all rather than with a cache miss.
+	if (!url || (strncasecmp(url, "http://", 7) != 0 && strncasecmp(url, "https://", 8) != 0)) {
 		return;
 	}
-
-	const char *ext = ".jpg";
 	const char *dot = strrchr(url, '.');
-	if (dot && (strcasecmp(dot, ".png") == 0)) {
-		ext = ".png";
-	} else if (dot && strcasecmp(dot, ".gif") == 0) {
+	if (dot && strcasecmp(dot, ".gif") == 0) {
 		return; // nothing here decodes GIF covers
+	}
+
+	// The card's copy first: a station keeps its icon for as long as it exists,
+	// so this is one download per station rather than one per listening.
+	char cached[512];
+	bool on_card = radio_art_path(url, cached, sizeof(cached));
+	if (on_card) {
+		struct stat st;
+		if (stat(cached, &st) == 0 && st.st_size > 0) {
+			pthread_mutex_lock(&now_lock);
+			snprintf(now_state.cover_path, sizeof(now_state.cover_path), "%s", cached);
+			now_touch();
+			pthread_mutex_unlock(&now_lock);
+			return;
+		}
 	}
 
 	char *body = NULL;
@@ -1932,6 +1986,7 @@ static void fetch_favicon(const char *url) {
 	// Trust the bytes, not the file name: half the favicons in the directory
 	// are called .png and are JPEGs, or the other way round.
 	const unsigned char *b = (const unsigned char *)body;
+	const char *ext = ".jpg";
 	if (b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') {
 		ext = ".png";
 	} else if (b[0] == 0xFF && b[1] == 0xD8) {
@@ -1941,20 +1996,43 @@ static void fetch_favicon(const char *url) {
 		return; // not something the cover decoder can read
 	}
 
-	char path[256];
-	snprintf(path, sizeof(path), "/tmp/sonix-radio-cover%s", ext);
+	char path[512];
+	if (on_card && radio_art_dir_make(cached)) {
+		snprintf(path, sizeof(path), "%s", cached);
+	} else {
+		// No card, or one that will not take it: /tmp still gives the player
+		// something to draw, it just will not survive the listen.
+		snprintf(path, sizeof(path), "/tmp/sonix-radio-cover%s", ext);
+	}
 
-	FILE *f = fopen(path, "wb");
+	// Written aside and renamed: a half-written icon -- the card pulled, the
+	// power gone -- would otherwise be a cache hit forever after, and never
+	// decode.
+	char temp[600];
+	snprintf(temp, sizeof(temp), "%.560s.parte", path);
+	bool ok = false;
+	FILE *f = fopen(temp, "wb");
 	if (f) {
-		fwrite(body, 1, len, f);
-		fclose(f);
-
-		pthread_mutex_lock(&now_lock);
-		snprintf(now_state.cover_path, sizeof(now_state.cover_path), "%s", path);
-		now_touch();
-		pthread_mutex_unlock(&now_lock);
+		ok = fwrite(body, 1, len, f) == len;
+		if (fclose(f) != 0) {
+			ok = false;
+		}
+		if (ok && rename(temp, path) != 0) {
+			ok = false;
+		}
+		if (!ok) {
+			remove(temp);
+		}
 	}
 	free(body);
+	if (!ok) {
+		return;
+	}
+
+	pthread_mutex_lock(&now_lock);
+	snprintf(now_state.cover_path, sizeof(now_state.cover_path), "%s", path);
+	now_touch();
+	pthread_mutex_unlock(&now_lock);
 }
 
 // How much undecoded data must be sitting in the buffer before a frame is

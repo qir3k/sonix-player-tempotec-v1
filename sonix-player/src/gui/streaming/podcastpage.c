@@ -1890,6 +1890,20 @@ static void *worker_main(void *arg) {
 		bool grow = job.more;
 		int kept = result_count;
 
+		// What this answer is, before anything is read for it. The reset comes
+		// HERE and not after the card has been asked: the cached list is an
+		// answer too, and zeroing the count behind it left every list read from
+		// the card at zero -- a tab that showed its rows once and said there was
+		// nothing to show on the next visit.
+		if (job.kind != JOB_PLAY && !grow) {
+			result_count = 0;
+			snprintf(result_title, sizeof(result_title), "%s", job.text);
+		}
+		if (job.kind != JOB_PLAY) {
+			result_from = grow ? kept : 0;
+			result_want = want;
+		}
+
 		// A first page that is still young is read from the card instead of
 		// from the catalogue: the chart and a podcast's episodes do not change
 		// between two looks at the same tab, and on a slow connection that is
@@ -1925,15 +1939,6 @@ static void *worker_main(void *arg) {
 					}
 				}
 			}
-		}
-
-		if (job.kind != JOB_PLAY && !grow) {
-			result_count = 0;
-			snprintf(result_title, sizeof(result_title), "%s", job.text);
-		}
-		if (job.kind != JOB_PLAY) {
-			result_from = grow ? kept : 0;
-			result_want = want;
 		}
 
 		switch (job.kind) {
@@ -3430,8 +3435,32 @@ static void refresh_page_state(void) {
 	}
 }
 
+// Where the podcast page keeps its things: the picture cache, the list cache,
+// the podcasts' own database. All of it lives on the card, and the card can be
+// inserted after the player starts -- a root that was empty at startup used to
+// stay empty for the session, which is why the covers were downloaded again at
+// every visit. Read again (and only again: these setters reopen a database)
+// whenever the card behind them has changed.
+static char podcast_root[256];
+
+static void podcast_roots_use(const char *root) {
+	if (!root) {
+		root = "";
+	}
+	if (strcmp(podcast_root, root) == 0) {
+		return;
+	}
+	snprintf(podcast_root, sizeof(podcast_root), "%s", root);
+	qobuzart_set_root(root);
+	listcache_set_root(root);
+	podcastcache_set_root(root);
+	podcastsubs_set_root(root);
+	podcastplayed_set_root(root);
+}
+
 static void page_loaded_cb(lv_event_t *e) {
 	(void)e;
+	podcast_roots_use(storage_sd_root());
 	refresh_page_state();
 }
 
@@ -3953,12 +3982,7 @@ void podcastpage_init(gui_config_t *cfg) {
 	lv_timer_pause(art_drop_timer);
 	art_timer = lv_timer_create(art_poll_cb, 120, NULL);
 	lv_timer_pause(art_timer);
-	qobuzart_set_root(storage_sd_root());
-	listcache_set_root(storage_sd_root());
-
-	podcastcache_set_root(storage_sd_root());
-	podcastsubs_set_root(storage_sd_root());
-	podcastplayed_set_root(storage_sd_root());
+	podcast_roots_use(storage_sd_root());
 
 	// Notices only: the first list is asked for by the page when it really
 	// opens, not at player startup -- at startup the card may not have been read

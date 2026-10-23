@@ -40,6 +40,133 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wakeup = PTHREAD_COND_INITIALIZER;
 static bool started;
 
+// ---------------------------------------------------------------------------
+// the images already decoded
+//
+// The slots move from page to page, and a page that rebuilds its list -- Tidal
+// does on every open -- gives its pictures back with it. Without this, the same
+// twenty covers were read from the card, decoded and scaled again at every
+// visit, one after another on one core, which is the grey square and the beat
+// before the artwork that a tab switch showed.
+//
+// Kept by address and size, because the two pages draw the same cover at
+// different sizes and the smaller one is not the larger one. The budget is in
+// bytes rather than entries: a 36-pixel row costs 2.5 kB and a 60-pixel one
+// 7 kB, so the count that fits depends on the page.
+// ---------------------------------------------------------------------------
+
+#define ART_CACHE_BUDGET (96 * 1024)
+#define ART_CACHE_ENTRIES 32
+
+typedef struct {
+	char url[QOBUZART_URL_MAX];
+	int size;
+	cover_image_t image;
+	uint32_t used; // the last time it was asked for, for the least-recently-used drop
+} art_decoded_t;
+
+static art_decoded_t decoded[ART_CACHE_ENTRIES];
+static size_t decoded_bytes;
+static uint32_t decoded_tick;
+
+static size_t image_bytes(const cover_image_t *image) { return image && image->pixels ? (size_t)image->dsc.data_size : 0; }
+
+// All three of these are called with the lock held.
+
+static int cache_find_locked(const char *url, int size) {
+	if (!url || !url[0]) {
+		return -1;
+	}
+	for (int i = 0; i < ART_CACHE_ENTRIES; i++) {
+		if (decoded[i].image.pixels && decoded[i].size == size && strcmp(decoded[i].url, url) == 0) {
+			decoded[i].used = ++decoded_tick;
+			return i;
+		}
+	}
+	return -1;
+}
+
+static void cache_drop_locked(int index) {
+	if (index < 0 || index >= ART_CACHE_ENTRIES) {
+		return;
+	}
+	decoded_bytes -= image_bytes(&decoded[index].image);
+	cover_free(&decoded[index].image);
+	decoded[index].url[0] = '\0';
+	decoded[index].size = 0;
+	decoded[index].used = 0;
+}
+
+// A copy, not the cached picture itself: the caller owns what it is given and
+// frees it when its row goes away, and two rows sharing one buffer would free
+// it twice.
+static bool cache_copy_locked(int index, cover_image_t *out) {
+	size_t bytes = image_bytes(&decoded[index].image);
+	if (!out || bytes == 0) {
+		return false;
+	}
+	uint8_t *pixels = malloc(bytes);
+	if (!pixels) {
+		return false;
+	}
+	memcpy(pixels, decoded[index].image.pixels, bytes);
+	*out = decoded[index].image;
+	out->pixels = pixels;
+	out->dsc.data = pixels;
+	return true;
+}
+
+static void cache_put_locked(const char *url, int size, const cover_image_t *image) {
+	size_t bytes = image_bytes(image);
+	if (!url || !url[0] || size <= 0 || bytes == 0 || bytes > ART_CACHE_BUDGET) {
+		return;
+	}
+
+	int same = cache_find_locked(url, size);
+	if (same >= 0) {
+		cache_drop_locked(same);
+	}
+
+	// Make room by dropping the picture nobody has asked for in the longest
+	// time. One that is in use elsewhere is not a candidate: the pages hold
+	// their own copies, so a drop here cannot pull a picture off a row.
+	while (decoded_bytes + bytes > ART_CACHE_BUDGET) {
+		int victim = -1;
+		uint32_t oldest = UINT32_MAX;
+		for (int i = 0; i < ART_CACHE_ENTRIES; i++) {
+			if (decoded[i].image.pixels && decoded[i].used < oldest) {
+				oldest = decoded[i].used;
+				victim = i;
+			}
+		}
+		if (victim < 0) {
+			return;
+		}
+		cache_drop_locked(victim);
+	}
+
+	uint8_t *pixels = malloc(bytes);
+	if (!pixels) {
+		return;
+	}
+	memcpy(pixels, image->pixels, bytes);
+
+	for (int i = 0; i < ART_CACHE_ENTRIES; i++) {
+		if (decoded[i].image.pixels) {
+			continue;
+		}
+		snprintf(decoded[i].url, sizeof(decoded[i].url), "%s", url);
+		decoded[i].size = size;
+		decoded[i].image = *image;
+		decoded[i].image.pixels = pixels;
+		decoded[i].image.dsc.data = pixels;
+		decoded[i].used = ++decoded_tick;
+		decoded_bytes += bytes;
+		return;
+	}
+	free(pixels);
+}
+
 void qobuzart_set_root(const char *sd_root) {
 	pthread_mutex_lock(&lock);
 	if (!sd_root || !*sd_root) {
@@ -184,6 +311,12 @@ static void *worker_main(void *arg) {
 
 		pthread_mutex_lock(&lock);
 		slot->running = false;
+		if (found) {
+			// Kept before the slot decides: an image nobody is waiting for any
+			// more -- the list scrolled on -- is exactly the one that will be
+			// asked for again.
+			cache_put_locked(url, size, &image);
+		}
 		if (slot->generation != generation) {
 			// The slot was reused for something else while the fetch ran (the
 			// list scrolled), so nobody wants this image any more.
@@ -269,6 +402,25 @@ void qobuzart_request(const void *owner, int slot_index, const char *url, int si
 		return;
 	}
 
+	// Decoded on an earlier visit: hand out a copy now, and leave the worker
+	// reading nothing. This is the whole point of the cache -- a rebuilt list
+	// paints its pictures on the next poll instead of decoding them one by one.
+	int cached = cache_find_locked(url, size);
+	if (cached >= 0) {
+		reset_locked(slot);
+		snprintf(slot->url, sizeof(slot->url), "%s", url);
+		slot->size = size;
+		if (cache_copy_locked(cached, &slot->image)) {
+			slot->done = true;
+			slot->found = true;
+		} else {
+			slot->pending = true; // out of memory: the worker decodes it again
+			pthread_cond_signal(&wakeup);
+		}
+		pthread_mutex_unlock(&lock);
+		return;
+	}
+
 	reset_locked(slot);
 	snprintf(slot->url, sizeof(slot->url), "%s", url);
 	slot->size = size;
@@ -339,6 +491,12 @@ void qobuzart_clear(void) {
 		reset_locked(&slots[i]);
 		slots[i].url[0] = '\0';
 	}
+	// The decoded copies go too: they were the covers of what that account was
+	// listening to, which is the same reason the files on the card go.
+	for (int i = 0; i < ART_CACHE_ENTRIES; i++) {
+		cache_drop_locked(i);
+	}
+	decoded_bytes = 0;
 	pool_owner = NULL;
 	pthread_mutex_unlock(&lock);
 

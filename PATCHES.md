@@ -1431,3 +1431,36 @@ and the two date sorts on the card's lines without the air of a settings list.
 destinations that are the tab, repeating what the title and the rows' icons
 already said, and cost the 240-px panel 19 px of its first card. The grid starts
 at the card's top edge now.
+
+## Lists that keep their rows, and pictures that stay decoded
+
+**A list read from the card was zeroed behind the read.** The worker cleared
+`result_count` *after* the cached list had been loaded into it, and the cache
+branch of the switch has nothing more to do, so every chart and every podcast's
+episodes were full on the first visit -- the one that asked the catalogue -- and
+empty on the next one, which is the visit that reads the card. The reset now
+happens before the cache is consulted, which is where it belongs: "nothing to
+show" once meant "the cache answered".
+
+**The card is looked at again when the section opens.** The picture cache, the
+list cache and the podcasts' database all live on the card, and their roots were
+read once at startup -- when the card may not have been mounted yet. The page
+takes them again whenever the card behind them changes, as the Tidal tab already
+did, so a player started before the card went in keeps its caches for the rest of
+the session.
+
+**Decoded covers are kept between visits.** `qobuzart` handed its twelve slots
+from page to page and dropped what was in them, and Tidal rebuilds its home on
+every open, so the same twenty covers were read from the card, decoded and scaled
+again at each visit -- the grey square and the beat before the artwork. The
+images a slot finishes are kept by address and size in a 96 kB cache under it;
+a later request is answered with a copy, so a rebuilt list paints on the next
+poll instead of waiting for the decoder. On the logout path the cache goes with
+the files on the card.
+
+**A radio station's icon is cached on the card.** It was downloaded to `/tmp` at
+every station start and lost with the reboot, and only plain http addresses were
+accepted -- the directory serves many icons over https, and those stations never
+got artwork at all. The icon is now one file per address in
+`<card>/.local/radio-art`, written aside and renamed, with `/tmp` left as the
+fallback for a card that will not take it.
