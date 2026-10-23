@@ -303,11 +303,8 @@ void powermenu_init(gui_config_t *cfg) {
 	lv_obj_set_flex_flow(pills, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(pills, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-	make_slide(pills, &slide_off, &icon_power_off, lv_color_make(224, 27, 36), "powermenu_slide_to_power_off", do_power_off);
-	// A fixed blue, deliberately not the accent: the two slides are power off
-	// (red) and reboot (blue), and an accent set to red or orange would make
-	// them impossible to tell apart at a glance.
-	make_slide(pills, &slide_reboot, &icon_reboot, lv_color_make(0, 122, 255), "powermenu_slide_to_restart", do_reboot);
+	make_slide(pills, &slide_off, &icon_power_off, theme()->accent, "powermenu_slide_to_power_off", do_power_off);
+	make_slide(pills, &slide_reboot, &icon_reboot, theme()->accent, "powermenu_slide_to_restart", do_reboot);
 
 	// Cancel: a round button at the bottom centre that goes red under the
 	// finger, with its label floating underneath.

@@ -135,7 +135,7 @@ lv_obj_t *settingsrow_title(lv_obj_t *screen, gui_config_t *cfg, const char *tex
 }
 
 int settingsrow_content_top(gui_config_t *cfg) {
-	return cfg->top_bar_height + cfg->padding + settingsrow_corner_button_size(cfg) + cfg->padding;
+	return cfg->top_bar_height + cfg->padding + settingsrow_corner_button_size(cfg) + bp_pick(4, 8);
 }
 
 // Every page built by settingsrow_page() reopens scrolled to the top; a long
@@ -173,8 +173,8 @@ lv_obj_t *settingsrow_page(lv_obj_t *screen, gui_config_t *cfg, const char *titl
 	// The same air above the first row as under the last one: the lists built
 	// here used to begin flush against the heading, which reads as the first row
 	// being cut off rather than as the top of a list.
-	lv_obj_set_style_pad_top(container, compact_rows() ? cfg->padding : 0, 0);
-	lv_obj_set_style_pad_bottom(container, compact_rows() ? cfg->padding : 0, 0);
+	lv_obj_set_style_pad_top(container, bp_pick(4, 8), 0);
+	lv_obj_set_style_pad_bottom(container, bp_pick(4, 8), 0);
 	lv_obj_set_scroll_dir(container, LV_DIR_VER);
 	lv_obj_set_scrollbar_mode(container, LV_SCROLLBAR_MODE_AUTO);
 	lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);

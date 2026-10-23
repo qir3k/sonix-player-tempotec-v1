@@ -30,9 +30,13 @@
 #include "src/system/playback/device_state.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/morepage.h"
+#include "src/gui/shell/menuorder.h"
 #include "src/gui/shell/theme.h"
+#include "src/system/input/kblayout.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
+
+const char *storage_sd_root(void) { return ""; }
 #include "src/system/notes/notesstore.h"
 #include "src/system/text/textfile.h"
 
@@ -478,6 +482,31 @@ static void check_more_page(gui_config_t *cfg, const char *tag) {
 		}
 	}
 	assert(entries >= 5);
+}
+
+static void check_more_arrangement(void) {
+	int count = menuorder_count(MENUORDER_MORE);
+	int original[16], order[16];
+	bool original_visible[16], visible[16];
+	assert(count > 1 && menuorder_load(MENUORDER_MORE, original, 16, original_visible) == count);
+	memcpy(order, original, (size_t)count * sizeof(order[0]));
+	memcpy(visible, original_visible, (size_t)count * sizeof(visible[0]));
+	int swap = order[0];
+	order[0] = order[1];
+	order[1] = swap;
+	visible[2] = false;
+	menuorder_save(MENUORDER_MORE, order, count, visible);
+	morepage_refresh_layout();
+	bool tiles = false;
+	lv_obj_t *shown = visible_shape(morepage_screen, &tiles);
+	assert(has_entry(shown, tr("gearboy")));
+	assert(!has_entry(shown, tr("books")));
+	lv_area_t first, second;
+	lv_obj_get_coords(entry_with_label(shown, tr("gearboy")), &first);
+	lv_obj_get_coords(entry_with_label(shown, tr("dac")), &second);
+	assert(first.y1 < second.y1);
+	menuorder_save(MENUORDER_MORE, original, count, original_visible);
+	morepage_refresh_layout();
 }
 
 /* The two libraries share one slot on the home screen. When Books takes it,
@@ -949,7 +978,17 @@ int main(int argc, char **argv) {
 	snprintf(config, sizeof(config), "%s/device_config.ini", card);
 	config_init(config);
 	config_set("ui", "language", "English");
+	config_set("keyboard", "layouts", "polish,english");
 	lang_init(argv[1]);
+	assert(kblayout_default() == KB_LAYOUT_POLISH);
+	assert(strcmp(kblayout_variant("e", 0), "\xc4\x99") == 0);
+	int e_variants = kblayout_variant_count("e");
+	assert(e_variants == 7);
+	bool found_circumflex_e = false;
+	for (int i = 1; i < e_variants; i++) {
+		found_circumflex_e = found_circumflex_e || strcmp(kblayout_variant("e", i), "\xc3\xaa") == 0;
+	}
+	assert(found_circumflex_e);
 	check_strings(argv[1]);
 
 	init_fonts();
@@ -1037,6 +1076,7 @@ int main(int argc, char **argv) {
 		snprintf(tag, sizeof(tag), "%s-more-%s-%s", bp_is_tempotec_v1() ? "v1" : "hiby", shape, theme_tag());
 		check_more_page(&cfg, tag);
 	}
+	check_more_arrangement();
 	theme_set_kind(THEME_KIND_DARK);
 	check_more_audiobooks_option(&cfg);
 

@@ -306,10 +306,10 @@ static const char *const ACCENTS_ENGLISH =
 
 static int accent_preference(char *out, size_t size) {
 	out[0] = '\0';
-	if (config_get_int("keyboard", "swipe_lang", 0) == 0) {
-		snprintf(out, size, "%s", ACCENTS_ENGLISH);
-	} else if (config_get_int("keyboard", "swipe_lang", 0) == 1) {
+	if (kblayout_default() == KB_LAYOUT_POLISH || config_get_int("keyboard", "swipe_lang", 0) == 1) {
 		snprintf(out, size, "%s", ACCENTS_POLISH);
+	} else if (config_get_int("keyboard", "swipe_lang", 0) == 0) {
+		snprintf(out, size, "%s", ACCENTS_ENGLISH);
 	} else {
 		return 0; // both: no language is "the" one, so the table's order stands
 	}
