@@ -456,10 +456,10 @@ static void do_playlist_delete(void *user) {
 // two buttons for the action this kind of list can take in bulk and the way out.
 //
 // What can be done in bulk is exactly what the row's own three dots do, with two
-// exceptions that are not bulk operations in disguise: a playlist's tracks are
-// removed by position (each removal renumbers the ones after it) and a playlist
-// itself is deleted outright, so both stay single-row actions. Lists with no
-// row action at all -- a search's albums, the showcases -- take no selection.
+// exception that is not a bulk operation in disguise: a playlist's tracks are
+// removed by position (each removal renumbers the ones after it), so that stays
+// a single-row action. Lists with no row action at all -- a search's albums,
+// the showcases -- take no selection.
 //
 // tidalsync takes one job at a time and the newest submission replaces the one
 // waiting, so the chosen ids are walked one after another, each starting when the
@@ -476,6 +476,7 @@ static int chosen_count;
 // rebuilding the list (which would lose the scroll position under the finger).
 static lv_obj_t *row_objs[TIDAL_MAX_HELD];
 static lv_obj_t *row_checks[TIDAL_MAX_HELD];
+static lv_obj_t *row_menus[TIDAL_MAX_HELD];
 
 static lv_obj_t *sel_action_btn;
 static lv_obj_t *sel_close_btn;
@@ -517,6 +518,9 @@ static void selection_stop(void) {
 		if (row_checks[i]) {
 			lv_obj_set_hidden(row_checks[i], true);
 		}
+		if (row_menus[i]) {
+			lv_obj_set_hidden(row_menus[i], false);
+		}
 	}
 	free(chosen);
 	chosen = NULL;
@@ -537,6 +541,7 @@ typedef enum {
 	BULK_ALBUM_REMOVE,
 	BULK_ARTIST_ADD,
 	BULK_ARTIST_REMOVE,
+	BULK_PLAYLIST_DELETE,
 } bulk_kind_t;
 
 static bulk_kind_t bulk_kind_for(job_kind_t kind) {
@@ -555,6 +560,8 @@ static bulk_kind_t bulk_kind_for(job_kind_t kind) {
 		return BULK_ARTIST_ADD;
 	case ROW_MENU_ARTIST_REMOVE:
 		return BULK_ARTIST_REMOVE;
+	case ROW_MENU_PLAYLIST_DELETE:
+		return BULK_PLAYLIST_DELETE;
 	default:
 		return BULK_NONE;
 	}
@@ -573,6 +580,11 @@ static bool selection_start(void) {
 	}
 	selecting = true;
 	chosen_count = 0;
+	for (int i = 0; i < TIDAL_MAX_HELD; i++) {
+		if (row_menus[i]) {
+			lv_obj_set_hidden(row_menus[i], true);
+		}
+	}
 	update_corner_buttons();
 	return true;
 }
@@ -602,6 +614,7 @@ static long bulk_track_ids[TIDAL_MAX_HELD];
 static int bulk_positions[TIDAL_MAX_HELD]; // playlist rows: the position on screen
 static long bulk_artist_ids[TIDAL_MAX_HELD];
 static char bulk_album_ids[TIDAL_MAX_HELD][TIDAL_ID_MAX];
+static char bulk_playlist_ids[TIDAL_MAX_HELD][TIDAL_ID_MAX];
 static char bulk_message[192];
 
 static void bulk_finish(void) {
@@ -627,6 +640,9 @@ static void bulk_finish(void) {
 	case BULK_ARTIST_ADD:
 	case BULK_ARTIST_REMOVE:
 		listcache_drop(LISTCACHE_TIDAL_FAV_ARTISTS);
+		break;
+	case BULK_PLAYLIST_DELETE:
+		listcache_drop(LISTCACHE_TIDAL_PLAYLISTS);
 		break;
 	default:
 		break;
@@ -695,10 +711,22 @@ static void bulk_step(void) {
 	case BULK_ARTIST_REMOVE:
 		tidalsync_artist_favorite(bulk_artist_ids[bulk_at], false, bulk_one_done, NULL);
 		break;
+	case BULK_PLAYLIST_DELETE:
+		tidalsync_playlist_remove(bulk_playlist_ids[bulk_at], bulk_one_done, NULL);
+		break;
 	default:
 		bulk_finish();
 		break;
 	}
+}
+
+static void bulk_confirmed_cb(void *user) {
+	(void)user;
+	if (!selecting || !chosen || bulk_running || bulk_count <= 0) {
+		return;
+	}
+	bulk_running = true;
+	bulk_step();
 }
 
 static void bulk_action_cb(lv_event_t *e) {
@@ -739,6 +767,11 @@ static void bulk_action_cb(lv_event_t *e) {
 				bulk_artist_ids[bulk_count++] = result_artists[i].id;
 			}
 			break;
+		case BULK_PLAYLIST_DELETE:
+			if (result_playlists[i].id[0]) {
+				snprintf(bulk_playlist_ids[bulk_count++], TIDAL_ID_MAX, "%s", result_playlists[i].id);
+			}
+			break;
 		default:
 			selection_stop();
 			return;
@@ -747,6 +780,10 @@ static void bulk_action_cb(lv_event_t *e) {
 
 	if (bulk_count == 0) {
 		selection_stop();
+		return;
+	}
+	if (bulk_kind == BULK_PLAYLIST_DELETE) {
+		confirm_show("system_are_you_sure", NULL, "delete", bulk_confirmed_cb, NULL);
 		return;
 	}
 	bulk_running = true;
@@ -1272,6 +1309,10 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 		lv_obj_set_style_border_width(menu_btn, 0, 0);
 		lv_obj_set_style_shadow_width(menu_btn, 0, 0);
 		lv_obj_set_style_pad_all(menu_btn, 0, 0);
+		if (index >= 0 && index < TIDAL_MAX_HELD) {
+			row_menus[index] = menu_btn;
+			lv_obj_set_hidden(menu_btn, selecting);
+		}
 		lv_obj_add_event_cb(menu_btn, row_menu_cb, LV_EVENT_CLICKED, (void *)(intptr_t)index);
 
 		lv_obj_t *dots = lv_image_create(menu_btn);
@@ -1298,6 +1339,7 @@ static void fill_list(int from) {
 		for (int i = 0; i < TIDAL_MAX_HELD; i++) {
 			row_objs[i] = NULL;
 			row_checks[i] = NULL;
+			row_menus[i] = NULL;
 		}
 	}
 	list_kind = result_kind;
@@ -3616,10 +3658,13 @@ static void update_corner_buttons(void) {
 	if (selecting && sel_action_btn) {
 		bulk_kind_t kind = bulk_kind_for(list_kind);
 		bool removes = kind == BULK_TRACK_REMOVE || kind == BULK_PLAYLIST_REMOVE || kind == BULK_ALBUM_REMOVE ||
-					   kind == BULK_ARTIST_REMOVE;
+					   kind == BULK_ARTIST_REMOVE || kind == BULK_PLAYLIST_DELETE;
 		lv_obj_t *icon = lv_obj_get_child(sel_action_btn, 0);
 		if (icon) {
-			lv_image_set_src(icon, removes ? &icon_star_x : &icon_star_plus);
+			const lv_image_dsc_t *source = kind == BULK_PLAYLIST_REMOVE || kind == BULK_PLAYLIST_DELETE
+										   ? &icon_trash
+										   : (removes ? &icon_heart_filled : &icon_heart_outline);
+			lv_image_set_src(icon, source);
 		}
 	}
 	if (list_title && page_cfg) {
@@ -4147,7 +4192,7 @@ static void build_list_page(gui_config_t *cfg) {
 
 	// The list's corner, empty until rows are chosen: the bulk action and the
 	// way out of the mode. Placed and shown by update_corner_buttons().
-	sel_action_btn = corner_button_on(list_screen, cfg, 0, &icon_star_plus, bulk_action_cb);
+	sel_action_btn = corner_button_on(list_screen, cfg, 0, &icon_heart_outline, bulk_action_cb);
 	sel_close_btn = corner_button_on(list_screen, cfg, 1, &icon_close, bulk_cancel_cb);
 	lv_obj_set_hidden(sel_action_btn, true);
 	lv_obj_set_hidden(sel_close_btn, true);

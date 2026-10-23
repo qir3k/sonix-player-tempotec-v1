@@ -281,23 +281,56 @@ int kblayout_variant_count(const char *key) {
 	return n;
 }
 
+// Polish letters go first on a Polish keyboard. Everything else keeps the
+// layout's original order and remains available on the same long-press strip.
+static const char *const ACCENTS_POLISH = "\xc4\x85\xc4\x87\xc4\x99\xc5\x82\xc5\x84\xc3\xb3\xc5\x9b\xc5\xba\xc5\xbc";
+
+static int variants_ordered(const char *key, char out[][8], int max) {
+	const char *p = variants_of(key);
+	int n = 0;
+	if (kblayout_default() == KB_LAYOUT_POLISH) {
+		for (const char *want = ACCENTS_POLISH; *want && n < max; want += utf8_len(want)) {
+			const char *q = p;
+			while (*q) {
+				int len = utf8_len(q);
+				if (len == utf8_len(want) && memcmp(q, want, (size_t)len) == 0) {
+					memcpy(out[n], q, (size_t)len);
+					out[n++][len] = '\0';
+					break;
+				}
+				q += len;
+			}
+		}
+	}
+	while (*p && n < max) {
+		int len = utf8_len(p);
+		bool already = false;
+		for (int i = 0; i < n && !already; i++) {
+			already = (int)strlen(out[i]) == len && memcmp(out[i], p, (size_t)len) == 0;
+		}
+		if (!already) {
+			memcpy(out[n], p, (size_t)len);
+			out[n++][len] = '\0';
+		}
+		p += len;
+	}
+	return n;
+}
+
 const char *kblayout_variant(const char *key, int index) {
 	static char slots[4][8];
 	static int at;
 
-	const char *p = variants_of(key);
-	for (int i = 0; i < index && *p; i++) {
-		p += utf8_len(p);
-	}
-	if (index < 0 || !*p) {
+	char ordered[KB_LAYOUT_MAX_VARIANTS][8];
+	int count = variants_ordered(key, ordered, KB_LAYOUT_MAX_VARIANTS);
+	if (index < 0 || index >= count) {
 		return "";
 	}
 
-	int len = utf8_len(p);
+	int len = (int)strlen(ordered[index]);
 	char *out = slots[at];
 	at = (at + 1) % 4;
-	memcpy(out, p, (size_t)len);
-	out[len] = '\0';
+	memcpy(out, ordered[index], (size_t)len + 1);
 	return out;
 }
 

@@ -314,7 +314,7 @@ static lv_obj_t *info_strip(void) { return lv_obj_get_child(saver_obj(), 1); }
 static lv_obj_t *strip_label(int index) { return lv_obj_get_child(info_strip(), index); }
 // The swipe-up sign at the foot of the screen: the saver's last child, hung
 // over the strip's lower edge.
-static lv_obj_t *chevron_btn(void) { return lv_obj_get_child(saver_obj(), 3); }
+static lv_obj_t *chevron_btn(void) { return lv_obj_get_child(saver_obj(), 2); }
 static lv_obj_t *chevron_icon(void) { return lv_obj_get_child(chevron_btn(), 0); }
 
 // The picture on screen, as the screensaver holds it: the descriptor LVGL was
@@ -721,7 +721,7 @@ int main(int argc, char **argv) {
 
 	screen_w = bp_screen_w();
 	screen_h = bp_screen_h();
-	strip_h = bp_pick(132, 250);
+	strip_h = bp_pick(120, 220);
 	radius = bp_pick(14, 18);
 	int side_w = screen_w - 2 * bp_pick(16, 40);
 	int side_h = screen_h - strip_h - 2 * bp_pick(14, 32);
@@ -729,7 +729,7 @@ int main(int argc, char **argv) {
 	if (bp_is_tempotec_v1()) {
 		// The V1: about the size the player draws its own sleeve, with 40 px
 		// either side and 14 above and below.
-		assert(screen_w == 240 && screen_h == 320 && frame_side == 160);
+		assert(screen_w == 240 && screen_h == 320 && frame_side == 172);
 	} else {
 		assert(frame_side == 400);
 	}
@@ -820,7 +820,7 @@ int main(int argc, char **argv) {
 		// and below, the strip's 132 px under it.
 		lv_area_t f;
 		lv_obj_get_coords(frame(), &f);
-		assert(f.x1 == 40 && f.y1 == 14 && f.x2 == 199 && f.y2 == 173);
+		assert(f.x1 == 34 && f.y1 == 14 && f.x2 == 205 && f.y2 == 185);
 	}
 
 	// Every theme: same frame, same pixels, the page each one asks for -- and

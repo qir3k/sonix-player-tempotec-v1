@@ -716,6 +716,9 @@ static void row_update_selection(row_t *row) {
 		return;
 	}
 	bool on = selecting && chosen && row->index >= 0 && row->index < list_count && chosen[row->index];
+	if (row->menu_btn) {
+		lv_obj_set_hidden(row->menu_btn, selecting || !kind_has_row_menu(list_kind));
+	}
 	if (on) {
 		lv_obj_set_style_image_recolor(row->check, theme()->accent, 0);
 		lv_obj_set_hidden(row->check, false);
@@ -823,9 +826,8 @@ static void row_bind(row_t *row, int index) {
 		lv_obj_set_hidden(row->detail, true);
 	}
 
-	// The three dots belong to a podcast, not to an episode, and the same pool
-	// serves both: built on every row, shown on the lists that have something
-	// to put in it.
+	// The same pooled button serves both kinds of list: feed rows offer
+	// follow/unfollow, and episode rows offer heard state and download.
 	if (kind_has_row_menu(list_kind)) {
 		lv_obj_set_hidden(row->menu_btn, false);
 	} else {
@@ -1011,14 +1013,13 @@ static void list_unloaded_cb(lv_event_t *e) {
 // the rows
 // ---------------------------------------------------------------------------
 
-// The three-dot menu only makes sense on a podcast: that is where following it
-// is chosen. An episode has nothing to offer that tapping it does not do
-// already.
+// The three-dot menu carries the single-row actions for feeds and episodes.
 static bool kind_has_row_menu(job_kind_t kind) {
-	return kind == JOB_SEARCH || kind == JOB_TRENDING || kind == JOB_FOLLOWED;
+	return kind == JOB_SEARCH || kind == JOB_TRENDING || kind == JOB_FOLLOWED || kind == JOB_EPISODES;
 }
 
 static void row_menu_cb(lv_event_t *e);
+static void episode_menu_cb(lv_event_t *e);
 static void row_long_cb(lv_event_t *e);
 
 // The twelve rows, built once. Everything that can differ between one entry and
@@ -1122,7 +1123,7 @@ static void build_rows(int width) {
 		lv_obj_set_style_shadow_width(row->menu_btn, 0, 0);
 		lv_obj_set_style_pad_all(row->menu_btn, 0, 0);
 		lv_obj_set_hidden(row->menu_btn, true);
-		lv_obj_add_event_cb(row->menu_btn, row_menu_cb, LV_EVENT_CLICKED, NULL);
+		lv_obj_add_event_cb(row->menu_btn, episode_menu_cb, LV_EVENT_CLICKED, NULL);
 
 		lv_obj_t *dots = lv_image_create(row->menu_btn);
 		lv_image_set_src(dots, &icon_ellipsis_vertical);
@@ -2194,7 +2195,7 @@ static void row_clicked_cb(lv_event_t *e) {
 }
 
 // ---------------------------------------------------------------------------
-// the three-dot menu: follow, or stop
+// the three-dot menus: follow a feed, or act on an episode
 // ---------------------------------------------------------------------------
 
 static int menu_row_index;
@@ -2225,39 +2226,40 @@ static void unfollow_cb(void *user) {
 	}
 }
 
+static void download_cb(void *user);
+static void mark_heard_cb(void *user);
+static void mark_not_heard_cb(void *user);
+
 // Starts the selection with this row already chosen. The row is read from
 // whichever variable the menu that called this belongs to: the feed menu keeps
 // its row in menu_row_index, an episode's long press in dl_row.
-static void select_row_cb(void *user) {
-	(void)user;
-	int index = list_kind == JOB_EPISODES ? dl_row : menu_row_index;
-	if (index < 0 || index >= list_count) {
-		return;
-	}
-	if (!selection_start()) {
-		return;
-	}
-	if (!chosen[index]) {
-		selection_toggle(index);
-	}
-}
-
 static void row_menu_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
 	menu_row_index = menu_index_of(lv_event_get_current_target(e));
 	if (menu_row_index < 0 || menu_row_index >= list_count) {
 		return;
 	}
 
-	// Two one-entry tables instead of one label picked with a ternary: the tool
-	// that collects the strings to translate reads popover_item_t INITIALISERS,
-	// not assignments.
-	static const popover_item_t FOLLOW[] = {{"podcast_follow", follow_cb, NULL},
-											{"select_row", select_row_cb, NULL}};
-	static const popover_item_t UNFOLLOW[] = {{"podcast_unfollow", unfollow_cb, NULL},
-										  {"select_row", select_row_cb, NULL}};
+	static const popover_item_t FOLLOW[] = {{"podcast_follow", follow_cb, NULL, false}};
+	static const popover_item_t UNFOLLOW[] = {{"podcast_unfollow", unfollow_cb, NULL, false}};
 
 	bool followed = podcastsubs_is_followed(result_feeds[menu_row_index].id);
-	popover_show(lv_event_get_current_target(e), followed ? UNFOLLOW : FOLLOW, 2);
+	popover_show(lv_event_get_current_target(e), followed ? UNFOLLOW : FOLLOW, 1);
+}
+
+static void episode_menu_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	int index = menu_index_of(lv_event_get_current_target(e));
+	if (index < 0 || index >= list_count || list_kind != JOB_EPISODES) {
+		return;
+	}
+	dl_row = index;
+	static const popover_item_t NOT_HEARD[] = {{"podcast_mark_listened", mark_heard_cb, NULL, false},
+												 {"podcast_download", download_cb, NULL, false}};
+	static const popover_item_t HEARD[] = {{"podcast_mark_not_listened", mark_not_heard_cb, NULL, false},
+									   {"podcast_download", download_cb, NULL, false}};
+	bool heard = podcastplayed_get(result_episodes[index].id);
+	popover_show(lv_event_get_current_target(e), heard ? HEARD : NOT_HEARD, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -2272,6 +2274,13 @@ static lv_obj_t *dl_bar;
 static lv_obj_t *dl_amount;
 static lv_timer_t *dl_timer;
 static int dl_row = -1;
+static int bulk_dl_rows[PODCAST_MAX_HELD];
+static int bulk_dl_count;
+static int bulk_dl_at;
+static bool bulk_dl_active;
+static bool bulk_dl_failed;
+
+static void bulk_download_next(void);
 
 static void dl_close(void) {
 	lv_timer_pause(dl_timer);
@@ -2303,7 +2312,12 @@ static void dl_poll_cb(lv_timer_t *timer) {
 	}
 	dl_close();
 	podcastdl_acknowledge();
-	if (state == PODCASTDL_DONE) {
+	if (bulk_dl_active) {
+		if (state != PODCASTDL_DONE) {
+			bulk_dl_failed = true;
+		}
+		bulk_download_next();
+	} else if (state == PODCASTDL_DONE) {
 		toast_success(tr("podcast_download_done"));
 	} else if (state == PODCASTDL_FAILED) {
 		toast_error(tr("podcast_download_failed"));
@@ -2312,6 +2326,8 @@ static void dl_poll_cb(lv_timer_t *timer) {
 
 static void dl_cancel_cb(lv_event_t *e) {
 	(void)e;
+	bulk_dl_active = false;
+	bulk_dl_count = 0;
 	podcastdl_cancel();
 	lv_label_set_text(dl_amount, tr("podcast_download_cancelling"));
 }
@@ -2381,19 +2397,17 @@ static void dl_build(gui_config_t *cfg) {
 	lv_timer_pause(dl_timer);
 }
 
-static void download_cb(void *user) {
-	(void)user;
-	if (dl_row < 0 || dl_row >= list_count || list_kind != JOB_EPISODES) {
-		return;
+static bool download_start(int index) {
+	if (index < 0 || index >= list_count || list_kind != JOB_EPISODES) {
+		return false;
 	}
-	const podcast_episode_t *episode = &result_episodes[dl_row];
+	dl_row = index;
+	const podcast_episode_t *episode = &result_episodes[index];
 	if (podcastdl_exists(episode, list_feed_title)) {
-		toast_plain(tr("podcast_already_downloaded"));
-		return;
+		return false;
 	}
 	if (!podcastdl_start(episode, list_feed_title, browsing_author, browsing_image)) {
-		toast_error(tr("podcast_download_failed"));
-		return;
+		return false;
 	}
 
 	// Theme colours are read at every opening: the card is built once.
@@ -2405,6 +2419,38 @@ static void download_cb(void *user) {
 	power_hold_screen_on(true);
 	lv_timer_reset(dl_timer);
 	lv_timer_resume(dl_timer);
+	return true;
+}
+
+static void download_cb(void *user) {
+	(void)user;
+	if (dl_row < 0 || dl_row >= list_count || list_kind != JOB_EPISODES) {
+		return;
+	}
+	if (!download_start(dl_row)) {
+		toast_plain(tr("podcast_already_downloaded"));
+	}
+}
+
+static void bulk_download_next(void) {
+	while (bulk_dl_active && bulk_dl_at < bulk_dl_count) {
+		int index = bulk_dl_rows[bulk_dl_at++];
+		if (podcastdl_exists(&result_episodes[index], list_feed_title)) {
+			continue;
+		}
+		if (download_start(index)) {
+			return;
+		}
+		bulk_dl_failed = true;
+	}
+	if (bulk_dl_active) {
+		bulk_dl_active = false;
+		if (bulk_dl_failed) {
+			toast_error(tr("podcast_download_failed"));
+		} else {
+			toast_success(tr("podcast_download_done"));
+		}
+	}
 }
 
 // The tick, set or taken away by hand. A menu that says "Mark as listened" is
@@ -2428,55 +2474,25 @@ static void mark_not_heard_cb(void *user) {
 	refresh_row(dl_row);
 }
 
-// An episode: the long press offers to keep it on the card, and to say whether
-// it has been heard. Two tables of initialisers rather than one label chosen
-// with a ternary, for the same reason as the follow menu above.
 static void row_long_cb(lv_event_t *e) {
 	if (switcher_back_drag_active() || player_sheet_drag_active()) {
 		return;
 	}
 
-	// A podcast's row opens no menu of its own, so the lift is the selection:
-	// the row under the finger is chosen and the corner trades its buttons for
-	// the action, as a long press does on Tidal and in the file browser.
-	// An episode's lift keeps its menu -- downloading it, or ticking it off, is
-	// what a long press on an episode is for -- and Select is offered there.
-	if (list_kind != JOB_EPISODES) {
-		int index = row_index_of(lv_event_get_current_target(e));
-		if (index < 0 || index >= list_count) {
-			return;
-		}
-		lv_indev_t *indev = lv_indev_active();
-		if (indev) {
-			lv_indev_wait_release(indev);
-		}
-		if (!selection_start()) {
-			return;
-		}
-		if (!chosen[index]) {
-			selection_toggle(index);
-		}
+	int index = row_index_of(lv_event_get_current_target(e));
+	if (index < 0 || index >= list_count) {
 		return;
 	}
-
-	dl_row = row_index_of(lv_event_get_current_target(e));
-	if (dl_row < 0 || dl_row >= list_count) {
-		return;
-	}
-	// The lift that ends this press would otherwise arrive as a click and
-	// start the episode.
 	lv_indev_t *indev = lv_indev_active();
 	if (indev) {
 		lv_indev_wait_release(indev);
 	}
-	static const popover_item_t NOT_HEARD[] = {{"podcast_mark_listened", mark_heard_cb, NULL},
-											 {"podcast_download", download_cb, NULL},
-											 {"select_row", select_row_cb, NULL}};
-	static const popover_item_t HEARD[] = {{"podcast_mark_not_listened", mark_not_heard_cb, NULL},
-									   {"podcast_download", download_cb, NULL},
-									   {"select_row", select_row_cb, NULL}};
-	bool heard = podcastplayed_get(result_episodes[dl_row].id);
-	popover_show(lv_event_get_current_target(e), heard ? HEARD : NOT_HEARD, 3);
+	if (!selection_start()) {
+		return;
+	}
+	if (!chosen[index]) {
+		selection_toggle(index);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -2569,17 +2585,23 @@ static void paint_selection_actions(void) {
 		return;
 	}
 	lv_obj_t *icon = lv_obj_get_child(sel_follow_btn, 0);
-	bool following = false;
+	bool can_follow = false;
+	bool all_followed = true;
 	if (selecting && chosen) {
 		for (int i = 0; i < list_count; i++) {
-			if (chosen[i]) {
-				following = podcastsubs_is_followed(result_feeds[i].id);
-				break;
+			if (chosen[i] && list_kind != JOB_EPISODES && !podcastsubs_is_followed(result_feeds[i].id)) {
+				can_follow = true;
+				all_followed = false;
 			}
 		}
 	}
 	if (icon) {
-		lv_image_set_src(icon, following ? &icon_star_x : &icon_star_plus);
+		lv_image_set_src(icon, all_followed ? &icon_heart_filled : &icon_heart_outline);
+	}
+	if (selecting && list_kind != JOB_FOLLOWED && !can_follow) {
+		lv_obj_add_state(sel_follow_btn, LV_STATE_DISABLED);
+	} else {
+		lv_obj_remove_state(sel_follow_btn, LV_STATE_DISABLED);
 	}
 }
 
@@ -2599,18 +2621,24 @@ static void bulk_follow_cb(lv_event_t *e) {
 	if (first < 0) {
 		return;
 	}
-	bool unfollow = podcastsubs_is_followed(result_feeds[first].id);
+	bool remove_followed = list_kind == JOB_FOLLOWED;
+	bool changed = false;
 	for (int i = 0; i < list_count; i++) {
 		if (!chosen[i]) {
 			continue;
 		}
-		if (unfollow) {
+		bool followed = podcastsubs_is_followed(result_feeds[i].id);
+		if (remove_followed && followed) {
 			podcastsubs_unfollow(result_feeds[i].id);
-		} else {
+			changed = true;
+		} else if (!remove_followed && !followed) {
 			podcastsubs_follow(&result_feeds[i]);
+			changed = true;
 		}
 	}
-	toast_plain(tr(unfollow ? "podcast_no_longer_following" : "podcast_now_following"));
+	if (changed) {
+		toast_plain(tr(remove_followed ? "podcast_no_longer_following" : "podcast_now_following"));
+	}
 	selection_stop();
 	if (list_kind == JOB_FOLLOWED) {
 		result_kind = JOB_FOLLOWED;
@@ -2622,27 +2650,16 @@ static void bulk_follow_cb(lv_event_t *e) {
 // The tick for every chosen episode, or away from all of them. One write per
 // episode: the heard set is a database row each and the mark must survive a
 // power cut right after the tap.
-static void bulk_heard_cb(lv_event_t *e) {
-	(void)e;
+static void bulk_mark_heard_cb(void *user) {
+	(void)user;
 	if (!selecting || !chosen || list_kind != JOB_EPISODES) {
 		return;
 	}
-	int first = -1;
-	for (int i = 0; i < list_count; i++) {
-		if (chosen[i]) {
-			first = i;
-			break;
-		}
-	}
-	if (first < 0) {
-		return;
-	}
-	bool heard = podcastplayed_get(result_episodes[first].id);
 	for (int i = 0; i < list_count; i++) {
 		if (!chosen[i]) {
 			continue;
 		}
-		podcastplayed_set(result_episodes[i].id, !heard);
+		podcastplayed_set(result_episodes[i].id, true);
 	}
 	selection_stop();
 	for (int i = 0; i < ROW_POOL; i++) {
@@ -2650,6 +2667,73 @@ static void bulk_heard_cb(lv_event_t *e) {
 			refresh_row(rows[i].index);
 		}
 	}
+}
+
+static void bulk_mark_unheard_cb(void *user) {
+	(void)user;
+	if (!selecting || !chosen || list_kind != JOB_EPISODES) {
+		return;
+	}
+	for (int i = 0; i < list_count; i++) {
+		if (chosen[i]) {
+			podcastplayed_set(result_episodes[i].id, false);
+		}
+	}
+	selection_stop();
+	for (int i = 0; i < ROW_POOL; i++) {
+		if (rows[i].index >= 0) {
+			refresh_row(rows[i].index);
+		}
+	}
+}
+
+static void bulk_download_selected_cb(void *user) {
+	(void)user;
+	if (!selecting || !chosen || list_kind != JOB_EPISODES || bulk_dl_active) {
+		return;
+	}
+	bulk_dl_count = 0;
+	for (int i = 0; i < list_count && bulk_dl_count < PODCAST_MAX_HELD; i++) {
+		if (chosen[i]) {
+			bulk_dl_rows[bulk_dl_count++] = i;
+		}
+	}
+	selection_stop();
+	if (bulk_dl_count == 0) {
+		return;
+	}
+	bulk_dl_at = 0;
+	bulk_dl_failed = false;
+	bulk_dl_active = true;
+	bulk_download_next();
+}
+
+static void bulk_episode_menu_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	if (!selecting || !chosen || list_kind != JOB_EPISODES) {
+		return;
+	}
+	bool has_heard = false;
+	bool has_unheard = false;
+	for (int i = 0; i < list_count; i++) {
+		if (chosen[i]) {
+			if (podcastplayed_get(result_episodes[i].id)) {
+				has_heard = true;
+			} else {
+				has_unheard = true;
+			}
+		}
+	}
+	popover_item_t actions[3];
+	int count = 0;
+	if (has_unheard) {
+		actions[count++] = (popover_item_t){"podcast_mark_listened", bulk_mark_heard_cb, NULL, false};
+	}
+	if (has_heard) {
+		actions[count++] = (popover_item_t){"podcast_mark_not_listened", bulk_mark_unheard_cb, NULL, false};
+	}
+	actions[count++] = (popover_item_t){"podcast_download", bulk_download_selected_cb, NULL, false};
+	popover_show(lv_event_get_current_target(e), actions, count);
 }
 
 static void bulk_close_cb(lv_event_t *e) {
@@ -3959,8 +4043,8 @@ void podcastpage_init(gui_config_t *cfg) {
 	// Its slot is decided by refresh_corner_buttons() on every list, since it
 	// is the only button that shares its list with nothing.
 	order_btn = corner_button(cfg, 3, &icon_sort_date_new, order_cb);
-	sel_follow_btn = corner_button(cfg, 0, &icon_star_plus, bulk_follow_cb);
-	sel_heard_btn = corner_button(cfg, 1, &icon_circle_check, bulk_heard_cb);
+	sel_follow_btn = corner_button(cfg, 0, &icon_heart_outline, bulk_follow_cb);
+	sel_heard_btn = corner_button(cfg, 1, &icon_circle_check, bulk_episode_menu_cb);
 	sel_close_btn = corner_button(cfg, 2, &icon_close, bulk_close_cb);
 	lv_obj_set_hidden(sel_follow_btn, true);
 	lv_obj_set_hidden(sel_heard_btn, true);

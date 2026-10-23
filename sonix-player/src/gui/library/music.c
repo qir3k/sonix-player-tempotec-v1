@@ -151,88 +151,6 @@ static void scan_cb(lv_event_t *e) {
 	libraryscan_choose_folders();
 }
 
-static void compact_playlists_action(void *unused) {
-	(void)unused;
-	open_playlists();
-}
-static void compact_favourites_action(void *unused) {
-	(void)unused;
-	favourites_cb(NULL);
-}
-static void compact_search_action(void *unused) {
-	(void)unused;
-	search_cb(NULL);
-}
-static void compact_all_tracks_action(void *unused) {
-	(void)unused;
-	open_all_tracks();
-}
-static void compact_albums_action(void *unused) {
-	(void)unused;
-	open_albums();
-}
-static void compact_artists_action(void *unused) {
-	(void)unused;
-	open_artists();
-}
-static void compact_album_artists_action(void *unused) {
-	(void)unused;
-	open_album_artists();
-}
-static void compact_genres_action(void *unused) {
-	(void)unused;
-	open_genres();
-}
-static void compact_years_action(void *unused) {
-	(void)unused;
-	open_years();
-}
-static void compact_most_played_action(void *unused) {
-	(void)unused;
-	open_most_played();
-}
-static void compact_browse_action(void *unused) {
-	(void)unused;
-	open_browse();
-}
-
-static popover_item_t popover_item_for_tile(music_tile_id_t id) {
-	switch (id) {
-	case MUSIC_TILE_ALL_TRACKS:
-		return (popover_item_t){"music_all_tracks", compact_all_tracks_action, NULL, false};
-	case MUSIC_TILE_ALBUMS:
-		return (popover_item_t){"albums", compact_albums_action, NULL, false};
-	case MUSIC_TILE_ARTISTS:
-		return (popover_item_t){"artists", compact_artists_action, NULL, false};
-	case MUSIC_TILE_ALBUM_ARTISTS:
-		return (popover_item_t){"music_album_artists", compact_album_artists_action, NULL, false};
-	case MUSIC_TILE_GENRES:
-		return (popover_item_t){"music_genres", compact_genres_action, NULL, false};
-	case MUSIC_TILE_YEARS:
-		return (popover_item_t){"music_years", compact_years_action, NULL, false};
-	case MUSIC_TILE_PLAYLISTS:
-		return (popover_item_t){"playlists", compact_playlists_action, NULL, false};
-	case MUSIC_TILE_MOST_PLAYED:
-		return (popover_item_t){"music_most_played", compact_most_played_action, NULL, false};
-	case MUSIC_TILE_BROWSE:
-	default:
-		return (popover_item_t){"music_browse", compact_browse_action, NULL, false};
-	}
-}
-
-static void compact_more_cb(lv_event_t *e) {
-	music_tile_id_t active[MUSIC_TILE_COUNT];
-	int active_n = musicsettings_main_tiles(active, MUSIC_TILE_COUNT);
-	popover_item_t items[MUSIC_TILE_COUNT + 2];
-	int n = 0;
-	for (int i = 0; i < active_n && n < MUSIC_TILE_COUNT; i++) {
-		items[n++] = popover_item_for_tile(active[i]);
-	}
-	items[n++] = (popover_item_t){"favourites", compact_favourites_action, NULL, false};
-	items[n++] = (popover_item_t){"search", compact_search_action, NULL, false};
-	popover_show(lv_event_get_target(e), items, n);
-}
-
 static void music_recent_refresh(void);
 static void music_update_visibility(void);
 
@@ -826,15 +744,13 @@ void music_init(gui_config_t *cfg) {
 	tile_grid = gridpage_build(music_screen, cfg, entries, count, 2, 3, true);
 
 	bool compact_header = cfg->screen_width < 320;
-	settingsrow_title_corner_slots(settingsrow_title(music_screen, cfg, "music"), cfg, compact_header ? 2 : 4);
+	settingsrow_title_corner_slots(settingsrow_title(music_screen, cfg, "music"), cfg, compact_header ? 1 : 4);
 
 	lv_obj_t *settings_btn = corner_button(cfg, 0, &icon_music_settings);
 	lv_obj_add_event_cb(settings_btn, switch_screen_cb, LV_EVENT_CLICKED, musicsettings_screen);
 
 	if (compact_header) {
 		playlists_icon = NULL;
-		lv_obj_t *more_btn = corner_button(cfg, 1, &icon_list_music);
-		lv_obj_add_event_cb(more_btn, compact_more_cb, LV_EVENT_CLICKED, NULL);
 	} else {
 		lv_obj_t *playlists_btn = corner_button(cfg, 1, &icon_list_music);
 		playlists_icon = lv_obj_get_child(playlists_btn, 0);
