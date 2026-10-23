@@ -2,6 +2,7 @@
 
 #include "src/gui/shell/popover.h"
 #include "src/system/input/kblayout.h"
+#include "src/system/input/swipedict.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -25,6 +26,13 @@
 // ---------------------------------------------------------------------------
 
 #define KB_MAX_KEYS KB_LAYOUT_MAX_KEYS
+
+// The most points a swipe keeps. A word is a few hundred pixels of finger on
+// this panel, and a point every three; past this the path is halved, so a long
+// swipe still ends under the finger instead of at its first half.
+#define KB_SWIPE_POINTS 96
+// A press that travels less than this is a tap, and taps are keys.
+#define KB_SWIPE_MIN_PX 18
 
 // A letter key's event user data is the instance and the index packed
 // together, because LVGL gives a callback exactly one pointer. One set per
@@ -159,6 +167,14 @@ struct keyboard_s {
 	int variant_count;
 	int variant_sel; // -1 while the strip is closed
 	bool variant_swallow;
+
+	// Swipe typing: the finger's path across the letter keys, sampled as it
+	// moves. `swipe_used` says the press it belongs to was a swipe, so the
+	// click that ends it must not also type the key it was let go over.
+	swipe_point_t swipe_pts[KB_SWIPE_POINTS];
+	int swipe_n;
+	int swipe_travelled; // Manhattan px, to tell a word from a tap
+	bool swipe_used;
 
 	bool mode_long_pressed; // the "123" key opened the layout menu; eat its click
 	bool shift;
@@ -559,6 +575,142 @@ static void kb_type(keyboard_t *kb, const char *text) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// swipe typing
+//
+// A finger dragged across the letter keys, without stopping on any of them, is
+// a word: the keys it crossed are read as the letters it meant. The path is
+// sampled while the press lasts (LVGL keeps sending PRESSING to the key that was
+// pressed, wherever the finger goes) and handed to swipedict on the release.
+//
+// A press that does not travel far enough is a tap and is ignored here, so the
+// keyboard types key by key exactly as before when swipe typing is off, when the
+// symbol page is up, while the accent strip is open, and on the T9 panel -- the
+// path is only meaningful on three rows of separate letters.
+// ---------------------------------------------------------------------------
+
+static bool kb_swipe_enabled(void) {
+	// On unless it was turned off. A swipe that finds no dictionary types
+	// nothing, so the setting being on costs nothing on a card with no lists.
+	return config_get_int("keyboard", "swipe", 1) != 0;
+}
+
+static void kb_swipe_type(keyboard_t *kb, int path_count) {
+	if (path_count < 2) {
+		return;
+	}
+
+	// The keys that are on screen, in the coordinates the pointer reports.
+	swipe_key_t keys[KB_MAX_KEYS];
+	int count = 0;
+	for (int i = 0; i < kb->key_count && count < KB_MAX_KEYS; i++) {
+		lv_obj_t *btn = kb->letter_btn[i];
+		if (!btn || lv_obj_is_hidden(btn)) {
+			continue;
+		}
+		const char *text = kb_key_text(kb, kb->key_row[i], kb->key_col[i]);
+		if (!text || !text[0] || text[1] != '\0') {
+			continue; // a digit or a symbol page's cap: not a letter to swipe over
+		}
+		lv_area_t area;
+		lv_obj_get_coords(btn, &area);
+		snprintf(keys[count].cap, sizeof(keys[count].cap), "%s", text);
+		keys[count].cx = (area.x1 + area.x2) / 2;
+		keys[count].cy = (area.y1 + area.y2) / 2;
+		count++;
+	}
+
+	char word[48];
+	if (count < 2 || !swipedict_decode(keys, count, kb->swipe_pts, path_count, word, sizeof(word))) {
+		return;
+	}
+
+	// Shift and caps mean the same as they do for a tapped letter: the word
+	// starts with a capital. Only an ASCII first letter is raised here; the
+	// accented ones are entered by holding their key, not by swiping.
+	if ((kb->shift || kb->caps) && word[0] >= 'a' && word[0] <= 'z') {
+		word[0] = (char)(word[0] - 'a' + 'A');
+	}
+
+	kb_type(kb, word);
+	kb_type(kb, " "); // a swipe draws a whole word, so the space after it comes with it
+}
+
+static void kb_gesture_cb(lv_event_t *e) {
+	key_ref_t *ref = lv_event_get_user_data(e);
+	if (!ref || !ref->kb || !ref->kb->field) {
+		return;
+	}
+	keyboard_t *kb = ref->kb;
+	lv_event_code_t code = lv_event_get_code(e);
+
+	if (code == LV_EVENT_PRESSED) {
+		// A fresh press, whatever the last one left behind.
+		kb->swipe_n = 0;
+		kb->swipe_travelled = 0;
+		kb->swipe_used = false;
+		if (!kb_swipe_enabled() || kb->symbols || kb->variant_sel >= 0) {
+			return;
+		}
+		if (!kb->qwerty || lv_obj_is_hidden(kb->qwerty)) {
+			return; // the T9 panel: a path over nine keys is not a word
+		}
+		lv_indev_t *indev = lv_indev_active();
+		if (!indev) {
+			return;
+		}
+		lv_point_t point;
+		lv_indev_get_point(indev, &point);
+		kb->swipe_pts[0] = (swipe_point_t){point.x, point.y};
+		kb->swipe_n = 1;
+		return;
+	}
+
+	if (kb->swipe_n <= 0) {
+		return;
+	}
+
+	if (code == LV_EVENT_PRESSING) {
+		if (kb->variant_sel >= 0) {
+			// The accent strip opened under this press: it owns the finger now.
+			kb->swipe_n = 0;
+			return;
+		}
+		lv_indev_t *indev = lv_indev_active();
+		if (!indev) {
+			return;
+		}
+		lv_point_t point;
+		lv_indev_get_point(indev, &point);
+		swipe_point_t last = kb->swipe_pts[kb->swipe_n - 1];
+		int dx = point.x > last.x ? point.x - last.x : last.x - point.x;
+		int dy = point.y > last.y ? point.y - last.y : last.y - point.y;
+		if (dx + dy < 3) {
+			return; // closer than a sample is worth
+		}
+		kb->swipe_travelled += dx + dy;
+		if (kb->swipe_n == KB_SWIPE_POINTS) {
+			for (int i = 1; i < kb->swipe_n / 2; i++) {
+				kb->swipe_pts[i] = kb->swipe_pts[i * 2];
+			}
+			kb->swipe_n = kb->swipe_n / 2;
+		}
+		kb->swipe_pts[kb->swipe_n++] = (swipe_point_t){point.x, point.y};
+		return;
+	}
+
+	if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+		int path_count = kb->swipe_n;
+		int travelled = kb->swipe_travelled;
+		kb->swipe_n = 0;
+		if (travelled < KB_SWIPE_MIN_PX || kb->variant_sel >= 0) {
+			return; // a tap, or a letter picked out of the accent strip
+		}
+		kb->swipe_used = true; // the click that follows must not type its key
+		kb_swipe_type(kb, path_count);
+	}
+}
+
 static void kb_letter_cb(lv_event_t *e) {
 	key_ref_t *ref = lv_event_get_user_data(e);
 	if (!ref || !ref->kb->field) {
@@ -570,6 +722,10 @@ static void kb_letter_cb(lv_event_t *e) {
 		return;
 	}
 
+	if (kb->swipe_used) {
+		kb->swipe_used = false; // a swipe wrote its word on release
+		return;
+	}
 	if (kb->variant_swallow) {
 		kb->variant_swallow = false; // the hold wrote its letter on release
 		return;
@@ -1051,6 +1207,12 @@ keyboard_t *keyboard_create(lv_obj_t *parent, int width, int height, lv_obj_t *f
 		kb->letter_btn[index] = kb_make_key(kb->rows[0], 0, kb_letter_cb, &kb->refs[index]);
 		kb->letter_label[index] = kb_key_label(kb->letter_btn[index]);
 		kb_attach_preview(kb->letter_btn[index], &kb->refs[index]);
+		// Ahead of the accent strip's handlers: every press starts out as a
+		// possible swipe, and the strip takes it over only if the key is held.
+		lv_obj_add_event_cb(kb->letter_btn[index], kb_gesture_cb, LV_EVENT_PRESSED, &kb->refs[index]);
+		lv_obj_add_event_cb(kb->letter_btn[index], kb_gesture_cb, LV_EVENT_PRESSING, &kb->refs[index]);
+		lv_obj_add_event_cb(kb->letter_btn[index], kb_gesture_cb, LV_EVENT_RELEASED, &kb->refs[index]);
+		lv_obj_add_event_cb(kb->letter_btn[index], kb_gesture_cb, LV_EVENT_PRESS_LOST, &kb->refs[index]);
 		lv_obj_add_event_cb(kb->letter_btn[index], kb_variants_cb, LV_EVENT_PRESSED, &kb->refs[index]);
 		lv_obj_add_event_cb(kb->letter_btn[index], kb_variants_cb, LV_EVENT_LONG_PRESSED, &kb->refs[index]);
 		lv_obj_add_event_cb(kb->letter_btn[index], kb_variants_cb, LV_EVENT_PRESSING, &kb->refs[index]);

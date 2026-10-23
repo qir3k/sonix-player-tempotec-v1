@@ -85,6 +85,31 @@ adb shell "SONIX_FULL_LOG=1     sh /tmp/sonix-bugreport.sh"    # whole logs, not
 | Wi-Fi, DLNA, AirPlay, Wi-Fi file transfer | The bundle's network section. It prints `wpa_cli status` and the network list — no PSKs. Say which access point band and what the other end is. |
 | Audio glitches, wrong output, DAC | The bundle's audio section (`/proc/asound`, mixer). Add the Bluetooth log if it happens over Bluetooth. |
 | Battery, charging, standby, power-off | The player log around the event, with the time you plugged or unplugged it. |
+| Hesitation, lag, a page that takes seconds to answer | The log around the moment, and the time it happened: a slow pass is written down as `ui: ...` (see below). Say what you were doing -- the key, the page, whether music was playing. |
+
+## The interface's own timing (`ui:` lines)
+
+The whole interface runs in passes of one function: reading the touch, running
+whatever timers are due, drawing the frame. A pass that takes more than 120 ms
+is a hesitation a hand can feel, so each one writes a line naming what ran in it
+(no more than one line a second):
+
+```
+ui: a pass of the event loop took 342 ms (next wake in 0 ms), screen 0x2f1c8 240x320
+ui:   timer period 120 ms, callback 0x4a1b90, user (nil), ran 3 ms ago
+```
+
+The **screen**, the **period** of each timer that ran and its **callback** are
+what identify it. The callback address is a place in the binary: the build keeps
+an unstripped copy (`sonix_player_debug`) beside the one that goes on the device,
+and `addr2line -f -e sonix_player_debug 0x4a1b90` gives the function's name. If
+the addresses look nothing like that file, the firmware was built as position
+independent and the offset is what is needed -- send the lines as they are and
+they can be matched by the person who built it.
+
+A `watchdog:` dump that follows one of these also carries
+`ui: N slow event-loop passes so far, the last took Y ms`, which says whether the
+device had been hesitating for a while or stopped in a single pass.
 
 ## Always write down, next to the log
 

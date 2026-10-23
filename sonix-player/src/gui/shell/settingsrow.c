@@ -116,8 +116,12 @@ lv_obj_t *settingsrow_title(lv_obj_t *screen, gui_config_t *cfg, const char *tex
 	// instead.
 	lv_obj_set_height(label, lv_font_get_line_height(&font_ui_32));
 	fit_title(label, cfg->screen_width - left - cfg->padding - button - air);
+	// Four pixels higher than it used to sit: the title's line box carries more
+	// air above the capitals than the chevron does above its own, so aligning
+	// their tops put the words a few pixels low against the "<". The header is
+	// one row, and the words belong on the chevron's middle.
 	lv_obj_align(label, LV_ALIGN_TOP_LEFT, left,
-				 cfg->top_bar_height + cfg->padding + (cfg->screen_width < 320 ? 6 : 10));
+				 cfg->top_bar_height + cfg->padding + (cfg->screen_width < 320 ? 2 : 6));
 
 	if (title_count == 0) {
 		fonts_register_change(refit_titles);
@@ -131,7 +135,7 @@ lv_obj_t *settingsrow_title(lv_obj_t *screen, gui_config_t *cfg, const char *tex
 }
 
 int settingsrow_content_top(gui_config_t *cfg) {
-	return cfg->top_bar_height + cfg->padding + settingsrow_corner_button_size(cfg) + cfg->padding;
+	return cfg->top_bar_height + cfg->padding + settingsrow_corner_button_size(cfg) + bp_pick(4, 8);
 }
 
 // Every page built by settingsrow_page() reopens scrolled to the top; a long
@@ -166,7 +170,11 @@ lv_obj_t *settingsrow_page(lv_obj_t *screen, gui_config_t *cfg, const char *titl
 	lv_obj_set_style_border_width(container, 0, 0);
 	lv_obj_set_style_radius(container, 0, 0);
 	lv_obj_set_style_pad_hor(container, cfg->padding, 0);
-	lv_obj_set_style_pad_bottom(container, compact_rows() ? cfg->padding : 0, 0);
+	// The same air above the first row as under the last one: the lists built
+	// here used to begin flush against the heading, which reads as the first row
+	// being cut off rather than as the top of a list.
+	lv_obj_set_style_pad_top(container, bp_pick(4, 8), 0);
+	lv_obj_set_style_pad_bottom(container, bp_pick(4, 8), 0);
 	lv_obj_set_scroll_dir(container, LV_DIR_VER);
 	lv_obj_set_scrollbar_mode(container, LV_SCROLLBAR_MODE_AUTO);
 	lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
@@ -289,6 +297,7 @@ static int leading_icon_count;
 static int caption_count;
 static bool settingsrow_refresh_registered;
 static void fit_row(lv_obj_t *row);
+static lv_font_t *smallest_row_font(void);
 static void settingsrow_refresh_theme(void);
 
 static lv_obj_t *settingsrow_leading_icon(lv_obj_t *row) {
@@ -328,13 +337,39 @@ static void fit_row(lv_obj_t *row) {
 		return;
 	}
 
-	int32_t avail = lv_obj_get_content_width(row);
+	int32_t content = lv_obj_get_content_width(row);
+	int32_t avail = content;
 
 	// The right side holds either the chevron or the value, and neither space
 	// belongs to the name. The value counts as much as the chevron: a name like
 	// Longer translated names can run into the value beside them at 24 px.
+	//
+	// A value is secondary, so it is the one that gives way first: the name
+	// keeps the room it needs at its smallest step, and the value is cut with
+	// the ellipsis past what is left. Two fifths of the row is the floor for the
+	// value -- past that there is nothing left to read either way. "Trending
+	// region" against "Interface language" left the two words lying on top of
+	// each other on the V1's 212 px of row.
 	lv_obj_t *right = lv_obj_get_child(row, 1);
 	if (right) {
+		if (lv_obj_check_type(right, &lv_label_class)) {
+			int32_t cap = content * 2 / 5;
+			const char *name = lv_label_get_text(label);
+			if (name && name[0]) {
+				lv_point_t want;
+				lv_text_get_size(&want, name, smallest_row_font(), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+				int32_t room = content - want.x - ROW_LABEL_GAP;
+				if (room > cap) {
+					cap = room;
+				}
+			}
+			fit_row_label(right, cap);
+			if (cap > 0 && lv_obj_get_width(right) > cap) {
+				lv_label_set_long_mode(right, LV_LABEL_LONG_DOT);
+				lv_obj_set_width(right, cap);
+				lv_obj_align(right, LV_ALIGN_RIGHT_MID, 0, 0);
+			}
+		}
 		avail -= lv_obj_get_width(right) + ROW_LABEL_GAP;
 	}
 
@@ -376,7 +411,16 @@ static void fit_row(lv_obj_t *row) {
 	}
 	lv_obj_align(label, LV_ALIGN_LEFT_MID, leading_width, 0);
 	fit_row_label(label, avail);
+	// Past that, the name is cut with the ellipsis on its one line: a wrapped
+	// name would take a second line in a row that has height for one, and run
+	// out over the value beside it.
+	if (avail > 0) {
+		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+		lv_obj_set_width(label, avail);
+	}
 }
+
+static lv_font_t *smallest_row_font(void) { return compact_rows() ? &font_ui_14 : &font_ui_20; }
 
 static void row_resized_cb(lv_event_t *e) { fit_row(lv_event_get_target(e)); }
 

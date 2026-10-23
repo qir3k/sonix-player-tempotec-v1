@@ -17,6 +17,7 @@
 #include "src/gui/shell/gridpage.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/main_menu.h"
+#include "src/gui/shell/menuorder.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -87,21 +88,7 @@ static void more_list_add_entry(const grid_entry_t *entry) {
 // short V1 screen, where the bottom of a long list otherwise falls below the
 // initial viewport, then everything else in declaration order.
 static void more_list_add_entries(const grid_entry_t *entries, int count) {
-	static const char *const priority_labels[] = {"dac", "file_explorer"};
-
-	for (size_t p = 0; p < sizeof(priority_labels) / sizeof(priority_labels[0]); p++) {
-		for (int i = 0; i < count; i++) {
-			if (strcmp(entries[i].label, priority_labels[p]) == 0) {
-				more_list_add_entry(&entries[i]);
-				break;
-			}
-		}
-	}
-
 	for (int i = 0; i < count; i++) {
-		if (strcmp(entries[i].label, "dac") == 0 || strcmp(entries[i].label, "file_explorer") == 0) {
-			continue;
-		}
 		more_list_add_entry(&entries[i]);
 	}
 }
@@ -121,7 +108,7 @@ static void more_list_add_entries(const grid_entry_t *entries, int count) {
 // tiles stay big enough for the 112 px menu art.
 #define MORE_GRID_ROWS 3
 
-static int more_grid_columns(int count) { return count > 2 * MORE_GRID_ROWS ? 3 : 2; }
+static int more_grid_columns(int count) { return count > 2 * MORE_GRID_ROWS ? 3 : (count == 1 ? 1 : 2); }
 
 // Everything More holds. The array stays constant; more_entries_build() copies
 // it and swaps the library entry for whichever of the two libraries the home
@@ -163,17 +150,29 @@ static const grid_entry_t MORE_ENTRIES[] = {
 static int more_entries_build(grid_entry_t *out, int max) {
 	int count = 0;
 	bool books_on_home = main_menu_books();
-	int base_count = (int)(sizeof(MORE_ENTRIES) / sizeof(MORE_ENTRIES[0]));
-
-	for (int i = 0; i < base_count && count < max; i++) {
-		out[count] = MORE_ENTRIES[i];
-		if (books_on_home && strcmp(MORE_ENTRIES[i].label, "books") == 0) {
-			out[count].label = "audiobooks";
-			out[count].icon = &icon_menu_audiobooks;
-			out[count].target = NULL;
-			out[count].action = audiobooks_open;
+	int order[16];
+	bool visible[16];
+	int ordered = menuorder_load(MENUORDER_MORE, order, 16, visible);
+	for (int i = 0; i < ordered && count < max; i++) {
+		int id = order[i];
+		if (!visible[id]) {
+			continue;
 		}
-		count++;
+		const char *slug = menuorder_slug(MENUORDER_MORE, id);
+		for (size_t entry = 0; entry < sizeof(MORE_ENTRIES) / sizeof(MORE_ENTRIES[0]); entry++) {
+			if (strcmp(MORE_ENTRIES[entry].label, slug) != 0) {
+				continue;
+			}
+			out[count] = MORE_ENTRIES[entry];
+			if (books_on_home && strcmp(slug, "books") == 0) {
+				out[count].label = "audiobooks";
+				out[count].icon = &icon_menu_audiobooks;
+				out[count].target = NULL;
+				out[count].action = audiobooks_open;
+			}
+			count++;
+			break;
+		}
 	}
 	return count;
 }
@@ -191,13 +190,17 @@ static void more_entries_refresh(void) {
 	more_audiobooks_shown = main_menu_books();
 
 	if (more_grid) {
-		gridpage_replace_entries(more_grid, more_cfg, entries, count, more_grid_columns(count), MORE_GRID_ROWS);
+		int columns = more_grid_columns(count);
+		int rows = LV_MAX((count + columns - 1) / columns, 1);
+		gridpage_replace_entries(more_grid, more_cfg, entries, count, columns, rows);
 	}
 	if (more_list) {
 		lv_obj_clean(more_list);
 		more_list_add_entries(entries, count);
 	}
 }
+
+void morepage_refresh_layout(void) { more_entries_refresh(); }
 
 // More is built once, at startup, while the home-screen choice lives on the
 // Appearance page and can change later. Entering the page is the moment to

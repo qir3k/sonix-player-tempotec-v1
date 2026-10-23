@@ -288,19 +288,36 @@ int podcast_search(const char *query, podcast_feed_t *out, int max) {
 	return fetch_list(path, "feeds", out, max, false);
 }
 
+const char *podcast_trending_lang(void) {
+	const char *chosen = config_get("podcast", "trending_lang", "");
+	return chosen ? chosen : "";
+}
+
+void podcast_set_trending_lang(const char *code) {
+	config_set("podcast", "trending_lang", code && code[0] ? code : "");
+	config_save();
+}
+
 int podcast_trending(podcast_feed_t *out, int max) {
 	if (!out || max <= 0) {
 		return -1;
 	}
 	char path[128];
-	// The interface language alone, not ",en": with English appended the chart
-	// filled up with American podcasts, which always trend, and the requested
-	// language disappeared among them. When that language yields nothing at
-	// all, fall back to English: a foreign chart beats an empty page.
+	// One language, not a list: with ",en" appended the chart filled up with
+	// American podcasts, which always trend, and the requested language
+	// disappeared among them. The language is the region the reader chose -- the
+	// catalogue filters its chart by language and offers no country filter -- and
+	// the interface's own when nothing was chosen. When the chosen language
+	// yields nothing at all, fall back to English: a foreign chart beats an empty
+	// page.
+	const char *want = podcast_trending_lang();
+	if (!want[0]) {
+		want = interface_language_code();
+	}
 	snprintf(path, sizeof(path), "/podcasts/trending?max=%d&lang=%s",
-			 max > PODCAST_API_MAX ? PODCAST_API_MAX : max, interface_language_code());
+			 max > PODCAST_API_MAX ? PODCAST_API_MAX : max, want);
 	int n = fetch_list(path, "feeds", out, max, false);
-	if (n == 0 && strcmp(interface_language_code(), "en") != 0) {
+	if (n == 0 && strcmp(want, "en") != 0) {
 		snprintf(path, sizeof(path), "/podcasts/trending?max=%d&lang=en",
 				 max > PODCAST_API_MAX ? PODCAST_API_MAX : max);
 		n = fetch_list(path, "feeds", out, max, false);

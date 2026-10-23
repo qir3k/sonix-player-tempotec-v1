@@ -12,6 +12,7 @@
 #include "src/gui/shell/corners.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/main_menu.h"
+#include "src/gui/shell/menuarrange.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -32,8 +33,6 @@ static lv_obj_t *btn_clock[4]; // left / centre / right / hidden
 static lv_obj_t *btn_accent[THEME_ACCENT_COUNT]; // the coloured circles
 static lv_obj_t *tint_toggle;
 static lv_obj_t *main_menu_icons_toggle;
-static lv_obj_t *main_menu_books_toggle;
-static lv_obj_t *main_menu_browse_toggle;
 static lv_obj_t *battery_percent_toggle;
 static lv_obj_t *rounded_corners_toggle;
 static lv_obj_t *text_size_pill[FONTS_TEXT_COUNT]; // normal / large / small
@@ -68,16 +67,6 @@ static void dynamic_tint_cb(lv_event_t *e) {
 static void main_menu_icons_cb(lv_event_t *e) {
 	(void)e;
 	main_menu_set_icons_only(lv_obj_has_state(main_menu_icons_toggle, LV_STATE_CHECKED));
-}
-
-static void main_menu_books_cb(lv_event_t *e) {
-	(void)e;
-	main_menu_set_books(lv_obj_has_state(main_menu_books_toggle, LV_STATE_CHECKED));
-}
-
-static void main_menu_browse_cb(lv_event_t *e) {
-	(void)e;
-	main_menu_set_browse(lv_obj_has_state(main_menu_browse_toggle, LV_STATE_CHECKED));
 }
 
 static void refresh_text_size_pills(void) {
@@ -646,10 +635,7 @@ void appearance_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_font(menu_note, &font_ui_22, 0);
 	lv_label_set_text(menu_note, tr("appearance_main_menu_icons_only_note"));
 
-	settingsrow_toggle(container, "appearance_home_books", &main_menu_books_toggle, main_menu_books_cb);
-	if (main_menu_books()) lv_obj_add_state(main_menu_books_toggle, LV_STATE_CHECKED);
-	settingsrow_toggle(container, "appearance_home_browse", &main_menu_browse_toggle, main_menu_browse_cb);
-	if (main_menu_browse()) lv_obj_add_state(main_menu_browse_toggle, LV_STATE_CHECKED);
+	settingsrow_add(container, "main_menu", NULL, switch_screen_cb, menuarrange_screen);
 
 	// A second card: which picture the next power-on shows. Unlike every
 	// other choice on this page it is not only a config value -- it also

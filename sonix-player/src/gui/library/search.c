@@ -46,7 +46,11 @@ lv_obj_t *search_screen;
 #define SEARCH_ROW_GAP 8
 #define SEARCH_PITCH (SEARCH_ROW_H + SEARCH_ROW_GAP)
 #define SEARCH_THUMB_POLL_MS 200
-#define SEARCH_PILLS_H 56
+// One line tall. The pills used to be two lines -- the name over the count --
+// because three of them had to share the panel's width; they are as wide as
+// their own text now and the row scrolls sideways, so the height is one line
+// and the results get the screen (see pill_create).
+#define SEARCH_PILLS_H 40
 #define SEARCH_PILLS_GAP 10
 
 // Rows on screen at once on the tallest panel, plus one beyond each edge. One
@@ -606,23 +610,25 @@ static void pill_clicked_cb(lv_event_t *e) {
 static lv_obj_t *pill_create(category_t cat) {
 	lv_obj_t *btn = lv_btn_create(pills);
 	lv_obj_set_height(btn, SEARCH_PILLS_H);
-	lv_obj_set_flex_grow(btn, 1);
+	// As wide as its own text, not a third of the panel: the row scrolls
+	// sideways for the rest (see the pills container in search_init). Sharing
+	// the width is what forced the name over the count, and two lines of pill
+	// over every search is two rows of results nobody gets to see. "Исполнители
+	// 1234" is a wider pill now instead of a wrapped one.
+	lv_obj_set_width(btn, LV_SIZE_CONTENT);
 	lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_shadow_width(btn, 0, 0);
 	lv_obj_set_style_border_width(btn, 0, 0);
-	lv_obj_set_style_pad_hor(btn, 8, 0);
+	lv_obj_set_style_pad_hor(btn, 11, 0);
 	lv_obj_set_style_pad_ver(btn, 4, 0);
-	lv_obj_set_style_pad_row(btn, 0, 0);
-	lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_style_pad_column(btn, 5, 0);
+	lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
 	lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_scrollable(btn, false);
 	lv_obj_add_event_cb(btn, pill_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)cat);
 
-	// The name over the number of hits: two short lines fit every language,
-	// where "Исполнители (1234)" on one would not.
 	pill_name[cat] = lv_label_create(btn);
 	lv_label_set_text(pill_name[cat], tr(CAT_LABEL[cat]));
-	lv_label_set_long_mode(pill_name[cat], LV_LABEL_LONG_DOT);
-	lv_obj_set_style_max_width(pill_name[cat], lv_pct(100), 0);
 	lv_obj_set_style_text_font(pill_name[cat], &font_ui_20, 0);
 
 	pill_count[cat] = lv_label_create(btn);
@@ -879,8 +885,13 @@ void search_init(gui_config_t *cfg) {
 	lv_obj_set_style_bg_opa(pills, 0, 0);
 	lv_obj_set_style_border_width(pills, 0, 0);
 	lv_obj_set_style_pad_all(pills, 0, 0);
-	lv_obj_set_style_pad_column(pills, 10, 0);
-	lv_obj_set_scrollable(pills, false);
+	lv_obj_set_style_pad_column(pills, 8, 0);
+	// Sideways only, and with no bar: the three categories are one row that
+	// keeps its own order, and dragging it is how the third is reached on a
+	// panel too narrow to hold all three at once.
+	lv_obj_set_scrollable(pills, true);
+	lv_obj_set_scroll_dir(pills, LV_DIR_HOR);
+	lv_obj_set_scrollbar_mode(pills, LV_SCROLLBAR_MODE_OFF);
 	lv_obj_set_event_bubble(pills, true);
 	lv_obj_set_flex_flow(pills, LV_FLEX_FLOW_ROW);
 	for (int i = 0; i < CAT_COUNT; i++) {

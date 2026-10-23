@@ -6,6 +6,10 @@
 
 - **The equalisers on the DAC page** — EQ, PEQ and MSEB as one card of pills, reachable while DAC mode holds the screen.
 - **Podcasts: heard marks and the order of the list** — an episode played to its end is ticked and dimmed, kept by episode id in `podcast.db`; a long press marks one by hand; the heading's order button turns the list round, and both episode lists share the setting.
+- **The Tidal tab and the Podcasts tab, rebuilt for the 240 px panel** — the V1's rows and pills, a search page with history, the status bar kept clear, and both lists read back from a cache on the card instead of rebuilt from the network on every visit.
+- **The podcast chart from your own region** — Podcast settings → Region picks the language the trending list is asked for, so the pill shows what is trending where you are rather than worldwide.
+- **An interface that says when it hesitates** — a pass of the event loop that takes over 120 ms writes down what ran in it, so a report of "it lags for a while" comes with the screen, the timer period and the callback that caused it ([how to read it](docs/collecting-logs.md#the-interfaces-own-timing-ui-lines)).
+- **Swipe typing, in English and Polish** — drag a finger from letter to letter and the word is typed, with the dictionaries read from `<card>/Dictionaries/` rather than built in; Settings → More switches it on and picks the language, which also decides which accent a held key offers first.
 - **One favourite mark** — the heart, everywhere: the player in every layout, the control centre, the Music page and selection mode.
 - **A trimmed personal build** — a branch that ships English and Polish with MiSans only, and builds its own image. [How it is kept apart from the upstream tree](https://github.com/qir3k/sonix-player-tempotec-v1/blob/personal/docs/PERSONAL-BUILD.md).
 
@@ -226,7 +230,7 @@ It is a local music library and file browser with album artwork, playlists, lyri
 
 Local audio decoder inputs include WAV, FLAC, MP3, Ogg Vorbis, Opus, M4A/M4B/MP4, AAC, ALAC, WavPack, APE, AIFF/AIFC, CAF and DSD (DSF/DFF) files. DSP features include a 10-band graphic equalizer, parametric EQ, MSEB, crossfeed, channel balance and ReplayGain. The graphic EQ, PEQ and MSEB also run on internet radio stations.
 
-The interface font is a setting (Settings → Appearance → Font): MiSans, Neon 80s and Roboto (Roboto Mono on the R3 Pro II), plus any `.ttf`/`.otf` file put in the `Fonts` folder on the card. Whatever a face is missing — Cyrillic, Greek, Hangul, kanji, Arabic — is drawn by MiSans behind it, so the whole interface stays legible in every language. The added family is under the SIL Open Font License; see [`sonix-player/assets/fonts/FONT-LICENSES.txt`](sonix-player/assets/fonts/FONT-LICENSES.txt) for the copyright notices and the exact files.
+The interface font is a setting (Settings → Appearance → Font): MiSans, Neon 80s and Roboto, plus any `.ttf`/`.otf` file put in the `Fonts` folder on the card. Whatever a face is missing — Cyrillic, Greek, Hangul, kanji, Arabic — is drawn by MiSans behind it, so the whole interface stays legible in every language. The added family is under the SIL Open Font License; see [`sonix-player/assets/fonts/FONT-LICENSES.txt`](sonix-player/assets/fonts/FONT-LICENSES.txt) for the copyright notices and the exact files.
 
 The boot screen is a setting too (Settings → Appearance → Boot screen): **Retrospace**, the default, **Space**, **Travelling in space**, **Stock**, the firmware's own light and dark pictures, or **Custom** — a JPEG or PNG of your own from the `Bootlogo` folder at the root of the card, chosen from the list under **Custom picture**. It is scaled to fill the panel and cropped where it overflows, and copied into the player, so it boots even with the card out. The choice cannot live in the config — the script that draws the logo runs before any filesystem holding a config is mounted — so it is written to the same flash marker the theme uses, and appears from the next power-on.
 
@@ -320,9 +324,12 @@ See [setup, design, limitations and the V1 validation checklist](docs/subsonic.m
 sudo apt install build-essential pkg-config libsdl2-dev libfreetype-dev \
     libopusfile-dev libwavpack-dev libasound2-dev
 cd sonix-player
-make host                                  # ./sonix_player_host, 480x720
-SONIX_PANEL=240x320 ./sonix_player_host    # the V1's layout and fonts
+make host            # ./sonix_player_host, at the V1's 240x320
+./sonix_player_host
 ```
+
+The simulator draws the same profile as the device: the 480-pixel layout the
+upstream tree also carried is not built here any more.
 
 **The device binary (target).** Needs the MIPS toolchain built from `sonix-player/rockboxdev/`; the workflow caches it, and building it by hand is a long first run.
 

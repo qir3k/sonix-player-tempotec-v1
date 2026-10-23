@@ -320,11 +320,6 @@ static double restart_fresh_pos;
 // ports, so the choice is between the balanced one and either of the
 // single-ended pair.
 void audio_force_output_reinit_after_resume(void) {
-	// No HBC3000 on the CS43131 board: nothing went down, nothing to re-init.
-	if (alsa_board_is_cs43131()) {
-		alsa_suspend_restore();
-		return;
-	}
 	// 1 = 3.5 mm line out, 2 = 3.5 mm headphone, 3 = 4.4 mm balanced.
 	int x = detect_output();
 	int y = output_reinit_partner(x);
@@ -366,9 +361,6 @@ void audio_force_output_reinit_after_resume(void) {
 // optional -- writing a route under a live stream stalls the DMA on this driver,
 // and route 0 powers the codec down, which under a running stream is a reboot.
 void audio_park_output_before_suspend(void) {
-	if (alsa_board_is_cs43131()) {
-		return; // no HBC3000, and no thump to take away
-	}
 	int x = detect_output();
 	if (x < 1 || x > 3) {
 		return; // not one of the analogue sockets

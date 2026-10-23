@@ -9,6 +9,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/statvfs.h>
+#include <sys/utsname.h>
 
 #define SYSINFO_FILE SONIX_RESOURCE_DIR "/components/system-info.json"
 
@@ -17,43 +18,21 @@ static char build_version[64];
 static char device_name[64];
 static char dac_info[96];
 static char ota_repo[128];
+static char forked_by[96];
+static char kernel_version[96];
 
-// Every player this binary knows how to be. Both serial prefixes are the ones
-// printed on the box.
+// The one player this binary knows how to be: the TempoTec Variations V1.
+//
+// The table used to hold the HiBy R3 Pro II and R1 beside it, chosen by the
+// device-name in system-info.json. Those builds are not made from this tree
+// any more -- the packer ships a V1 image and nothing else -- so the choice is
+// gone with them, and every flag below is the V1's answer rather than a
+// branch the compiler had to keep.
 static const sysinfo_model_t MODELS[] = {
 	{
-		.name = "HiBy R3 Pro II",
-		.panel_width = 480,
-		.panel_height = 720,
-		.update_stem = "r3proii",
-		.serial_prefix = "R3PII",
-		.pmic_charger = false,
-		.sgm31324_led = true,
-		.cs43131 = false,
-		.tap_wake = true,
-		.one_flank = false,
-		.media_keys_swapped = true,
-		.headset_switch_idle_one = false,
-	},
-	{
-		.name = "HiBy R1",
-		.panel_width = 480,
-		.panel_height = 800,
-		.update_stem = "r1",
-		.serial_prefix = "R1",
-		.pmic_charger = true,
-		.sgm31324_led = false,
-		.cs43131 = true,
-		.tap_wake = false,
-		.one_flank = true,
-		.media_keys_swapped = false,
-		.headset_switch_idle_one = false,
-	},
-	{
-		// The Variations V1 has two CS43131s and both 3.5 mm and 4.4 mm
-		// outputs. It must not take the R1's single-DAC shortcut even though
-		// the converter model matches: the regular route logic is the only
-		// path that can select its balanced socket.
+		// Two CS43131s and both the 3.5 mm and the 4.4 mm outputs: the
+		// single-DAC shortcut is not taken, because the regular route logic is
+		// the only path that can select the balanced socket.
 		.name = "TempoTec V1",
 		.panel_width = 240,
 		.panel_height = 320,
@@ -61,7 +40,6 @@ static const sysinfo_model_t MODELS[] = {
 		.serial_prefix = "V1",
 		.pmic_charger = true,
 		.sgm31324_led = true,
-		.cs43131 = false,
 		.tap_wake = false,
 		.one_flank = true,
 		// The V1 kernel labels the physical next and previous keys in the
@@ -159,6 +137,17 @@ void sysinfo_load(void) {
 	device_name[0] = '\0';
 	dac_info[0] = '\0';
 	ota_repo[0] = '\0';
+	forked_by[0] = '\0';
+
+	// The kernel the player is running on. uname() is a syscall, not a file:
+	// no open, no parse, and it answers the same on the simulator as on the
+	// device. The release is what the About page shows -- "4.4.94", the number
+	// the vendor's kernel prints -- and the rest of the string (the build's own
+	// suffix) is carried too when it is there.
+	struct utsname u;
+	if (uname(&u) == 0 && u.release[0]) {
+		snprintf(kernel_version, sizeof(kernel_version), "%s", u.release);
+	}
 
 	FILE *f = fopen(SYSINFO_FILE, "rb");
 	if (!f) {
@@ -179,10 +168,9 @@ void sysinfo_load(void) {
 	json_string_field(buf, "device-name", device_name, sizeof(device_name));
 	json_string_field(buf, "dac-info", dac_info, sizeof(dac_info));
 	json_string_field(buf, "ota-repo", ota_repo, sizeof(ota_repo));
+	json_string_field(buf, "forked-by", forked_by, sizeof(forked_by));
 
-	const sysinfo_model_t *model = sysinfo_model();
-	printf("sysinfo: device '%s' (%s), system '%s', build '%s'\n", device_name,
-		   model ? "known" : "NOT a model this build knows", os_version, build_version);
+	printf("sysinfo: device '%s', system '%s', build '%s'\n", device_name, os_version, build_version);
 }
 
 const char *sysinfo_os_version(void) { return os_version; }
@@ -190,27 +178,24 @@ const char *sysinfo_build_version(void) { return build_version; }
 const char *sysinfo_device_name(void) { return device_name; }
 const char *sysinfo_dac_info(void) { return dac_info; }
 const char *sysinfo_ota_repo(void) { return ota_repo; }
+const char *sysinfo_kernel_version(void) { return kernel_version; }
+const char *sysinfo_forked_by(void) { return forked_by; }
 
 // Matched without regard to case or to the spelling of "HiBy": the name is
 // typed by hand into a text file, and "Hiby R1" is the same player as
 // "HiBy R1".
 const sysinfo_model_t *sysinfo_model(void) {
-	if (!device_name[0]) {
-		return NULL;
-	}
-	for (size_t i = 0; i < sizeof(MODELS) / sizeof(MODELS[0]); i++) {
-		if (strcasecmp(device_name, MODELS[i].name) == 0) {
-			return &MODELS[i];
-		}
-	}
-	return NULL;
+	// Not keyed on device_name any more: this build runs on the V1 and on
+	// nothing else, so a system-info.json written by an older packer (or by
+	// hand) cannot leave the player without the panel, the update stem and the
+	// hardware flags it needs. The name the file carries is still what the
+	// About page prints; it just does not decide anything.
+	return &MODELS[0];
 }
 
 const sysinfo_model_t *sysinfo_model_by_panel(int width, int height) {
-	for (size_t i = 0; i < sizeof(MODELS) / sizeof(MODELS[0]); i++) {
-		if (MODELS[i].panel_width == width && MODELS[i].panel_height == height) {
-			return &MODELS[i];
-		}
+	if (width == MODELS[0].panel_width && height == MODELS[0].panel_height) {
+		return &MODELS[0];
 	}
 	return NULL;
 }

@@ -8,6 +8,7 @@
 extern lv_obj_t *main_menu_screen;
 
 void main_menu_init(gui_config_t *cfg);
+void main_menu_refresh_layout(void);
 
 // Settings -> Appearance: larger, centered icons with no tile captions on the
 // main menu only. Off by default; the setter applies and saves the choice.

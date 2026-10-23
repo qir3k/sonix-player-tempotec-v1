@@ -39,6 +39,7 @@
 #include "src/gui/flappybird/flappybird.h"
 #include "src/gui/gearboy/gearboyplay.h"
 #include "src/gui/shell/main_menu.h"
+#include "src/gui/shell/menuarrange.h"
 #include "src/gui/library/medialist.h"
 #include "src/gui/library/filespage.h"
 #include "src/gui/library/pictureview.h"
@@ -683,6 +684,7 @@ void gui_init(gui_config_t *cfg) {
 	corners_init(cfg);
 
 	main_menu_init(cfg);
+	menuarrange_init(cfg);
 
 	music_init(cfg);
 	coverflow_init(cfg);

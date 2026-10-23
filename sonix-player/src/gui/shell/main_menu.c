@@ -17,6 +17,7 @@
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/main_menu_icons.h"
+#include "src/gui/shell/menuorder.h"
 #include "src/gui/shell/morepage.h"
 #include "src/gui/settings/settings.h"
 #include "src/gui/shell/switcher.h"
@@ -192,11 +193,60 @@ static void main_menu_refresh_tiles(void) {
 	bool icons_only = main_menu_icons_only();
 	bool books = main_menu_books();
 	bool browse = main_menu_browse();
-	gridpage_set_tile(menu_grid, 0, browse ? &icon_menu_explorer : &icon_menu_music,
-					 browse ? "music_browse" : "music");
-	gridpage_set_tile(menu_grid, 3, books ? &icon_menu_books : &icon_menu_audiobooks, books ? "books" : "audiobooks");
+	int item_count = menuorder_count(MENUORDER_HOME);
+	int order[16];
+	bool visible[16];
+	int ordered = menuorder_load(MENUORDER_HOME, order, 16, visible);
+	grid_entry_t entries[16];
+	int ids[16];
+	int count = 0;
+	for (int i = 0; i < ordered && count < item_count; i++) {
+		int id = order[i];
+		if (!visible[id]) {
+			continue;
+		}
+		ids[count] = id;
+		switch (id) {
+		case 0:
+			entries[count++] = (grid_entry_t){browse ? "music_browse" : "music",
+											  browse ? &icon_menu_explorer : &icon_menu_music, NULL, open_home_music};
+			break;
+		case 1:
+			entries[count++] = (grid_entry_t){"streaming", &icon_menu_streaming, &streaming_screen, NULL};
+			break;
+		case 2:
+			entries[count++] = (grid_entry_t){"wireless", &icon_menu_wireless, &wireless_screen, NULL};
+			break;
+		case 3:
+			entries[count++] = (grid_entry_t){books ? "books" : "audiobooks",
+											  books ? &icon_menu_books : &icon_menu_audiobooks, NULL, open_home_library};
+			break;
+		case 4:
+			entries[count++] = (grid_entry_t){"more", &icon_menu_more, &morepage_screen, NULL};
+			break;
+		case 5:
+			entries[count++] = (grid_entry_t){"settings", &icon_menu_settings, &settings_screen, NULL};
+			break;
+		default:
+			break;
+		}
+	}
+	int columns = count > 3 ? 2 : (count > 1 ? 2 : 1);
+	int rows = (count + columns - 1) / columns;
+	gridpage_replace_entries(menu_grid, menu_cfg, entries, count, columns, LV_MAX(rows, 1));
+	if (compact && tokyo) {
+		int line_height = lv_font_get_line_height(&font_ui_14);
+		int footer_height = LV_MAX(42, line_height * 2 + 8);
+		int top = menu_cfg->top_bar_height + (home_header_shown() ? HOME_HEADER_HEIGHT : 0);
+		int bottom = menu_cfg->padding + footer_height + 1;
+		gridpage_set_layout(menu_grid, menu_cfg, top, bottom, menu_cfg->padding, 6, columns, LV_MAX(rows, 1));
+	} else {
+		gridpage_set_layout(menu_grid, menu_cfg, menu_cfg->top_bar_height, 0, menu_cfg->padding,
+							compact ? 6 : 14, columns, LV_MAX(rows, 1));
+	}
 	bool horizontal = compact && tokyo && !icons_only;
-	for (int i = 0; i < 6; i++) {
+	for (int i = 0; i < count; i++) {
+		int id = ids[i];
 		lv_obj_t *tile = lv_obj_get_child(menu_grid, i);
 		int icon_size = tokyo ? (compact ? 22 : 46) : (compact ? 46 : 0);
 		if (icons_only) {
@@ -213,16 +263,16 @@ static void main_menu_refresh_tiles(void) {
 			icon_size = LV_MAX(1, (icon_size * 95 + 50) / 100);
 		}
 
-		const lv_image_dsc_t *source = tokyo ? TOKYO_MENU_ICONS[i] : NORMAL_MENU_ICONS[i];
-		if (i == 0 && browse) source = tokyo ? &icon_folder : &icon_menu_explorer;
-		if (i == 3 && books) source = tokyo ? &icon_files_book : &icon_menu_books;
-		if (icons_only && !(i == 0 && browse) && !(i == 3 && books)) {
+		const lv_image_dsc_t *source = tokyo ? TOKYO_MENU_ICONS[id] : NORMAL_MENU_ICONS[id];
+		if (id == 0 && browse) source = tokyo ? &icon_folder : &icon_menu_explorer;
+		if (id == 3 && books) source = tokyo ? &icon_files_book : &icon_menu_books;
+		if (icons_only && !(id == 0 && browse) && !(id == 3 && books)) {
 			// Use art pre-rasterized at the final pixel size, not stretched
 			// toolbar glyphs or colored art filtered for a second time.
 			// Matching source/layout sizes also avoids LVGL's fractional image
 			// transform and its extra edge interpolation. Other menus and the
 			// labeled layout continue to use their original sources and sizes.
-			const lv_image_dsc_t *native = main_menu_icon_native(i, tokyo, icon_size);
+			const lv_image_dsc_t *native = main_menu_icon_native(id, tokyo, icon_size);
 			if (native) {
 				source = native;
 			}
@@ -230,9 +280,9 @@ static void main_menu_refresh_tiles(void) {
 		gridpage_set_tile_label_hidden(menu_grid, i, icons_only);
 		if (tokyo) {
 			// Keep the decorative left-column glow only in the labeled layout.
-			bool glow = !icons_only && compact && (i % 2 == 0);
+			bool glow = !icons_only && compact && (id % 2 == 0);
 			gridpage_set_tile_icon_style(menu_grid, i, source, icon_size, true,
-										 theme_semantic_color(TOKYO_MENU_TONES[i]), glow);
+										 theme_semantic_color(TOKYO_MENU_TONES[id]), glow);
 		} else {
 			gridpage_set_tile_icon_style(menu_grid, i, source, icon_size, false,
 										 theme()->text_primary, false);
@@ -247,6 +297,8 @@ static void main_menu_refresh_tiles(void) {
 		}
 	}
 }
+
+void main_menu_refresh_layout(void) { main_menu_refresh_tiles(); }
 
 // Fit the V1's live strip around two fixed one-line labels. Explicitly sizing
 // the text column from the row's content width keeps both glyphs and ellipses
@@ -281,7 +333,14 @@ static void main_menu_layout_tokyo_home(bool force) {
 
 	int bottom = (int)menu_cfg->padding + footer_height + 1;
 	int top = (int)menu_cfg->top_bar_height + (home_header_shown() ? HOME_HEADER_HEIGHT : 0);
-	gridpage_set_layout(menu_grid, menu_cfg, top, bottom, menu_cfg->padding, 6, 2, 3);
+	int order[16];
+	bool visible[16];
+	int ordered = menuorder_load(MENUORDER_HOME, order, 16, visible);
+	int count = 0;
+	for (int i = 0; i < ordered; i++) count += visible[order[i]];
+	int columns = count > 3 ? 2 : (count > 1 ? 2 : 1);
+	int rows = LV_MAX((count + columns - 1) / columns, 1);
+	gridpage_set_layout(menu_grid, menu_cfg, top, bottom, menu_cfg->padding, 6, columns, rows);
 	main_menu_refresh_tiles();
 }
 
@@ -387,7 +446,15 @@ static void main_menu_refresh_theme(void) {
 		lv_obj_set_hidden(home_header, true);
 		lv_obj_set_hidden(home_note, true);
 		lv_obj_set_hidden(mini_player, true);
-		gridpage_set_layout(menu_grid, menu_cfg, menu_cfg->top_bar_height, 0, menu_cfg->padding, compact ? 6 : 14, 2, 3);
+		int order[16];
+		bool visible[16];
+		int ordered = menuorder_load(MENUORDER_HOME, order, 16, visible);
+		int count = 0;
+		for (int i = 0; i < ordered; i++) count += visible[order[i]];
+		int columns = count > 3 ? 2 : (count > 1 ? 2 : 1);
+		int rows = LV_MAX((count + columns - 1) / columns, 1);
+		gridpage_set_layout(menu_grid, menu_cfg, menu_cfg->top_bar_height, 0, menu_cfg->padding,
+							compact ? 6 : 14, columns, rows);
 		main_menu_refresh_tiles();
 		lv_obj_set_style_bg_opa(home_header, LV_OPA_TRANSP, 0);
 		lv_obj_set_style_radius(home_header, 0, 0);
@@ -413,19 +480,27 @@ void main_menu_set_icons_only(bool enabled) {
 void main_menu_init(gui_config_t *cfg) {
 	menu_cfg = cfg;
 
-	const grid_entry_t entries[] = {
-		{"music", &icon_menu_music, NULL, open_home_music},
-		{"streaming", &icon_menu_streaming, &streaming_screen, NULL},
-		{"wireless", &icon_menu_wireless, &wireless_screen, NULL},
-		{"audiobooks", &icon_menu_audiobooks, NULL, open_home_library},
-		// The door to the More page, which holds the DAC and anything else
-		// that does not fit. The main menu has exactly six tiles, and one of
-		// them has to be able to keep growing.
-		{"more", &icon_menu_more, &morepage_screen, NULL},
-		{"settings", &icon_menu_settings, &settings_screen, NULL},
-	};
-
-	menu_grid = gridpage_build(main_menu_screen, cfg, entries, (int)(sizeof(entries) / sizeof(entries[0])), 2, 3, false);
+	grid_entry_t entries[16];
+	bool visible[16];
+	int order[16];
+	int ordered = menuorder_load(MENUORDER_HOME, order, 16, visible);
+	int count = 0;
+	for (int i = 0; i < ordered; i++) {
+		int id = order[i];
+		if (!visible[id]) continue;
+		switch (id) {
+		case 0: entries[count++] = (grid_entry_t){"music", &icon_menu_music, NULL, open_home_music}; break;
+		case 1: entries[count++] = (grid_entry_t){"streaming", &icon_menu_streaming, &streaming_screen, NULL}; break;
+		case 2: entries[count++] = (grid_entry_t){"wireless", &icon_menu_wireless, &wireless_screen, NULL}; break;
+		case 3: entries[count++] = (grid_entry_t){"audiobooks", &icon_menu_audiobooks, NULL, open_home_library}; break;
+		case 4: entries[count++] = (grid_entry_t){"more", &icon_menu_more, &morepage_screen, NULL}; break;
+		case 5: entries[count++] = (grid_entry_t){"settings", &icon_menu_settings, &settings_screen, NULL}; break;
+		default: break;
+		}
+	}
+	int columns = count > 3 ? 2 : (count > 1 ? 2 : 1);
+	int rows = LV_MAX((count + columns - 1) / columns, 1);
+	menu_grid = gridpage_build(main_menu_screen, cfg, entries, count, columns, rows, false);
 
 	// Tokyo Night's compact home chrome: the header, note and live mini-player
 	// are ordinary LVGL objects, and remain hidden in the unchanged Dark/Light

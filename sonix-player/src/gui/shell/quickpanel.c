@@ -463,7 +463,19 @@ static void refresh_now_playing_card(void) {
 		fav = state.current_file[0] && library_fav_contains(state.current_file);
 	}
 	lv_image_set_src(np_star_icon, fav ? &icon_heart_filled : &icon_heart_outline);
-	lv_obj_set_style_image_recolor(np_star_icon, fav ? lv_color_make(246, 211, 45) : lv_color_make(150, 150, 150), 0);
+	// The same colours the player's own heart takes, so the two cannot disagree:
+	// Adwaita's yellow on the light and dark themes, Tokyo Night's cyan, and on
+	// the two V1 monochrome palettes the accent the whole page is drawn in --
+	// the yellow was the one warm mark on an OLED screen that is white on black.
+	lv_color_t filled = lv_color_make(246, 211, 45);
+	lv_color_t empty = lv_color_make(150, 150, 150);
+	if (theme_is_tokyo_night()) {
+		filled = theme_semantic_color(THEME_SEMANTIC_CYAN);
+	} else if (theme_is_monochrome()) {
+		filled = theme()->accent;
+		empty = theme()->text_secondary;
+	}
+	lv_obj_set_style_image_recolor(np_star_icon, fav ? filled : empty, 0);
 	lv_obj_set_style_image_recolor_opa(np_star_icon, LV_OPA_COVER, 0);
 
 	refresh_repeat_icon();

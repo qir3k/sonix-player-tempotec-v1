@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "src/system/core/config.h"
@@ -281,23 +282,97 @@ int kblayout_variant_count(const char *key) {
 	return n;
 }
 
+// ---------------------------------------------------------------------------
+// which accent a held key offers first
+//
+// The strip is a fixed list per key, and on a phone its order is the one of the
+// language you type in: holding E in Polish offers ę before é, in English é
+// before ę. All of them are still there, in every language -- the keyboard stays
+// universal -- only the order changes, so the one that is wanted is the first
+// cell under the finger.
+//
+// The language is the swipe one: it is the setting that names the language
+// being typed in, and it is on the same page as the switch for it. With no
+// preference (both, or a layout whose letters have no list here) the table's own
+// order stands, which is the one this keyboard has always had.
+// ---------------------------------------------------------------------------
+
+// The letters whose accents belong to Polish.
+static const char *const ACCENTS_POLISH = "\xc4\x85\xc4\x87\xc4\x99\xc5\x82\xc5\x84\xc3\xb3\xc5\x9b\xc5\xba\xc5\xbc"; // ą ć ę ł ń ó ś ź ż
+// And the ones the western European languages use, which English reads as the
+// accents on borrowed names.
+static const char *const ACCENTS_ENGLISH =
+	"\xc3\xa1\xc3\xa0\xc3\xa9\xc3\xa8\xc3\xaa\xc3\xab\xc3\xad\xc3\xac\xc3\xb3\xc3\xb2\xc3\xb6\xc3\xa4\xc3\xbc\xc3\xa7\xc3\xb1";
+
+static int accent_preference(char *out, size_t size) {
+	out[0] = '\0';
+	if (kblayout_default() == KB_LAYOUT_POLISH || config_get_int("keyboard", "swipe_lang", 0) == 1) {
+		snprintf(out, size, "%s", ACCENTS_POLISH);
+	} else if (config_get_int("keyboard", "swipe_lang", 0) == 0) {
+		snprintf(out, size, "%s", ACCENTS_ENGLISH);
+	} else {
+		return 0; // both: no language is "the" one, so the table's order stands
+	}
+	return 1;
+}
+
+// The variants of `key`, the preferred language's first. Returns how many are
+// in `out` (each at most 4 bytes plus its NUL); the caller indexes into it.
+static int variants_ordered(const char *key, char out[][8], int max) {
+	const char *p = variants_of(key);
+	char preference[64];
+	bool prefer = accent_preference(preference, sizeof(preference)) != 0;
+	int n = 0;
+
+	// First pass: the ones this language actually uses, in the language's order.
+	for (const char *want = preference; prefer && *want; want += utf8_len(want)) {
+		const char *q = p;
+		while (*q) {
+			int len = utf8_len(q);
+			if (len == utf8_len(want) && memcmp(q, want, (size_t)len) == 0 && n < max) {
+				memcpy(out[n], q, (size_t)len);
+				out[n][len] = '\0';
+				n++;
+				break;
+			}
+			q += len;
+		}
+	}
+
+	// Second: everything else, in the table's order, and skipping what is
+	// already in hand.
+	while (*p && n < max) {
+		int len = utf8_len(p);
+		bool already = false;
+		for (int i = 0; i < n && !already; i++) {
+			already = (int)strlen(out[i]) == len && memcmp(out[i], p, (size_t)len) == 0;
+		}
+		if (!already) {
+			memcpy(out[n], p, (size_t)len);
+			out[n][len] = '\0';
+			n++;
+		}
+		p += len;
+	}
+	return n;
+}
+
 const char *kblayout_variant(const char *key, int index) {
+	static char ordered[KB_LAYOUT_MAX_VARIANTS][8];
 	static char slots[4][8];
 	static int at;
 
-	const char *p = variants_of(key);
-	for (int i = 0; i < index && *p; i++) {
-		p += utf8_len(p);
+	if (index < 0 || index >= KB_LAYOUT_MAX_VARIANTS) {
+		return "";
 	}
-	if (index < 0 || !*p) {
+	int count = variants_ordered(key, ordered, KB_LAYOUT_MAX_VARIANTS);
+	if (index >= count) {
 		return "";
 	}
 
-	int len = utf8_len(p);
 	char *out = slots[at];
 	at = (at + 1) % 4;
-	memcpy(out, p, (size_t)len);
-	out[len] = '\0';
+	snprintf(out, 8, "%s", ordered[index]);
 	return out;
 }
 

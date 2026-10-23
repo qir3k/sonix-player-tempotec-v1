@@ -26,7 +26,6 @@
 #include "src/gui/shell/theme.h"
 #include "src/system/audio/alsa-controls.h"
 #include "src/gui/shell/topbar.h"
-#include "src/system/device/sysinfo.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/audio/audio.h"
 #include "src/system/bluetooth/bluetooth.h"
@@ -91,7 +90,7 @@ static void build_filter_page(gui_config_t *cfg) {
 	lv_obj_set_width(note, lv_pct(100));
 	lv_obj_add_style(note, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(note, &font_ui_22, 0);
-	lv_label_set_text(note, tr(alsa_board_is_cs43131() ? "musicsettings_filter_note_cs43131" : "musicsettings_filter_note"));
+	lv_label_set_text(note, tr("musicsettings_filter_note"));
 
 	refresh_filter_checks();
 	switcher_attach_back_gesture(dacfilter_screen);
@@ -585,8 +584,6 @@ static const volume_output_t VLIMIT_OUTPUTS[VLIMIT_OUTPUT_COUNT] = {VOLUME_OUTPU
 
 #define VLIMIT_STEPS (100 - VOLUME_LIMIT_MIN + 1)
 
-static bool vlimit_has_balanced(void) { return !sysinfo_model()->cs43131; }
-
 static void vlimit_refresh(void) {
 	bool on = volume_limit_enabled();
 	if (on) {
@@ -598,8 +595,7 @@ static void vlimit_refresh(void) {
 		int limit = volume_limit(VLIMIT_OUTPUTS[i]);
 		lv_label_set_text_fmt(vlimit_values[i], "%d", limit);
 		lv_slider_set_value(vlimit_sliders[i], limit - VOLUME_LIMIT_MIN, LV_ANIM_OFF);
-		bool absent = VLIMIT_OUTPUTS[i] == VOLUME_OUTPUT_BALANCED && !vlimit_has_balanced();
-		lv_obj_set_hidden(vlimit_cards[i], !on || absent);
+		lv_obj_set_hidden(vlimit_cards[i], !on);
 	}
 }
 
@@ -2680,18 +2676,15 @@ void musicsettings_init(gui_config_t *cfg) {
 	settingsrow_add(container, "musicsettings_filters", NULL, switch_screen_cb, dacfilter_screen);
 
 	// Non-oversampling off and dynamic-range enhancement on by default, like the
-	// stock player. The R1's CS43131 driver has neither: no rows there, and
-	// alsa-controls.c keeps both off.
-	if (!alsa_board_is_cs43131()) {
-		settingsrow_toggle(container, "musicsettings_nos", &nos_switch, nos_toggle_cb);
-		if (config_get_int("audio", "dac_nos", 0)) {
-			lv_obj_add_state(nos_switch, LV_STATE_CHECKED);
-		}
+	// stock player.
+	settingsrow_toggle(container, "musicsettings_nos", &nos_switch, nos_toggle_cb);
+	if (config_get_int("audio", "dac_nos", 0)) {
+		lv_obj_add_state(nos_switch, LV_STATE_CHECKED);
+	}
 
-		settingsrow_toggle(container, "musicsettings_dac_dre", &dre_switch, dre_toggle_cb);
-		if (config_get_int("audio", "dac_dre", 1)) {
-			lv_obj_add_state(dre_switch, LV_STATE_CHECKED);
-		}
+	settingsrow_toggle(container, "musicsettings_dac_dre", &dre_switch, dre_toggle_cb);
+	if (config_get_int("audio", "dac_dre", 1)) {
+		lv_obj_add_state(dre_switch, LV_STATE_CHECKED);
 	}
 
 	theme_register_refresh(rg_refresh);

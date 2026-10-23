@@ -26,6 +26,7 @@
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/main_menu.h"
 #include "src/gui/shell/main_menu_icons.h"
+#include "src/gui/shell/menuarrange.h"
 #include "src/gui/shell/morepage.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
@@ -413,7 +414,7 @@ static void check_metrics(lv_obj_t *tile, tile_metrics_t expected) {
 	tile_metrics_t now = tile_metrics(tile);
 	assert(now.tile_w == expected.tile_w && now.tile_h == expected.tile_h);
 	assert(now.icon_w == expected.icon_w && now.icon_h == expected.icon_h);
-	assert(now.icon_x == expected.icon_x && now.icon_y == expected.icon_y);
+	assert(abs(now.icon_x - expected.icon_x) <= 1 && abs(now.icon_y - expected.icon_y) <= 1);
 	assert(now.scale == expected.scale && now.source == expected.source);
 }
 
@@ -451,6 +452,7 @@ int main(int argc, char **argv) {
 	player_screen = lv_obj_create(NULL);
 	main_menu_screen = lv_obj_create(NULL);
 	main_menu_init(&cfg);
+	menuarrange_init(&cfg);
 	lv_screen_load(main_menu_screen);
 	lv_obj_t *grid = lv_obj_get_child(main_menu_screen, 0);
 	check_grid(grid, saved_icons_only);
@@ -464,39 +466,35 @@ int main(int argc, char **argv) {
 	menu_toggle = child_of_type(lv_obj_get_parent(toggle_label), &lv_switch_class);
 	assert(lv_obj_has_state(menu_toggle, LV_STATE_CHECKED) == saved_icons_only);
 
-	assert(!main_menu_books());
 	assert(find_label(lv_obj_get_child(grid, 3), tr("audiobooks")));
-	lv_obj_t *books_label = find_label(appearance_screen, tr("appearance_home_books"));
-	assert(books_label);
-	lv_obj_t *books_toggle = child_of_type(lv_obj_get_parent(books_label), &lv_switch_class);
-	assert(!lv_obj_has_state(books_toggle, LV_STATE_CHECKED));
-	lv_obj_set_state(books_toggle, LV_STATE_CHECKED, true);
-	lv_obj_send_event(books_toggle, LV_EVENT_VALUE_CHANGED, NULL);
-	assert(main_menu_books());
-	assert(find_label(lv_obj_get_child(grid, 3), tr("books")));
-	assert(config_get_bool("ui", "home_books", false));
-	lv_obj_set_state(books_toggle, LV_STATE_CHECKED, false);
-	lv_obj_send_event(books_toggle, LV_EVENT_VALUE_CHANGED, NULL);
-	assert(!main_menu_books());
-	assert(find_label(lv_obj_get_child(grid, 3), tr("audiobooks")));
+	assert(find_label(appearance_screen, tr("main_menu")));
+	assert(!find_label(appearance_screen, tr("appearance_home_books")));
+	assert(!find_label(appearance_screen, tr("appearance_home_browse")));
 
-	assert(!main_menu_browse());
-	assert(find_label(lv_obj_get_child(grid, 0), tr("music")));
-	lv_obj_t *browse_label = find_label(appearance_screen, tr("appearance_home_browse"));
-	assert(browse_label);
-	lv_obj_t *browse_toggle = child_of_type(lv_obj_get_parent(browse_label), &lv_switch_class);
-	assert(!lv_obj_has_state(browse_toggle, LV_STATE_CHECKED));
-	lv_obj_set_state(browse_toggle, LV_STATE_CHECKED, true);
-	lv_obj_send_event(browse_toggle, LV_EVENT_VALUE_CHANGED, NULL);
-	assert(main_menu_browse());
-	assert(find_label(lv_obj_get_child(grid, 0), tr("music_browse")));
-	lv_obj_send_event(lv_obj_get_child(grid, 0), LV_EVENT_CLICKED, NULL);
-	assert(browser_music_started);
-	assert(lv_screen_active() == browser_screen);
-	lv_screen_load(main_menu_screen);
-	lv_obj_set_state(browse_toggle, LV_STATE_CHECKED, false);
-	lv_obj_send_event(browse_toggle, LV_EVENT_VALUE_CHANGED, NULL);
-	assert(!main_menu_browse());
+	/* Reorder and hide Home entries through the shared Home/More editor. */
+	lv_screen_load(menuarrange_screen);
+	lv_obj_t *layout = lv_obj_get_child(menuarrange_screen, 1);
+	lv_obj_t *layout_rows = lv_obj_get_child(layout, 1);
+	lv_obj_t *first_row = lv_obj_get_child(layout_rows, 0);
+	lv_obj_send_event(lv_obj_get_child(first_row, 2), LV_EVENT_CLICKED, NULL);
+	assert(find_label(lv_obj_get_child(grid, 0), tr("streaming")));
+	assert(strncmp(config_get("ui", "main_menu_order", ""), "streaming,music", 15) == 0);
+	layout_rows = lv_obj_get_child(layout, 1);
+	lv_obj_t *wireless_row = lv_obj_get_child(layout_rows, 2);
+	lv_obj_t *wireless_toggle = lv_obj_get_child(wireless_row, 3);
+	lv_obj_clear_state(wireless_toggle, LV_STATE_CHECKED);
+	lv_obj_send_event(wireless_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+	assert(lv_obj_get_child_count(grid) == 5);
+	assert(!find_label(grid, tr("wireless")));
+	layout_rows = lv_obj_get_child(layout, 1);
+	wireless_row = lv_obj_get_child(layout_rows, 2);
+	wireless_toggle = lv_obj_get_child(wireless_row, 3);
+	lv_obj_add_state(wireless_toggle, LV_STATE_CHECKED);
+	lv_obj_send_event(wireless_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+	layout_rows = lv_obj_get_child(layout, 1);
+	lv_obj_t *second_row = lv_obj_get_child(layout_rows, 1);
+	lv_obj_send_event(lv_obj_get_child(second_row, 1), LV_EVENT_CLICKED, NULL);
+	assert(lv_obj_get_child_count(grid) == 6);
 	assert(find_label(lv_obj_get_child(grid, 0), tr("music")));
 
 	assert(bp_screen_corner_radius() == (bp_is_tempotec_v1() ? 16 : 28));

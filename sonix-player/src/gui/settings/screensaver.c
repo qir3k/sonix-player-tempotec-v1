@@ -48,7 +48,7 @@ static int strip_h;
 // is built to order rather than borrowed, so there is nothing to measure. The
 // two V1 palettes use this same stable height for the metadata field they lay
 // over the sleeve rather than under it.
-#define DEFAULT_STRIP_H bp_pick(132, 250)
+#define DEFAULT_STRIP_H bp_pick(120, 220)
 
 // How much of the sleeve still shows through that field, per palette. Amber's
 // cream and amber type is bright enough to read through half; Tokyo Night's
@@ -66,7 +66,7 @@ static int strip_h;
 // strip's padding: it moves the clock and nothing else, so the title and the
 // artist keep the places they were tuned for, and the clock gains its air
 // under every face.
-#define CLOCK_LIFT bp_pick(6, 10)
+#define CLOCK_LIFT bp_pick(8, 12)
 
 // The Framed style's sleeve. It keeps at least this much of the panel free on
 // either side, and above and below itself inside the area over the strip; its
@@ -476,6 +476,13 @@ static void promote_next(void) {
 // blue-black panel. Either keeps the palette's ink legible over every sleeve while still
 // letting the cover show through behind it. The other themes keep the blurred
 // copy, or plain black when there is no artwork to blur.
+//
+// The field is the flat translucent rectangle it has always been: one weight of
+// the palette's own colour over the foot of the sleeve, with the words on it.
+// A band melting its top edge into the picture was tried and is gone again --
+// over a photograph a square with a straight top is what the reference screens
+// show, and a gradient across the record reads as a smudge rather than as a
+// field.
 static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
 	if (framed_now()) {
 		// Framed keeps the words off the artwork altogether, so there is
@@ -1100,7 +1107,7 @@ void screensaver_init(gui_config_t *cfg) {
 	lv_obj_set_event_bubble(info_strip, true);
 	lv_obj_set_clickable(info_strip, false);
 	lv_obj_set_flex_flow(info_strip, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_flex_align(info_strip, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_flex_align(info_strip, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
 	// None of the ink is set here. What the words and the marks are drawn in
 	// depends on the palette -- Amber's cream and signal orange, Tokyo Night's

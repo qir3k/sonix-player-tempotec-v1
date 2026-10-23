@@ -8,13 +8,16 @@
 
 ## TempoTec V1 240×320 interface profile
 
-The target build of this fork defaults to the TempoTec V1 profile. At runtime,
-`BOARD=tempotec_v1` (also `tempotec-v1` or `tv1`) selects it explicitly, while
-`BOARD=hiby_r1` or `BOARD=hiby_r3proii` forces the regular layout. For the host
-simulator, this is enough to exercise the V1 path:
+This fork is the TempoTec V1's and nothing else, so the profile is no longer a
+choice: `src/gui/board_profile.h` is a set of inline constants (240x320 panel,
+24 px status bar, 6 px padding), and `bp_pick(compact, regular)` folds to the
+compact value at compile time. The `BOARD=hiby_r1` / `BOARD=hiby_r3proii`
+switch and the 480-pixel layout functions went with the versions of the player
+that used them -- see "One board, and less of it" below. The host simulator
+builds through the same profile:
 
 ```bash
-SONIX_PANEL=240x320 ./sonix_player_host
+./sonix_player_host
 ```
 
 The profile is more than a font substitution. It makes `gui_config_t` use the
@@ -24,10 +27,10 @@ grids and status icons compact geometry.
 
 Rounded screen corners, the optional black quarter-circles on the system layer
 in Settings → Appearance, use **16 px** on this board (`bp_screen_corner_radius()`).
-The original mask is 28 px on the 480-wide HiBy panels; 28 px here would swallow
-the 24 px status bar, and 14 px (half of 28 by pixel count) undershoots the 2"
-IPS, whose visible corner is about 2 mm. The masks are A8, built the first time
-the option is turned on, and stay above busy veils and the screensaver.
+The original mask was 28 px on the 480-wide HiBy panels; 28 px here would
+swallow the 24 px status bar, and 14 px (half of 28 by pixel count) undershoots
+the 2" IPS, whose visible corner is about 2 mm. The masks are A8, built the first
+time the option is turned on, and stay above busy veils and the screensaver.
 
 The face those sizes are drawn from is not part of the profile any more. The V1
 had Neon 80s as its primary face; it is now one of the choices in
@@ -1123,3 +1126,325 @@ favourites button.
 The star survives only as unused images in `icons.c`; no `.c` file refers to
 it. Nothing else had to change: the corner buttons already recolour their
 glyph from the theme, and `fonts_choices()` was untouched.
+
+## Poster's sleeve, the screensaver's field, and two stale glyph sets
+
+Three things the V1's small square panel made visible.
+
+**Poster** scaled the sleeve to the width of the screen and held it at the top of
+the panel. The screen is 240x320 and the deck takes about a third of it, so a
+square 240 px wide is taller than the room above the controls: the picture ran
+behind the deck and only its top was ever on screen, which reads as the record
+being cut across its middle, with the fade over what was left. The square is now
+the smaller of the panel's width and the height above the deck
+(`poster_sleeve_side()`), even so that it lands on whole pixels, and it rests on
+the deck instead of hanging from the chevron. The whole picture is on screen,
+nothing is cropped, and the only part of it under anything is the band the fade
+melts into -- which is now 26 px rather than 36, since it is no longer covering
+what was left of a half-hidden sleeve.
+
+**The screensaver's metadata field** -- the translucent square the V1 palettes
+lay over the foot of the artwork -- had a straight top edge, a line drawn across
+the record at the height the words begin. It is now melted the way the player
+melts Poster's sleeve into its deck: a band above the strip, in the field's own
+colour, whose opacity climbs from nothing to the weight the strip wears over its
+last row (`strip_fade`). The strip itself is untouched, so the words keep the
+ground they were tuned for, and the sleeve shows through the top of the field
+instead of meeting it.
+
+**Two glyph sets** were coloured once, when their page was built, and kept that
+snapshot through every later change of theme or accent: the Wi-Fi and Bluetooth
+cards' glyphs on the Wireless page, and the Audiobooks section card's (continue,
+library, authors, scan). Both now ask the palette again from their page's own
+refresh callback, the way the rest of the interface does, so a change of accent
+reaches them -- and a set built under a white OLED accent no longer goes on
+looking grey after a colour is chosen.
+
+## The Tidal tab on a 240 px panel
+
+Most of the Tidal page was written at the 480-px size and never revisited for the
+V1, where a 240x320 panel makes every one of those numbers wrong.
+
+**The rows** were 88 px high with a 60 px sleeve, so a screen showed two and a
+half tracks and cut the artist's name off at the first word. They are now
+`bp_pick(52, 88)` high with a `bp_pick(38, 60)` sleeve and the title/detail pair
+at 18/14 instead of 22/18 -- the same density the music tab's own rows settled
+on (44 px, 36 px sleeve, 18/14).
+
+**The audio-quality pills** in Tidal settings were hand-built at the 480-px size
+(56 px tall, 22 px of side padding) whatever the panel, which made them nearly
+twice the height of every other pill in the interface and wide enough to spill
+off the card. They are the shared `settingsrow_pills()` card and
+`settingsrow_pill()` now, so the V1 gets its 36 px pills and a theme change
+repaints them through the same call every other settings page uses.
+
+**The "Leave" row** signed the Tidal account out but said only "Leave", and the
+confirmation's own button said it again. The row is now "Sign out of Tidal" and
+the confirmation's action "Sign out"; nothing else about the flow changed.
+
+**The search page** was laid out for a 480-px screen: three 140-px pills stepping
+150 px to the right, so on the V1 the third one was off the panel entirely, and
+they sat at y=154 while the 144-px keyboard started at y=176 -- the two overlapped
+and neither could be used. The page is now built from panel-sized pieces: a 44 px
+field, a pill row that scrolls sideways with each pill as wide as its own word,
+and, under them, the space one of two things takes turns in -- the keyboard while
+something is being typed, the search history while nothing is.
+
+**The history** is new: the last eight queries, newest first, kept in
+`device_config.ini` under `[tidal]`. A row runs its query again with one tap, the
+x at its right forgets just that one, and Tidal settings has a "Clear search
+history" row for all of them. When there is no history yet the page opens on the
+keyboard instead, as before.
+
+**Removing a track from a playlist** is new. The row menu of a playlist's tracks
+now offers two things instead of one: favourite/unfavourite, and "Remove from
+playlist", behind the same confirmation the favourites removal uses.
+`tidal_playlist_remove_track()` deletes by position (`DELETE
+/playlists/{uuid}/items/{index}`), because the same track can be in a playlist
+twice and the entry that goes is the one that was tapped. The list is re-read
+afterwards, so the rows close the gap.
+
+**Favourite artists** is new, and uses Tidal's own favourites collection under
+`artists`: a row on the main page beside favourite tracks and albums, the same
+add/remove menu on an artist in search results, and remove on the favourites
+list. Artist rows in that list open the artist's albums, like search results do.
+
+**The main page's rows** can now be hidden and reordered, from Tidal settings ->
+Tidal home: seven rows, each with a switch and a pair of arrows to move it one
+step up or down. The order is stored as `home_order` and the hidden set as a bit
+mask in the same section of the configuration, so a row the user never wants to
+see is gone rather than merely last. A configuration written before this (or
+edited by hand) is read as the default order plus whatever it does name, so a row
+the page gains later is never lost.
+
+## Lists that open at once, an order for podcasts, and choosing several rows
+
+Four small things that were missing from the streaming tabs, and the sleeve that
+was still a square.
+
+**The lists are kept on the card.** Tidal and Podcasts rebuilt every list from the
+network each time a tab was opened -- the names, the artists, the ids, the cover
+addresses, the whole page of them -- for an answer that had not changed since the
+last visit. The first page of a list is now written to
+`<card>/.local/listcache` when it arrives and read back the next time, so the rows
+are there at once and the spinner belongs to a list that is actually new. What is
+stored is the page's own record array exactly as it lay in memory: a header
+carries the version and the record size, so a build that changes either reads the
+old file as a miss rather than filling the page with nonsense, and the write is a
+temporary file renamed, so a power cut leaves the previous list rather than half
+of one. A copy is trusted for half a day (Tidal) or six hours (the podcast chart
+and a podcast's episodes), because what it is waiting for is not the next visit
+but a change made elsewhere -- and every write on these pages drops the file it
+made wrong: adding or removing a favourite, removing a track from a playlist,
+creating or deleting one. Searches are never kept: every query is its own answer.
+The covers were already on the card (`.local/qobuz-art`, named by the MD5 of the
+URL), which is why they never needed fetching twice.
+
+**Podcasts in the order they are listened to.** The followed list used to be
+"most recently followed first", which says nothing useful about a hundred
+subscriptions. It is now ordered by how many of each podcast's episodes have been
+started on this device, most first, with A-Z and Z-A beside that under Podcast
+settings -> Order. The count is a row in `podcast.db` beside the subscription
+(`PODCAST_SUBS.plays`, added to existing databases by a one-off ALTER), written
+when an episode starts -- a podcast listened to in ten-minute pieces still ranks
+above one that was tried once -- and the list falls back to the alphabet when two
+are level, so the order is never arbitrary. Counting the heard marks instead was
+not possible: `PODCAST_PLAYED` stores episode ids and nothing else, so it cannot
+say which podcast an episode belonged to.
+
+**Choosing several rows.** Both tabs have the file browser's selection mode now:
+a long press starts it (through the row's own menu on Podcasts, on the row itself
+on Tidal), a tap then picks a row or lets it go, letting go of the last one ends
+it, and the corner trades its buttons for the action and the way out. On Podcasts,
+a podcast's row offers **Select** in its three-dot menu beside follow/unfollow,
+an episode's long press beside mark-listened and download; a selection of podcasts
+is followed or unfollowed as a group, and a selection of episodes is ticked off
+(or unticked) as a group. Bulk downloads are deliberately not offered: `podcastdl`
+runs one download at a time for the whole device, so a queue of them is a
+different feature and not a faster version of this one.
+
+On Tidal a long press starts the selection on the favourites, an album's tracks,
+an artist's albums and search results, and the corner button is the same action
+the row's three dots offer -- favourite or unfavourite, tracks, albums or artists.
+Two things were left out at first: a playlist's tracks are removed by position,
+and each removal renumbers the ones after it; a playlist itself is deleted
+outright. The first of those is now in, removing from the end backwards so the
+positions still to come never move (see "A release of small fixes" below); a
+playlist itself is still deleted outright. `tidalsync` also takes one job at a time and the newest submission
+replaces the one already waiting, so the chosen ids are walked one after another,
+each starting when the previous answer comes back -- firing them all at once would
+have performed exactly one of them.
+
+**Poster's sleeve is the panel, not a square in it.** Held to the largest square
+the room above the deck would take, the picture left a strip of page down either
+side of the record on a 240-px panel -- 195 px of sleeve inside 240 -- and a sleeve
+with bars beside it is not what a sleeve looks like. It is now the full width of
+the screen and every row the deck leaves, decoded at exactly that rectangle and
+filled from the middle, so a square cover gives up a little of its top and bottom
+rather than its sides. The deck still stands under it on its own opaque ground,
+which is what keeps this different from Immersive.
+
+**The screensaver's field melts further up, and from a darker start.** The
+translucent field over the foot of the artwork now begins about a quarter of the
+panel above its edge instead of a twelfth, and its top stop is two thirds of the
+field's own weight rather than nothing -- a shade that is plainly darker than the
+picture, and still short of the film the words sit on, which is where a photograph
+would stop reading as one and read as a black bar instead.
+
+## A hesitant interface: what the log now names
+
+The report was "it lags for a while, then I just have to wait" -- sometimes on the
+power key, sometimes on a track change, sometimes on a page. The log said nothing
+at all: the watchdog only writes its thread dump once the interface has stopped
+for five seconds, and what was being described is a third of a second repeated.
+
+**Every pass of the event loop is timed.** `lv_timer_handler()` is what reads the
+touch, runs the timers and draws the frame, and on this device it runs on one
+thread: a pass that takes 300 ms is the hesitation itself. A pass that takes
+`UI_SLOW_PASS_MS` (120 ms, well below what a hand notices) now writes one line
+saying how long it took and what ran inside it:
+
+```
+ui: a pass of the event loop took 342 ms (next wake in 0 ms), screen 0x2f1c8 240x320
+ui:   timer period 120 ms, callback 0x4a1b90, user (nil), ran 3 ms ago
+ui:   timer period 1000 ms, callback 0x4c05e4, user (nil), ran 340 ms ago
+```
+
+The screen, the period and the callback are the three things that place a slow
+pass: a 120 ms timer on the list pages is the artwork poll, a 500 ms one on the
+player is a cover, and a pass whose timers are all quick still names the one that
+was in the middle of a card read. The callback addresses are in the unstripped
+`sonix_player_debug` the build leaves beside the stripped binary, so
+`addr2line -f -e sonix_player_debug 0x4a1b90` names the function. One line a
+second at most: a page that is slow for a while must not turn the log, and the
+card it may be written to, into the reason it is slow. The watchdog's dump now
+also carries `ui: N slow event-loop passes so far, the last took Y ms`, which
+separates a device that had been hesitating for a while from one that went from
+fine to stopped in a single pass.
+
+**The card sync after a podcast delete is no longer the interface's to wait for.**
+`sync()` returns only when every pending write in the filesystem has reached the
+card -- including whatever a download in progress is in the middle of -- and it
+was called on the interface thread from the delete handler, so deleting a
+downloaded episode could freeze the page for as long as the card took. It runs on
+a thread of its own at background priority now; the file is already gone, and the
+rest is bookkeeping the card gets round to on its own.
+
+## Swipe typing, and a search row that fits
+
+**A word per gesture.** Dragging a finger from letter to letter across the
+keyboard now types the word it spells -- the way Gboard's glide typing works --
+without stopping on any key. Settings -> More has a **Swipe typing** switch
+beside the keyboard rows and **Swipe language** under it: English, Polish, or
+both. The switch and the language live in `[keyboard]` as `swipe` and
+`swipe_lang`; both take effect at once, with no rebuild of the keyboard.
+
+**The lists are files on the card, not code.**
+`<card>/Dictionaries/en.txt` and `<card>/Dictionaries/pl.txt`, one word per
+line, UTF-8, anything with counts or parts of speech beside the word still
+readable as its first field. Nothing is shipped in the binary: a list is
+somebody else's file and belongs where the user can put it. A list is read whole
+(up to 384 kB, past which it is read as far as the cap) the first time it is
+needed, kept in one block with an offset per word, and dropped when the language
+changes. A language with no file simply types nothing, and the row says which
+lists were found.
+
+**Polish is matched without its tails and typed with them.** The keys are Latin
+letters, so a word is looked up folded (`łąka` as `laka`) and written out as the
+list spells it. That is the whole point on a Polish list: the path never has to
+cross a key that does not exist.
+
+**How a path becomes a word.** Every key's distance to the nearest point of the
+path is measured once, and so is the sequence of keys the path crosses; a word
+must spell itself out in that sequence in order, which throws away nearly the
+whole list without arithmetic; what is left is scored on how close the path came
+to each of its letters and on its length against the number of keys crossed. A
+path that came nowhere near the letters it would need types nothing at all, so a
+stray drag is silent rather than wrong. The decoder runs on the release of the
+swipe, and only there.
+
+**A tap is still a tap.** A press that travels less than 18 px is left to the key
+it started on, the accent strip takes a held key as it always did, and neither
+the symbol pages nor the T9 keypad take part -- a path is only meaningful across
+three rows of separate letters. Shift and caps capitalise the word (ASCII first
+letters; accented capitals are still entered by holding their key).
+
+**A held key's accents follow the language.** Holding E offers *ę* before *é* in
+Polish and *é* before *ę* in English -- the same strip, reordered rather than
+shortened, so every accent is still there in both languages and the one that is
+wanted is the first cell under the finger. The order comes from the same
+`swipe_lang`, and "both" keeps the table's order this keyboard has always had.
+
+**The search pills are one line, and the row scrolls.** The three categories
+had to share the panel's width, so each stacked its count under its name and the
+row stood 56 px tall over every search on a 320 px screen. Each pill is as wide
+as its own text now, one line and 40 px tall, in a row that scrolls sideways
+like the Tidal tab's -- so the results start 16 px higher and a long translation
+("Исполнители 1234") widens its pill instead of wrapping inside it.
+
+## A release of small fixes
+
+Nine things noticed in use, none of them a redesign: the words in the heading,
+the field at the foot of the screensaver, the row that would not hold two lines
+of text, the two pages that did not fit, the podcasts' search and selection, and
+a margin.
+
+**The heading sits on the chevron's middle.** The page title's line box carries
+more air above its capitals than the back chevron does above its own, so aligning
+their tops put every title a few pixels low against the `"<"`. The label is
+placed four pixels higher in `settingsrow_title()`, which is the one place every
+page's heading is built, so Settings, Music, More and the rest moved together.
+
+**The screensaver's field is a rectangle again.** The band that melted the top
+edge of the metadata field into the sleeve is gone; the field is the flat
+translucent rectangle it was, at the palette's own opacity, with the white clock
+and everything else untouched. The UI test follows the flat field.
+
+**A name and a value share a row.** `fit_row_label()` shrank a name that did not
+fit but left it at its natural width, so on the V1's 212 px row a long name
+wrapped onto a second line inside a row with height for one and ran out over the
+value beside it -- *Trending region* against *Interface language* was the visible
+case. The value now gives way first: it steps down like a name, and its share of
+the row is capped at whatever the name needs at its smallest step (never under
+two fifths of the row, past which neither is readable). Anything still too wide
+is cut with the ellipsis on its one line, on both sides.
+
+**A list starts as far down as it ends.** Pages built with `settingsrow_page()`
+had `cfg->padding` under the last row and none above the first, which read as the
+first row being cut off by the heading. The top padding is the bottom one now,
+on the V1 where it exists at all.
+
+**The podcasts' controls page fits one screen.** Two cards of three pills were
+sized for the 480 px panel and overflowed the V1's 320 px, so the page scrolled
+for six buttons. Cards, gaps and pills step down on the compact panel; the whole
+page is 184 px of the 236 it has.
+
+**Selection on Podcasts starts on the row.** A podcast's row opens no menu of its
+own, so the long press had to go through the three-dot menu's *Select* to begin
+choosing. The lift starts the selection now, with that row already ticked,
+exactly as it does on Tidal and in the file browser; an episode keeps its own
+long press (download, mark listened) and offers *Select* beside them.
+
+**Playlist tracks can be chosen too.** Tidal's selection covered the favourites,
+an album's tracks, an artist's albums and search results, and left a playlist's
+own tracks out because removing one renumbers those after it. They are in now:
+the chosen positions are walked from the *end* of the list backwards, so every
+position still to come is where it was when it was chosen, one request at a time
+as `tidalsync` requires. The list's copy on the card is dropped when the run
+finishes.
+
+**The selection tick is the plain one.** Rows wore `icon_circle_check`, a 36 px
+ring drawn around its own tick; at the 22 px the rows use, the two ran into each
+other and read as a smudge. Podcasts and Tidal show the plain tick the file
+browser puts on a chosen row.
+
+**The podcasts' search remembers what was asked.** Under the field, where the
+Tidal tab puts its history: the last eight queries, newest first, each row a tap
+to run it again and an x to forget it, in `[podcast]` as `search_history_count`
+and `search_history_N`. The keyboard replaces the history while typing, as it
+does there, and the history comes back when the search runs or the page is
+reopened.
+
+**"No podcasts on the card" sits in the middle.** The notice was placed 140 px
+down from the heading, which on the V1's 320 px put it near the foot of the page;
+it is centred in the list's own area now, both ways.

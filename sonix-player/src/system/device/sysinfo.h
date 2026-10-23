@@ -20,16 +20,22 @@
 //         "dac-info": "Dual Cirrus Logic CS43198",
 //         "OS_version": "1.0",
 //         "Build_version": "182",
-//         "ota-repo": "Jepl4r/sonix-player"
+//         "ota-repo": "Jepl4r/sonix-player",
+//         "forked-by": "..."
 //     }
+//
+// "OS_version" is the version the update check compares release tags against,
+// so an image that leaves it as a word rather than a number can never be told
+// apart from the newest release. A build that cuts releases of its own writes
+// the release's version here.
 //
 // This way updating the build number does not mean rebuilding, and whoever
 // assembles a firmware image can write it from the build script. A missing or
 // unreadable file is not an error: the entries show a dash.
 //
-// "device-name" is what tells one player from another. The firmware packer
-// writes a different one into each image, and it is the whole of what this
-// binary knows about which machine it woke up on -- see sysinfo_model().
+// "device-name" is printed on the About page. It no longer decides anything:
+// this build is the TempoTec V1's, and sysinfo_model() answers with that model
+// whatever the file says (see below).
 
 // Rereads the file. Called once at startup; the functions below do not touch
 // the disk.
@@ -39,8 +45,8 @@ void sysinfo_load(void);
 const char *sysinfo_os_version(void);
 const char *sysinfo_build_version(void);
 
-// The name of the player, verbatim from the file: "HiBy R3 Pro II", "HiBy R1"
-// or "TempoTec V1". "" when the file does not say.
+// The name of the player, verbatim from the file -- "TempoTec V1" in the
+// images this tree builds. "" when the file does not say.
 const char *sysinfo_device_name(void);
 
 // The converter, verbatim from the file, for the information page to print.
@@ -51,17 +57,26 @@ const char *sysinfo_dac_info(void);
 // verbatim from the file (ota.h). "" when the file does not say.
 const char *sysinfo_ota_repo(void);
 
+// Who forked this build, verbatim from the file, for the information page to
+// print. "" when the file does not say, which is every image that does not
+// write the key: those show the upstream fork's credit.
+const char *sysinfo_forked_by(void);
+
+// The running kernel's release, from uname() -- "4.4.94" on the device, the
+// host's own on the simulator. "" only when uname() fails.
+const char *sysinfo_kernel_version(void);
+
 // ---------------------------------------------------------------------------
-// the models, and what differs between them
+// the model: the TempoTec V1, and nothing else
 // ---------------------------------------------------------------------------
 //
-// One table, keyed on device-name.
+// One entry, returned by sysinfo_model() whatever system-info.json names. The
+// HiBy R3 Pro II and R1 entries that used to sit beside it are gone with their
+// builds.
 //
 // The panel is written here rather than read from the framebuffer: the pages
 // subtract from screen_height in unsigned arithmetic, and LVGL's fbdev driver
-// reports 800x480 until its file is set. The framebuffer size only picks a row
-// of this table, by exact match, when the name is missing (panel_size() in
-// main.c).
+// reports its size only after its file is set.
 typedef struct {
 	const char *name;		 // as written in system-info.json
 	int panel_width;		 // the panel, on the device and on the simulator alike
@@ -70,29 +85,25 @@ typedef struct {
 	const char *serial_prefix; // what the number on the box starts with
 	bool pmic_charger;		   // charged by the AXP2101 alone, no MP2731 (axpcharge.h)
 	bool sgm31324_led;		   // the status LED is an SGM31324 RGB controller on I2C bus 0 (led.h)
-	bool cs43131;			   // one CS43131, 3.5 mm only, no HBC3000 (alsa-controls.h)
 	bool tap_wake;			   // the touch controller can wake the screen (power.h)
 	bool one_flank;			   // every button on the right flank (remap.c)
 	bool media_keys_swapped;   // KEY_NEXTSONG is the upper skip key, not next (system.c)
 	bool headset_switch_idle_one; // the one jack switch reads 1 with the sockets empty (alsa-controls.c)
 } sysinfo_model_t;
 
-// The entry for the name in the file, or NULL when the file says nothing or
-// names a player this binary does not know. NULL is not a failure to paper
-// over: see firmware_update_file_find().
+// The V1's entry. Never NULL.
 const sysinfo_model_t *sysinfo_model(void);
 
-// The entry whose panel is exactly width x height, or NULL. For sizing the
-// interface when system-info.json names no model; not for choosing an update
-// file or a serial prefix, which need the name itself.
+// The V1's entry when width x height is its panel (240x320), NULL otherwise.
+// Kept for the one caller that sizes the interface from a framebuffer whose
+// reported size the model name cannot be trusted for.
 const sysinfo_model_t *sysinfo_model_by_panel(int width, int height);
 
 // The device serial number: the model's prefix plus the first eight hex digits
 // (upper case) of the SoC efuse chip id (/proc/jz/efuse/efuse_chip_id, line
-// "CHIP_ID: <32 hex>"). It is exactly the number printed on the box of either
-// model (chip id 90a70a42... -> box R3PII90A70A42). "" when the node
-// is absent (the host build, or a firmware without the efuse module) or the
-// model is unknown. Read once and kept: efuses do not change.
+// "CHIP_ID: <32 hex>") -- the number printed on the box. "" when the node is
+// absent (the host build, or a firmware without the efuse module). Read once
+// and kept: efuses do not change.
 const char *sysinfo_serial_number(void);
 
 // ---------------------------------------------------------------------------

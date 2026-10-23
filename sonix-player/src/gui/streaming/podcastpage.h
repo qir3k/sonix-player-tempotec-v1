@@ -41,4 +41,17 @@ void podcastpage_episode_heard(long long episode_id);
 bool podcastpage_episodes_newest_first(void);
 void podcastpage_set_episodes_newest_first(bool newest);
 
+// How the followed podcasts are ordered. Most listened first is the default and
+// the one the list was asked for: the podcasts somebody keeps up with are the
+// ones at the top, rather than whichever was followed most recently. The other
+// two are the alphabet, either way round.
+typedef enum {
+	PODCAST_SORT_PLAYED, // most episodes started first
+	PODCAST_SORT_AZ,
+	PODCAST_SORT_ZA,
+} podcast_sort_t;
+
+podcast_sort_t podcastpage_subs_sort(void);
+void podcastpage_set_subs_sort(podcast_sort_t order);
+
 #endif /* PODCASTPAGE_H */

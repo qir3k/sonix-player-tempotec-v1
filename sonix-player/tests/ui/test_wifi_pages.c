@@ -32,6 +32,8 @@
 #include "src/system/core/config.h"
 #include "src/system/device/clock.h"
 #include "src/system/core/lang.h"
+
+const char *storage_sd_root(void) { return ""; }
 #include "src/system/net/wifi.h"
 
 /* ---- fonts, as in the other page tests ---------------------------------- */

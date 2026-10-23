@@ -1,6 +1,7 @@
 #include "podcastsaved.h"
 
 #include <dirent.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "src/system/core/utils.h"
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/nowplaying/cover.h"
@@ -486,6 +488,31 @@ static void remove_folder_if_empty(const char *folder) {
 	rmdir(folder);
 }
 
+// A delete is not forgotten until the card has it, and sync() is what says so
+// -- but it waits for every pending write in the filesystem, including whatever
+// a download in progress is in the middle of, and on this card that is a wait
+// of seconds. Not one the interface can hold: the row is already gone from the
+// page, and the rest is bookkeeping the card gets round to on its own. Off to a
+// thread at background priority, which is where every other card write this
+// player does already lives.
+static void *sync_card_thread(void *unused) {
+	(void)unused;
+	thread_be_background("podcast sync");
+	sync();
+	return NULL;
+}
+
+static void sync_card_soon(void) {
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, sync_card_thread, NULL) != 0) {
+		// Nothing is lost: the file was removed before this was asked for, and an
+		// unflushed card is a card that writes when it gets to it.
+		fprintf(stderr, "podcasts: no thread for the card sync\n");
+		return;
+	}
+	pthread_detach(thread);
+}
+
 static void delete_confirmed(void *user) {
 	(void)user;
 	if (menu_episode < 0 || menu_episode >= episode_count) {
@@ -498,7 +525,7 @@ static void delete_confirmed(void *user) {
 	char tags[1200];
 	snprintf(tags, sizeof(tags), "%s.tags", episodes[menu_episode].path);
 	remove(tags);
-	sync();
+	sync_card_soon();
 	char folder[800];
 	snprintf(folder, sizeof(folder), "%s/%s", podcastdl_root(), open_show);
 	remove_folder_if_empty(folder);
@@ -694,7 +721,10 @@ void podcastsaved_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_align(shows_empty, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(shows_empty, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(shows_empty, &font_ui_24, 0);
-	lv_obj_align(shows_empty, LV_ALIGN_TOP_MID, 0, settingsrow_content_top(cfg) + 140);
+	// Centred in the list's own area, both ways: the heading takes the top of
+	// the page, and a notice measured down from the top of the panel sat low
+	// under it rather than in the middle of the space left for the rows.
+	lv_obj_align_to(shows_empty, shows_list, LV_ALIGN_CENTER, 0, 0);
 	lv_obj_set_hidden(shows_empty, true);
 
 	episodes_screen = lv_obj_create(NULL);

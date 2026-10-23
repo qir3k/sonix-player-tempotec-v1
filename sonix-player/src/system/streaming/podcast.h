@@ -84,6 +84,15 @@ int podcast_search(const char *query, podcast_feed_t *out, int max);
 // The current chart.
 int podcast_trending(podcast_feed_t *out, int max);
 
+// The language the chart is asked for: an ISO 639 code, or "" for the
+// interface's own. This is the closest the catalogue has to a region -- its
+// trending endpoint filters by language and offers no country filter -- so it is
+// what "trending where I am" means here: the chart of the language somebody
+// chose to read the player in, or another one deliberately, for a listener who
+// wants the podcasts of a place they are not.
+const char *podcast_trending_lang(void);
+void podcast_set_trending_lang(const char *code);
+
 // A podcast's episodes, most recent first.
 int podcast_episodes(long long feed_id, podcast_episode_t *out, int max);
 
