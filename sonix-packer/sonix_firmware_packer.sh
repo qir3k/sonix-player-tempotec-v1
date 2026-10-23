@@ -411,12 +411,13 @@ build_one() {
 	# ==========================================================================
 	#
 	# The script that draws the logo picks one of three files from one field of
-	# the flash marker, and four boot screens do not fit in three branches. So
+	# the flash marker, and five boot screens do not fit in three branches. So
 	# a block of our own goes in just before the vendor's display logic: it
-	# reads the marker's second field, at byte 8 of the same block, draws Space
-	# or Travelling in space with the vendor's own display command, and exits;
-	# every other marker leaves the stock chain untouched. Inserted rather than
-	# shipped whole because the script is the vendor's and stays the vendor's.
+	# reads the marker's second field, at byte 8 of the same block, draws Space,
+	# Travelling in space or the custom picture with the vendor's own display
+	# command, and leaves; every other marker leaves the stock chain untouched.
+	# Inserted rather than shipped whole because the script is the vendor's and
+	# stays the vendor's.
 	#
 	# Nothing about that script is assumed -- not its name, not its display
 	# command, not the shape of its branches. The script is whichever under
@@ -429,6 +430,14 @@ build_one() {
 	# The [ -f ] guards and the && exit are the fallback: a missing picture, or
 	# a display command that fails, hands control back to the stock chain, so
 	# what a device can lose is the choice, not the boot.
+	#
+	# The custom branch is the one that waits. Its picture is written to the
+	# UBIFS partition by the player, and that partition is mounted a line or two
+	# later in the boot than this script runs -- the same reason the marker lives
+	# in raw NAND at all. The function this block goes into is put in the
+	# background by the script's own start), so waiting costs the boot nothing:
+	# it costs the picture a moment, six seconds at most, and then the stock
+	# chain draws as it always did.
 	step "[$MODEL_NAME] teaching the boot script the extra boot screens"
 
 	REPORT="$SCRIPT_DIR/boot-script-report.txt"
@@ -535,12 +544,19 @@ build_one() {
 		# unaligned -s is one more thing a vendor nanddump could stumble over,
 		# and this has been wrong often enough to owe us a trace. The trace
 		# file is what the player's Developer options page shows after a boot.
+		# The custom picture, in the writable partition: the player writes it
+		# there when the choice is made (see bootpic.h). A fixed name, because
+		# the fourteen bytes of marker this block reads carry WHICH picture and
+		# not a path to one.
+		CUSTOM_LOGO="/usr/data/bootlogo_custom.jpeg"
+
 		BOOT_BLOCK="# --- sonix boot screen choice (added by the firmware packer) ---
 boot_raw=\$(nanddump -q -s 0x20000 -l 14 /dev/mtd5 -a 2>/dev/null)
 boot_sel=\${boot_raw#* }
 echo \"sel=\$boot_sel raw=\$boot_raw\" > /tmp/.bootlogo_trace 2>/dev/null
 if [ \"\$boot_sel\" = \"logo:2\" ] && [ -f /etc/logo_space.jpeg ]; then $DISPLAY_CMD /etc/logo_space.jpeg && { echo \"drawn=space\" >> /tmp/.bootlogo_trace; boot_drawn=1; $LEAVE; }; fi
 if [ \"\$boot_sel\" = \"logo:3\" ] && [ -f /etc/logo_travelling.jpeg ]; then $DISPLAY_CMD /etc/logo_travelling.jpeg && { echo \"drawn=travelling\" >> /tmp/.bootlogo_trace; boot_drawn=1; $LEAVE; }; fi
+if [ \"\$boot_sel\" = \"logo:4\" ]; then boot_waited=0; while [ \$boot_waited -lt 60 ] && [ ! -f $CUSTOM_LOGO ]; do boot_waited=\$((boot_waited + 1)); sleep 0.1; done; if [ -f $CUSTOM_LOGO ]; then $DISPLAY_CMD $CUSTOM_LOGO && { echo \"drawn=custom\" >> /tmp/.bootlogo_trace; boot_drawn=1; $LEAVE; }; else echo \"drawn=custom-missing\" >> /tmp/.bootlogo_trace 2>/dev/null; fi; fi
 [ -n \"\$boot_drawn\" ] || echo \"drawn=stock-chain\" >> /tmp/.bootlogo_trace 2>/dev/null
 # --- end sonix boot screen choice ---
 "

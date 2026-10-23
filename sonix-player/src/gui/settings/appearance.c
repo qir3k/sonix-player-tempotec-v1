@@ -17,14 +17,17 @@
 #include "src/gui/shell/theme.h"
 #include "src/gui/shell/toast.h"
 #include "src/gui/shell/topbar.h"
+#include "src/gui/settings/bootpicpage.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/bootlogo.h"
+#include "src/system/device/bootpic.h"
 
 lv_obj_t *appearance_screen;
 
 static lv_obj_t *theme_buttons[THEME_KIND_COUNT];
-static lv_obj_t *btn_boot[4]; // Stock / Retrospace / Space / Travelling in space
+static lv_obj_t *btn_boot[5];		 // Stock / Retrospace / Space / Travelling in space / Custom
+static lv_obj_t *boot_picture_value; // the name of the custom picture, on its row
 static lv_obj_t *btn_clock[4]; // left / centre / right / hidden
 static lv_obj_t *btn_accent[THEME_ACCENT_COUNT]; // the coloured circles
 static lv_obj_t *tint_toggle;
@@ -322,17 +325,22 @@ static void theme_pick_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 // The boot screen: the picture the next power-on opens with
 //
-// Four choices -- Stock, Retrospace, Space and Travelling in space -- painted
-// like the theme pair above. The choice is the one setting on this page that
-// is not only a config value: it also goes into the flash marker the boot
-// script reads, because that script runs before any filesystem a config could
-// live on is mounted. What is picked here is therefore what the next boot
-// shows, and nothing before it.
+// Five choices -- Stock, Retrospace, Space, Travelling in space and Custom --
+// painted like the theme pair above. The first four are pictures the firmware
+// carries; Custom is a picture of the user's own from the Bootlogo folder on
+// the card, made into the boot screen by the page this row opens (see
+// bootpicpage.h).
+//
+// The choice is the one setting on this page that is not only a config value:
+// it also goes into the flash marker the boot script reads, because that
+// script runs before any filesystem a config could live on is mounted. What
+// is picked here is therefore what the next boot shows, and nothing before
+// it.
 // ---------------------------------------------------------------------------
 
 static void refresh_boot_buttons(void) {
 	int choice = theme_boot_screen();
-	for (int i = 0; i < 4; i++) {
+	for (int i = 0; i < 5; i++) {
 		if (!btn_boot[i]) {
 			continue;
 		}
@@ -343,15 +351,52 @@ static void refresh_boot_buttons(void) {
 	}
 }
 
+// The row's value: which file in the card's Bootlogo folder the custom
+// picture was last made from, or "None". Read again on every visit, because
+// the picker changes it on a page of its own.
+//
+// The name is only shown while the copy is still there. Without it the boot
+// screen is one of the four built-in pictures however the row reads, and a
+// row naming a picture that no longer boots is worse than one saying None.
+static void refresh_boot_picture(void) {
+	if (!boot_picture_value) {
+		return;
+	}
+	const char *name = bootpic_present() ? theme_boot_screen_custom() : "";
+	lv_label_set_text(boot_picture_value, name[0] ? name : tr("appearance_boot_picture_none"));
+}
+
 static void boot_pick_cb(lv_event_t *e) {
+	if (switcher_back_drag_active()) {
+		return;
+	}
 	int choice = (int)(intptr_t)lv_event_get_user_data(e);
+
+	// Custom with nothing behind it is not a choice that can be made here;
+	// it is a request to go and pick a picture. theme_set_boot_screen()
+	// would refuse it too -- see the reason there.
+	if (choice == BOOTLOGO_CUSTOM && !bootpic_present()) {
+		switch_screen(bootpicpage_screen);
+		return;
+	}
+
 	theme_set_boot_screen(choice);
 	refresh_boot_buttons();
 }
 
-// The two names are not translated, the way a font's name is not: they are
-// the names this setting gives the two pictures, and they are the words the
-// flash notes and the changelog use.
+// The card's fonts are not the only thing that can change under this page:
+// the picture the boot screen was made from can be changed, or its card taken
+// out, while the picker is open. Both are read again on the way in.
+static void boot_card_refresh_cb(lv_event_t *e) {
+	(void)e;
+	refresh_boot_picture();
+	refresh_boot_buttons();
+}
+
+// The four names are not translated, the way a font's name is not: they are
+// the names this setting gives the four pictures, and they are the words the
+// flash notes and the changelog use. "Custom" is -- it is not a picture's
+// name but what the fifth choice is.
 static lv_obj_t *make_boot_choice(lv_obj_t *parent, const char *text, int choice, bool compact) {
 	lv_obj_t *btn = lv_btn_create(parent);
 	lv_obj_set_size(btn, LV_SIZE_CONTENT, compact ? 40 : 64);
@@ -648,6 +693,7 @@ void appearance_init(gui_config_t *cfg) {
 	btn_boot[BOOTLOGO_SPACE] = make_boot_choice(boot_row, "Space", BOOTLOGO_SPACE, compact);
 	btn_boot[BOOTLOGO_TRAVELLING] =
 		make_boot_choice(boot_row, "Travelling in space", BOOTLOGO_TRAVELLING, compact);
+	btn_boot[BOOTLOGO_CUSTOM] = make_boot_choice(boot_row, tr("appearance_boot_custom"), BOOTLOGO_CUSTOM, compact);
 
 	// Under the card, like the other notes on this page: when the change
 	// becomes visible.
@@ -657,6 +703,20 @@ void appearance_init(gui_config_t *cfg) {
 	lv_obj_add_style(boot_note, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(boot_note, &font_ui_22, 0);
 	lv_label_set_text(boot_note, tr("appearance_boot_screen_note"));
+
+	// Which picture "Custom" means, and the way to it. Its own row rather
+	// than a fifth pill with a name on it: the name is a file name from the
+	// card, and a pill long enough to hold one would push the others off a
+	// 240 px panel.
+	settingsrow_add(container, "appearance_boot_picture", &boot_picture_value, switch_screen_cb,
+					bootpicpage_screen);
+
+	lv_obj_t *boot_picture_note = lv_label_create(container);
+	lv_label_set_long_mode(boot_picture_note, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(boot_picture_note, lv_pct(100));
+	lv_obj_add_style(boot_picture_note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(boot_picture_note, &font_ui_22, 0);
+	lv_label_set_text(boot_picture_note, tr("appearance_boot_picture_note"));
 
 	// A third card: where the clock sits in the status bar.
 	lv_obj_t *clock_card = lv_obj_create(container);
@@ -791,6 +851,7 @@ void appearance_init(gui_config_t *cfg) {
 
 	refresh_buttons();
 	refresh_boot_buttons();
+	refresh_boot_picture();
 	refresh_clock_buttons();
 	refresh_accent_buttons();
 	refresh_text_size_pills();
@@ -806,4 +867,5 @@ void appearance_init(gui_config_t *cfg) {
 	// while the player was running is offered the next time this page comes
 	// up, and one whose card has been pulled out is gone from the row.
 	lv_obj_add_event_cb(appearance_screen, font_pills_reload_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(appearance_screen, boot_card_refresh_cb, LV_EVENT_SCREEN_LOADED, NULL);
 }

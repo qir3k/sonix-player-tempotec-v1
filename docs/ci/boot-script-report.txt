@@ -31,6 +31,7 @@
    echo "sel=$boot_sel raw=$boot_raw" > /tmp/.bootlogo_trace 2>/dev/null
    if [ "$boot_sel" = "logo:2" ] && [ -f /etc/logo_space.jpeg ]; then cmd_jpeg_display /etc/logo_space.jpeg && { echo "drawn=space" >> /tmp/.bootlogo_trace; boot_drawn=1; cmd_jpeg_display() { :; }; }; fi
    if [ "$boot_sel" = "logo:3" ] && [ -f /etc/logo_travelling.jpeg ]; then cmd_jpeg_display /etc/logo_travelling.jpeg && { echo "drawn=travelling" >> /tmp/.bootlogo_trace; boot_drawn=1; cmd_jpeg_display() { :; }; }; fi
+   if [ "$boot_sel" = "logo:4" ]; then boot_waited=0; while [ $boot_waited -lt 60 ] && [ ! -f /usr/data/bootlogo_custom.jpeg ]; do boot_waited=$((boot_waited + 1)); sleep 0.1; done; if [ -f /usr/data/bootlogo_custom.jpeg ]; then cmd_jpeg_display /usr/data/bootlogo_custom.jpeg && { echo "drawn=custom" >> /tmp/.bootlogo_trace; boot_drawn=1; cmd_jpeg_display() { :; }; }; else echo "drawn=custom-missing" >> /tmp/.bootlogo_trace 2>/dev/null; fi; fi
    [ -n "$boot_drawn" ] || echo "drawn=stock-chain" >> /tmp/.bootlogo_trace 2>/dev/null
    # --- end sonix boot screen choice ---
        theme=$(nanddump -q -s 0x20000 -l 7 /dev/mtd5 -a)
@@ -53,5 +54,4 @@
    
        ;;
        *)
-           exit 1
 

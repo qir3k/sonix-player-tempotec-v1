@@ -16,6 +16,7 @@
 #include "src/gui/bluetooth/airpodspage.h"
 #include "src/gui/settings/appearance.h"
 #include "src/gui/bluetooth/btaudio.h"
+#include "src/gui/settings/bootpicpage.h"
 #include "src/gui/bluetooth/btsettings.h"
 #include "src/gui/shell/confirm.h"
 #include "src/gui/shell/corners.h"
@@ -627,6 +628,7 @@ void gui_init(gui_config_t *cfg) {
 	musicsettings_screen = lv_obj_create(NULL);
 	powersettings_screen = lv_obj_create(NULL);
 	appearance_screen = lv_obj_create(NULL);
+	bootpicpage_screen = lv_obj_create(NULL); // the page the boot screen's Custom pill opens
 	language_screen = lv_obj_create(NULL);
 	medialist_screen = lv_obj_create(NULL);
 	medialist_tracks_screen = lv_obj_create(NULL);
@@ -742,6 +744,7 @@ void gui_init(gui_config_t *cfg) {
 	// after devoptions: the system entry opens the page that can unlock it
 	systempage_init(cfg);
 	appearance_init(cfg);
+	bootpicpage_init(cfg); // after appearance: its Custom pill opens this page
 	language_init(cfg);
 	libraryscan_init(cfg);
 	msebsettings_init(cfg); // before musicsettings: the MSEB page hangs its gear off it
@@ -782,7 +785,7 @@ void gui_init(gui_config_t *cfg) {
 	lv_obj_t *const back_swipe_screens[] = {
 		main_menu_screen, music_screen,			browser_screen,	  settings_screen,
 		devoptions_screen, processespage_screen, musicsettings_screen, powersettings_screen, appearance_screen,
-		language_screen,
+		bootpicpage_screen, language_screen,
 		medialist_screen,  medialist_tracks_screen, medialist_albums_screen, audiobooks_screen, audiobooksettings_screen,
 		queue_screen,	  chapters_screen,		 details_screen,   audiobookcontrols_screen,
 		wireless_screen,

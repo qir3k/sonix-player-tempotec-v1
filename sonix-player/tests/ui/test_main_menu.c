@@ -18,6 +18,7 @@
 #include "src/gui/nowplaying/coverflow.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/settings/appearance.h"
+#include "src/gui/settings/bootpicpage.h"
 #include "src/gui/settings/musicsettings.h"
 #include "src/gui/settings/settings.h"
 #include "src/gui/shell/corners.h"
@@ -36,6 +37,7 @@
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/bootlogo.h"
+#include "src/system/device/bootpic.h"
 #include "src/system/library/audiobookdb.h"
 #include "src/system/library/library.h"
 #include "src/system/playback/device_state.h"
@@ -48,6 +50,8 @@ lv_obj_t *ebookpage_screen, *browser_screen, *musicsettings_screen;
 lv_font_t font_ui_14, font_ui_16, font_ui_18, font_ui_20, font_ui_20_bold;
 lv_font_t font_ui_22, font_ui_22_bold, font_ui_24, font_ui_24_bold;
 lv_font_t font_ui_26, font_ui_28, font_ui_32;
+void thread_be_background(const char *name) { (void)name; }
+
 static void (*font_callbacks[16])(void);
 static int font_callback_count;
 static int text_size = FONTS_TEXT_NORMAL;
@@ -86,13 +90,83 @@ int fonts_choices(const char **ids, const char **labels, int max) {
 	return 1;
 }
 
-void bootlogo_set(int choice, bool dark) { (void)choice; (void)dark; }
+/* Last choice handed to the flash marker, so the test can see one was made. */
+static int boot_choice = -1;
+/* The bridge from a worker thread to the interface thread, as one entry: the
+ * test runs the callback itself, when it says to, instead of on a timer. */
+static void (*posted_cb)(void *);
+static void *posted_user;
+bool gui_post(void (*cb)(void *), void *user) {
+	posted_cb = cb;
+	posted_user = user;
+	return true;
+}
+static void drain_post(void) {
+	void (*cb)(void *) = posted_cb;
+	void *user = posted_user;
+	posted_cb = NULL;
+	posted_user = NULL;
+	if (cb) {
+		cb(user);
+	}
+}
+
+void bootlogo_set(int choice, bool dark) {
+	(void)dark;
+	boot_choice = choice;
+}
+
+/* ---- the Bootlogo folder, substituted -------------------------------------
+ * The card is a list of names here: the page lists them, the copy is never
+ * really made, and what is checked is the page and the choice around it.
+ */
+static const char *bootpic_names[4];
+static int bootpic_count;
+static int bootpic_installed = -1; /* index of the picture last installed */
+
+void bootpic_set_root(const char *card_root) { (void)card_root; }
+const char *bootpic_dir(void) { return "<card>/Bootlogo"; }
+bool bootpic_present(void) { return bootpic_installed >= 0; }
+int bootpic_list(char names[][BOOTPIC_NAME_MAX + 1], int max) {
+	int n = bootpic_count < max ? bootpic_count : max;
+	for (int i = 0; i < n; i++) {
+		snprintf(names[i], BOOTPIC_NAME_MAX + 1, "%s", bootpic_names[i]);
+	}
+	return n;
+}
+bool bootpic_size(const char *name, int *width, int *height) {
+	(void)name;
+	*width = 640;
+	*height = 480;
+	return true;
+}
+bootpic_result_t bootpic_install(const char *name, int panel_w, int panel_h) {
+	(void)panel_w;
+	(void)panel_h;
+	for (int i = 0; i < bootpic_count; i++) {
+		if (strcmp(bootpic_names[i], name) == 0) {
+			bootpic_installed = i;
+			return BOOTPIC_OK;
+		}
+	}
+	return BOOTPIC_NO_FILE;
+}
 void device_state_get(device_state_t *out) { memset(out, 0, sizeof(*out)); }
 bool gui_card_available(void) { return true; }
 void gui_notify_no_card(void) { assert(!"unexpected missing card"); }
 void audiobooks_open(void) { switch_screen(audiobooks_screen); }
 void gui_notify_popup(const char *text) { (void)text; assert(!"unexpected popup"); }
 void toast_error(const char *text) { (void)text; assert(!"unexpected error"); }
+/* The busy card a pick puts up, and the success card that replaces it: this
+ * test never asks for the failure one. */
+static const char *toast_busy_text;
+void toast_busy(const char *text) { toast_busy_text = text; }
+void toast_busy_end(void) { toast_busy_text = NULL; }
+void toast_success(const char *text) { toast_busy_text = NULL; (void)text; }
+const char *bootpic_result_key(bootpic_result_t result) {
+	(void)result;
+	return "bootpic_unreadable";
+}
 void topbar_set_battery_percent(bool shown) { (void)shown; }
 void topbar_set_clock_position(int pos) { (void)pos; }
 void switch_screen(lv_obj_t *screen) { lv_screen_load(screen); }
@@ -106,8 +180,6 @@ void player_sheet_attach_drag(lv_obj_t *obj, bool opening) { (void)obj; (void)op
 bool player_sheet_drag_active(void) { return false; }
 void player_refresh_now_playing(void) {}
 void player_sheet_open(bool animated) { (void)animated; }
-void coverflow_attach_edge(lv_obj_t *obj, gui_config_t *cfg) { (void)obj; (void)cfg; }
-bool coverflow_drag_active(void) { return false; }
 void medialist_open(const char *title, library_list_t kind, library_filter_t filter, const char *value) {
 	(void)title; (void)kind; (void)filter; (void)value;
 }
@@ -383,7 +455,9 @@ int main(int argc, char **argv) {
 	lv_obj_t *grid = lv_obj_get_child(main_menu_screen, 0);
 	check_grid(grid, saved_icons_only);
 
-	appearance_screen = lv_obj_create(NULL);
+	bootpicpage_screen = lv_obj_create(NULL); // the page the boot screen's Custom pill opens
+	bootpicpage_init(&cfg);
+	appearance_screen = lv_obj_create(NULL); // after the page: its row points at it
 	appearance_init(&cfg);
 	lv_obj_t *toggle_label = find_label(appearance_screen, tr("appearance_main_menu_icons_only"));
 	assert(toggle_label);
@@ -439,6 +513,57 @@ int main(int argc, char **argv) {
 	lv_obj_send_event(corners_toggle, LV_EVENT_VALUE_CHANGED, NULL);
 	assert(!corners_enabled());
 	assert(config_get_int("ui", "rounded_corners", 0) == 0);
+
+	/* ---- the boot screen, and the page its Custom pill opens ---------------- */
+
+	/* Custom with no picture behind it is a request to go and pick one, not a
+	 * choice: the page opens instead of the marker being written. */
+	lv_obj_t *custom_pill = find_label(appearance_screen, tr("appearance_boot_custom"));
+	assert(custom_pill);
+	lv_obj_send_event(lv_obj_get_parent(custom_pill), LV_EVENT_CLICKED, NULL);
+	assert(lv_screen_active() == bootpicpage_screen);
+	assert(boot_choice != BOOTLOGO_CUSTOM);
+	lv_screen_load(main_menu_screen);
+
+	/* An empty folder: the page says so, and lists nothing. */
+	bootpic_count = 0;
+	lv_obj_send_event(bootpicpage_screen, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_update_layout(bootpicpage_screen);
+	assert(!find_label(bootpicpage_screen, "a.jpg"));
+
+	/* Two pictures on the card, read again on the way in. */
+	bootpic_names[0] = "a.jpg";
+	bootpic_names[1] = "b.png";
+	bootpic_count = 2;
+	lv_obj_send_event(bootpicpage_screen, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_update_layout(bootpicpage_screen);
+	lv_obj_t *a_label = find_label(bootpicpage_screen, "a.jpg");
+	assert(a_label);
+	assert(find_label(bootpicpage_screen, "b.png"));
+	assert(find_label(bootpicpage_screen, "640 x 480")); /* its size, under the name */
+
+	/* Picking one makes the copy on a thread of its own, and the boot screen
+	 * follows it once the copy is there. */
+	lv_obj_send_event(lv_obj_get_parent(a_label), LV_EVENT_CLICKED, NULL);
+	assert(toast_busy_text); /* the page is not silent while the copy is made */
+	for (int i = 0; i < 200 && bootpic_installed < 0; i++) {
+		usleep(10 * 1000);
+	}
+	assert(bootpic_installed == 0);
+	drain_post(); /* the result, as the interface thread would take it */
+	assert(!toast_busy_text); /* and the busy card is put away when it lands */
+	assert(strcmp(theme_boot_screen_custom(), "a.jpg") == 0);
+	assert(theme_boot_screen() == BOOTLOGO_CUSTOM);
+	assert(boot_choice == BOOTLOGO_CUSTOM);
+
+	/* And the Appearance page says which one, on the way back in. */
+	lv_obj_send_event(appearance_screen, LV_EVENT_SCREEN_LOADED, NULL);
+	assert(find_label(appearance_screen, "a.jpg"));
+
+	/* Custom is only an answer while the copy is there. */
+	assert(theme_boot_screen() == BOOTLOGO_CUSTOM);
+	bootpic_installed = -1;
+	assert(theme_boot_screen() == BOOTLOGO_RETROSPACE);
 
 	assert(icon_year.header.w == 32 && icon_year.header.h == 32 && icon_year.header.stride == 128);
 	assert(icon_most_played.header.w == 32 && icon_most_played.header.h == 32 && icon_most_played.header.stride == 128);

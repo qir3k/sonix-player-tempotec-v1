@@ -19,6 +19,7 @@
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/popover.h"
+#include "src/gui/nowplaying/coverflow.h"
 #include "src/gui/shell/quickpanel.h"
 #include "src/gui/shell/scrolltext.h"
 #include "src/gui/nowplaying/trackmenu.h"
@@ -4394,7 +4395,7 @@ static void reload_cover(const char *filepath) {
 		// The sleeve is asked for at the size the arrangement in force will
 		// draw it. A picture that does not match its widget is resampled by
 		// LVGL on every frame it is drawn, and every frame is what a sheet
-		// being dragged, or the control centre coming down over it, means: in
+		// being dragged, or the control centre coming up over it, means: in
 		// Studio the picture is decoded at the width of the screen and shown
 		// at two thirds of it, and that resampling is the interface's core
 		// being spent again and again on an answer that never changes. In
@@ -5580,7 +5581,7 @@ static void next_btn_event_cb(lv_event_t *e) {
 // That arrangement trades the on-screen buttons for the picture, so the picture
 // gets their two jobs: a double tap on its left side goes back a track, on its
 // right side forward. One tap does nothing -- the gesture has to be unambiguous,
-// because a finger meant to drag the player away or call the control centre down
+// because a finger meant to drag the player away or call the control centre up
 // starts the same way.
 //
 // Double taps are LVGL's own (LV_EVENT_DOUBLE_CLICKED): the indev already counts
@@ -6272,18 +6273,19 @@ static void sheet_drag_cb(lv_event_t *e) {
 	}
 }
 
-// The control centre, from the player too.
+// Cover Flow, from the player too.
 //
-// Every other page pulls it down from the status bar, and this page hides the
-// status bar, so there is nothing to pull. This strip stands in for it:
-// the same gesture, in the same place, on a piece of the artwork that has
-// nothing else to do. The bar comes back for as long as the sheet is up (see
-// quickpanel.c), so what the finger lands on afterwards is what it expected.
+// Every other page brings the carousel down from the status bar, and this page
+// hides the status bar, so there is nothing to pull. This strip stands in for
+// it: the same gesture, at the same edge, on a piece of the artwork that has
+// nothing else to do. The bar is not needed for the carousel itself -- it is a
+// sheet over the page either way -- so unlike the control centre this strip does
+// not have to bring anything back.
 //
 // Vertical dominance is required before it engages: a sideways drag across the
 // top of the artwork is somebody putting the player away, not somebody
-// reaching for the brightness.
-static void panel_edge_drag_cb(lv_event_t *e) {
+// reaching for the records.
+static void coverflow_pull_cb(lv_event_t *e) {
 	static lv_point_t start;
 	static bool tracking;
 	static bool engaged;
@@ -6296,7 +6298,7 @@ static void panel_edge_drag_cb(lv_event_t *e) {
 	lv_event_code_t code = lv_event_get_code(e);
 	if (code == LV_EVENT_PRESSED) {
 		lv_indev_get_point(indev, &start);
-		tracking = !quickpanel_is_open();
+		tracking = !coverflow_is_open() && !quickpanel_is_open();
 		engaged = false;
 		return;
 	}
@@ -6315,10 +6317,15 @@ static void panel_edge_drag_cb(lv_event_t *e) {
 			if (dy < 6 || dy <= adx) {
 				return; // still just a press, or a sideways one
 			}
+			// The setting and a closed library say no here, and the finger is
+			// left alone.
+			if (!coverflow_drag_begin()) {
+				tracking = false;
+				return;
+			}
 			engaged = true;
-			quickpanel_drag_begin();
 		}
-		quickpanel_drag_update(dy);
+		coverflow_drag_update(dy);
 		return;
 	}
 
@@ -6326,7 +6333,7 @@ static void panel_edge_drag_cb(lv_event_t *e) {
 		tracking = false;
 		if (engaged) {
 			engaged = false;
-			quickpanel_drag_end();
+			coverflow_drag_end();
 		}
 	}
 }
@@ -7353,21 +7360,21 @@ void player_init(gui_config_t *cfg) {
 	aam_build();
 
 	// Last, so it is above the artwork: an invisible strip exactly where the
-	// status bar would be, owning the pull-down that opens the control centre.
-	lv_obj_t *panel_edge = lv_obj_create(player_screen);
-	lv_obj_remove_style_all(panel_edge);
-	// With the status bar hidden, this strip is the only place to start a
-	// quick-panel pull-down. Extend it below the glass edge area so a case lip
-	// does not make the gesture needlessly finicky.
-	lv_obj_set_size(panel_edge, cfg->screen_width, bp_pick(cfg->top_bar_height + 20, cfg->top_bar_height + 12));
-	lv_obj_set_pos(panel_edge, 0, 0);
-	lv_obj_set_scrollable(panel_edge, false);
-	lv_obj_set_clickable(panel_edge, true);
-	lv_obj_add_event_cb(panel_edge, panel_edge_drag_cb, LV_EVENT_PRESSED, NULL);
-	lv_obj_add_event_cb(panel_edge, panel_edge_drag_cb, LV_EVENT_PRESSING, NULL);
-	lv_obj_add_event_cb(panel_edge, panel_edge_drag_cb, LV_EVENT_RELEASED, NULL);
-	lv_obj_add_event_cb(panel_edge, panel_edge_drag_cb, LV_EVENT_PRESS_LOST, NULL);
-	lv_obj_move_foreground(panel_edge);
+	// status bar would be, owning the pull-down that brings Cover Flow in.
+	lv_obj_t *coverflow_edge = lv_obj_create(player_screen);
+	lv_obj_remove_style_all(coverflow_edge);
+	// With the status bar hidden, this strip is the only place to start the
+	// pull. Extend it below the glass edge area so a case lip does not make the
+	// gesture needlessly finicky.
+	lv_obj_set_size(coverflow_edge, cfg->screen_width, bp_pick(cfg->top_bar_height + 20, cfg->top_bar_height + 12));
+	lv_obj_set_pos(coverflow_edge, 0, 0);
+	lv_obj_set_scrollable(coverflow_edge, false);
+	lv_obj_set_clickable(coverflow_edge, true);
+	lv_obj_add_event_cb(coverflow_edge, coverflow_pull_cb, LV_EVENT_PRESSED, NULL);
+	lv_obj_add_event_cb(coverflow_edge, coverflow_pull_cb, LV_EVENT_PRESSING, NULL);
+	lv_obj_add_event_cb(coverflow_edge, coverflow_pull_cb, LV_EVENT_RELEASED, NULL);
+	lv_obj_add_event_cb(coverflow_edge, coverflow_pull_cb, LV_EVENT_PRESS_LOST, NULL);
+	lv_obj_move_foreground(coverflow_edge);
 
 	// The backdrop over a loaded cover is always the dark treatment -- same
 	// look in both themes; only the no-cover panel follows the theme.

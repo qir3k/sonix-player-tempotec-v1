@@ -159,7 +159,7 @@ static void worker_begin(void) {
 // The recolour of an SVG glyph is a style set when the tile is built, which is
 // a snapshot of the theme at that moment. The shelf is rebuilt on arrival, so
 // this matters only for a theme changed while it is on screen -- from the
-// control centre, which can be pulled down over any page.
+// control centre, which can be pulled up over any page.
 static void shelf_theme_refresh(void) {
 	for (int i = 0; i < shelf_count; i++) {
 		if (shelf[i].glyph) {

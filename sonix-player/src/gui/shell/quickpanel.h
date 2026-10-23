@@ -5,24 +5,31 @@
 
 #include "lvgl/lvgl.h"
 
-// The pull-down control centre: dragging down from the status bar slides in a
+// The control centre: a swipe up from the bottom edge of the screen slides in a
 // sheet with the wifi and bluetooth buttons (tap to toggle, long press to open
-// the page), the transport controls and the brightness slider. Tap outside or
-// swipe up to put it away.
+// the page), the transport controls and the brightness slider. A swipe down
+// carries it back out, and a tap outside puts it away the short way.
+//
+// It comes up from the foot of the screen because that is where the stock
+// firmware puts it. The swipe is watched at the input device rather than owned
+// by a strip of the interface along the bottom, so the last pixels of every page
+// still take their taps -- see the note in quickpanel.c.
 void quickpanel_init(gui_config_t *cfg);
 void quickpanel_open(void);
 
-// True while something else owns the device (USB DAC mode, Wi-Fi transfer) and
-// the control centre must stay shut.
+// True while something else owns the device (USB DAC mode, Wi-Fi transfer, a
+// Bluetooth receiver) and the sheets must stay shut.
 bool quickpanel_blocked(void);
 void quickpanel_close(void);
 bool quickpanel_is_open(void);
 
 // Interactive open/close: the sheet follows the finger instead of jumping the
-// moment a drag starts. The status bar drives the downward gesture, the panel
-// itself the upward one; both call the same three.
-//   begin  -- take the sheet wherever it currently is (open or parked)
-//   update -- dy is the finger's travel since the press
+// moment a drag starts. The bottom edge drives the upward gesture (through the
+// input device), the panel itself the downward one; both call the same three.
+//   begin  -- take the sheet wherever it currently is (open or parked below the
+//             bottom edge)
+//   update -- dy is the finger's travel since the press: upwards brings the
+//             sheet in, downwards puts it away
 //   end    -- animate to whichever end the release is closest to
 void quickpanel_drag_begin(void);
 void quickpanel_drag_update(int dy);

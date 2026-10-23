@@ -26,22 +26,29 @@
 // logo1 is the pale one and logo2 the dark one, which is why light theme
 // writes 1 and dark writes 2.
 //
-// Four boot screens do not fit in three branches, so the marker carries two
+// Five boot screens do not fit in three branches, so the marker carries two
 // fields and the firmware packer puts a small block of our own into that
 // script, just before its first cmd_jpeg_display:
 //
 //     boot_sel=$(nanddump -q -s 0x20008 -l 6 /dev/mtd5 -a 2>/dev/null)
 //     if [ "$boot_sel" = "logo:2" ] && [ -f /etc/logo_space.jpeg ]; then ...
 //     if [ "$boot_sel" = "logo:3" ] && [ -f /etc/logo_travelling.jpeg ]; then ...
+//     if [ "$boot_sel" = "logo:4" ]; then ... /usr/data/bootlogo_custom.jpeg ...
 //
 // reading the second field at byte 8 of the same block. The marker this player
 // writes is therefore "theme:N logo:M", fourteen bytes: the stock pair follows
 // the theme in the first field as it always did, Retrospace is theme:3 with
 // logo:1 -- the stock script's fallback file is the one that carries it -- and
-// Space and Travelling in space are logo:2 and logo:3, drawn by the added
-// block before the stock chain is ever reached. A device whose script has no
-// added block, an older firmware included, draws logo.jpeg for those two: the
-// graceful end of the same idea.
+// Space, Travelling in space and Custom are logo:2, logo:3 and logo:4, drawn
+// by the added block before the stock chain is ever reached. A device whose
+// script has no added block, an older firmware included, draws logo.jpeg for
+// those three: the graceful end of the same idea.
+//
+// The custom branch is the only one that waits. Its picture is written to the
+// UBIFS partition, which is mounted a line or two later in the boot than the
+// script itself runs, so the block waits a few seconds for the file to appear
+// and draws the stock picture if it never does: a boot that takes a moment
+// longer to show a picture beats a boot with no picture in it.
 //
 // Two things this module is careful about, because raw flash is not a file:
 // it reads the marker first and does nothing when it already agrees (NAND has
@@ -51,11 +58,15 @@
 
 // The boot screens Appearance > Boot screen offers. Retrospace is the default,
 // and it is also what a device with no marker at all draws, because the stock
-// script's fallback file is the one that carries it.
+// script's fallback file is the one that carries it. Custom is the one picture
+// none of them is: a picture of the user's own, copied off the card into the
+// writable partition by bootpic.h, at a fixed path the choice block below
+// names for itself.
 #define BOOTLOGO_STOCK      0
 #define BOOTLOGO_RETROSPACE 1
 #define BOOTLOGO_SPACE      2
 #define BOOTLOGO_TRAVELLING 3
+#define BOOTLOGO_CUSTOM     4
 
 // Points the boot logo at the theme and at the chosen boot screen: the stock
 // pair follows the palette, the other three are one picture either way.

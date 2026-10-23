@@ -192,13 +192,25 @@ void theme_set_dark(bool dark);
 void theme_set_kind(theme_kind_t kind);
 
 // The picture the next power-on shows (Appearance > Boot screen):
-// BOOTLOGO_STOCK, the firmware's own light/dark pair, or one of the three
-// added pictures -- BOOTLOGO_RETROSPACE, BOOTLOGO_SPACE, BOOTLOGO_TRAVELLING
-// -- one image each for both palettes. The choice is kept in the config like
-// every other setting, and pushed to the flash marker the boot script reads
-// -- see bootlogo.h for why it cannot be a file. Retrospace is the default.
+// BOOTLOGO_STOCK, the firmware's own light/dark pair, one of the three added
+// pictures -- BOOTLOGO_RETROSPACE, BOOTLOGO_SPACE, BOOTLOGO_TRAVELLING -- or
+// BOOTLOGO_CUSTOM, a picture of the user's own from the Bootlogo folder on the
+// card (see bootpic.h). The choice is kept in the config like every other
+// setting, and pushed to the flash marker the boot script reads -- see
+// bootlogo.h for why it cannot be a file. Retrospace is the default.
+//
+// Custom is only an answer while there is a custom picture to draw: asked for
+// it with none behind it, theme_boot_screen() answers Retrospace, which is
+// what the boot script would draw anyway.
 int theme_boot_screen(void);
 void theme_set_boot_screen(int choice);
+
+// Which file in the Bootlogo folder the custom picture was last made from, or
+// "" when none has been. The name only, no path: it is a caption for the row
+// on the Appearance page and a tick in the picker's list, and the card it
+// came from may not be the card that is in.
+const char *theme_boot_screen_custom(void);
+void theme_set_boot_screen_custom(const char *name);
 
 // The dynamic tint (Appearance > Dynamic tint): the neutral colours --
 // backgrounds, cards, the status bar -- borrow the accent's hue, the way

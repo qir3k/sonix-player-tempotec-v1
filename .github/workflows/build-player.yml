@@ -60,5 +60,8 @@ jobs:
       - name: Check the Screensaver folder's picture rules
         run: make -C sonix-player/tests pictures
 
+      - name: Check the Bootlogo folder and the custom boot picture
+        run: make -C sonix-player/tests bootpic
+
       - name: Run Subsonic and stream-bridge tests
         run: make -C sonix-player/tests test

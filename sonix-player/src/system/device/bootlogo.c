@@ -33,7 +33,9 @@ static char status_buf[64];
 // The marker for a choice and a theme, as it has to land in the flash. The
 // stock pair keeps the theme field the stock script expects; everything else
 // asks for theme:3, the value that falls through to /etc/logo.jpeg, and says
-// what it really is in the second field.
+// what it really is in the second field. That includes Custom: its picture is
+// not one the stock script could find, so the theme field asks for the
+// fallback and the block the packer adds is what draws the real one.
 static void marker_for(int choice, bool dark, char out[MARKER_LENGTH + 1]) {
 	int theme = choice == BOOTLOGO_STOCK ? (dark ? 2 : 1) : 3;
 	snprintf(out, MARKER_LENGTH + 1, "theme:%d logo:%d", theme, choice);
@@ -161,7 +163,7 @@ const char *bootlogo_status(void) {
 }
 
 void bootlogo_set(int choice, bool dark) {
-	if (choice < BOOTLOGO_STOCK || choice > BOOTLOGO_TRAVELLING) {
+	if (choice < BOOTLOGO_STOCK || choice > BOOTLOGO_CUSTOM) {
 		choice = BOOTLOGO_RETROSPACE;
 	}
 

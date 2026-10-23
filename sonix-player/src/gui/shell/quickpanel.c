@@ -5,6 +5,7 @@
 
 #include "src/gui/wireless/airplay.h"
 #include "src/gui/bluetooth/btsettings.h"
+#include "src/gui/nowplaying/coverflow.h"
 #include "src/gui/shell/confirm.h"
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
@@ -61,12 +62,16 @@
 #define CIRCLE_BUTTON_GAP 14
 #define QP_BUTTONS_PER_LINE 4
 
-// How the sheet divides the screen up: a strip for the close hint at the
-// bottom, small gaps at the top and between the cards, and the rest split
-// evenly between them. The leftover space goes to the cards rather than around
-// them, or on a 720 px panel everything sits high.
+// How the sheet divides the screen up: the status bar, a strip for the grabber
+// under it, a small gap, and the rest split evenly between the two cards. The
+// leftover space goes to the cards rather than around them, or on a 720 px panel
+// everything sits high.
+//
+// The grabber is at the top because that is the edge the sheet is dragged back
+// out by: it comes up from the bottom of the screen like the stock firmware's,
+// and a line at its foot would invite the one drag that does nothing.
 #define CARD_PADDING 20
-#define HINT_STRIP_H 52 // room under the cards for the close line
+#define HINT_STRIP_H 52 // room above the cards for the grabber
 #define CARD_TOP_GAP 12 // between the status bar and the first card
 #define CARD_GAP 16	   // between the two cards
 #define CARD_ROW_GAP 12 // between the blocks inside the controls card
@@ -99,7 +104,7 @@ static int np_card_h_rest;
 #define PANEL_PAD_BOTTOM 8
 
 static lv_obj_t *veil;	// dims the page still showing while the sheet is part-way in
-static lv_obj_t *panel; // the full-screen sheet, parked above the top edge
+static lv_obj_t *panel; // the full-screen sheet, parked below the bottom edge
 static lv_obj_t *brightness_slider;
 static lv_obj_t *mseb_btn, *eq_btn;
 static lv_obj_t *wifi_btn, *bt_btn;
@@ -196,23 +201,45 @@ static uint32_t drag_begin_ms;
 #define FLICK_SPEED_PX_S 500
 
 // How far a drag has to travel before the release opens or closes rather than
-// snapping back. Fixed pixels and not a share of the panel: both players have
-// the same 480-wide glass, so the same gesture decides the same way on the
-// 720-tall R3 Pro II and the 800-tall R1. 180 is a quarter of 720.
-#define DRAG_COMMIT_PX 180
+// snapping back: a quarter of the panel on each board, so the same gesture
+// decides the same way on the 720-tall R3 Pro II and the 320-tall V1. The V1's
+// figure is its own and not 180 scaled down by eye -- a full-height sheet pulled
+// up from the bottom edge is the one gesture that has to be comfortable on a
+// screen two and a quarter inches tall.
+#define DRAG_COMMIT_PX 180   // a quarter of 720
+#define DRAG_COMMIT_V1 80    // a quarter of 320
+
+// The pull up from the bottom edge, which is the way in.
+//
+// How close to the edge the press has to land; how far it has to travel before
+// the sheet starts following it; and how far it has to have travelled by the
+// time it lifts, for a swipe too quick for the timer to have caught the middle
+// of -- the same rule as the flick above, in the other direction.
+#define QP_EDGE_H 16
+#define QP_EDGE_COMMIT_PX 6
+#define QP_EDGE_FLICK_PX 24
+
+// LVGL sends the input device a PRESSED and a RELEASED but nothing for the
+// travel in between, so a finger that is down is followed from a timer. It runs
+// only while one is.
+#define QP_EDGE_POLL_MS 12
 
 // ---------------------------------------------------------------------------
 // The stretch of the controls card
 //
 // The card shows the first QP_SLOT_VISIBLE buttons. When the panel holds more,
-// the card is a little taller, a handle sits under the brightness slider, and
-// a drag down on the sheet stretches the card downwards, over the now-playing
-// card: the slider moves down with the edge and the buttons past the eighth
-// open up between the first two lines and the slider, as further lines of the
-// same grid. A drag up folds it back before a second one carries the sheet
-// away. The now-playing card fades as the controls card covers it, and is
-// taken out altogether once it is covered, so a tap under the stretched card
-// cannot reach its transport.
+// the card is a little taller, a handle sits under the brightness slider, and a
+// tap on that handle stretches the card downwards, over the now-playing card:
+// the slider moves down with the edge and the buttons past the eighth open up
+// between the first two lines and the slider, as further lines of the same
+// grid. The now-playing card fades as the controls card covers it, and is taken
+// out altogether once it is covered, so a tap under the stretched card cannot
+// reach its transport.
+//
+// A drag used to do this, and a tap only folded what a drag had stretched. The
+// sheet comes up from the bottom now and leaves by a drag downwards, so that
+// direction is the sheet's own and the handle is what is left: one tap to
+// unfold, one tap to fold.
 // ---------------------------------------------------------------------------
 
 static lv_obj_t *controls_card;
@@ -228,11 +255,9 @@ static int card_top;		   // the controls card's top, inside the sheet
 static int card_h_base;		   // the controls card's height at rest, handle room included
 static int expand_full;		   // how far the card stretches; 0 when nothing is past the eighth
 static int expand_h;		   // how far it is stretched now
-static int expand_from;		   // where a drag found it
-static uint32_t expand_begin_ms;
 
-// Set once a press has moved the sheet or the card, so the click that ends the
-// same press does not also fold the card from its handle.
+// Set once a press has moved the sheet, so the click that ends the same press
+// does not also fold the card from its handle.
 static bool press_dragged;
 
 // The now-playing card's widgets.
@@ -487,7 +512,7 @@ static bool raised_topbar;
 // long press on one of the icons closes the player and loads a page while this
 // slide is still running, and a page keeps its status bar: without the check
 // the bar would be hidden on that page a fifth of a second after it appeared,
-// taking the pull-down handle with it.
+// taking the grabber under it with it.
 static void restore_topbar(void) {
 	if (raised_topbar) {
 		raised_topbar = false;
@@ -578,27 +603,6 @@ static void expand_to(int h, bool animate) {
 	lv_anim_start(&a);
 }
 
-static void expand_drag_begin(void) {
-	lv_anim_delete(controls_card, expand_anim_cb);
-	expand_from = expand_h;
-	expand_begin_ms = lv_tick_get();
-}
-
-static void expand_drag_update(int dy) { expand_set(expand_from + dy); }
-
-// Past halfway it stays stretched, short of it it folds back; a flick goes the
-// way it was flicked, as the sheet's own drag does.
-static void expand_drag_end(void) {
-	int travel = expand_h - expand_from;
-	bool open = expand_h * 2 > expand_full;
-	uint32_t elapsed = lv_tick_elaps(expand_begin_ms);
-	int distance = travel > 0 ? travel : -travel;
-	if (elapsed > 0 && distance >= FLICK_MIN_PX && (distance * 1000) / (int)elapsed >= FLICK_SPEED_PX_S) {
-		open = travel > 0;
-	}
-	expand_to(open ? expand_full : 0, true);
-}
-
 static void expand_handle_clicked_cb(lv_event_t *e) {
 	(void)e;
 	if (press_dragged) {
@@ -680,7 +684,7 @@ void quickpanel_close(void) {
 	}
 	panel_open = false;
 	lv_timer_pause(poll_timer);
-	panel_slide_to(-panel_h, true);
+	panel_slide_to(panel_h, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -694,12 +698,12 @@ void quickpanel_drag_begin(void) {
 	}
 	lv_anim_delete(panel, anim_y_cb);
 	drag_active = true;
-	drag_from_y = panel_open ? 0 : -panel_h;
+	drag_from_y = panel_open ? 0 : panel_h;
 	drag_begin_ms = lv_tick_get();
 
 	if (!panel_open) {
 		panel_prepare();
-		lv_obj_set_y(panel, -panel_h);
+		lv_obj_set_y(panel, panel_h);
 		lv_timer_resume(poll_timer); // the card is visible from the first pixel of travel
 	}
 }
@@ -709,11 +713,11 @@ void quickpanel_drag_update(int dy) {
 		return;
 	}
 	int y = drag_from_y + dy;
-	if (y > 0) {
-		y = 0;
+	if (y > panel_h) {
+		y = panel_h;
 	}
-	if (y < -panel_h) {
-		y = -panel_h;
+	if (y < 0) {
+		y = 0;
 	}
 	lv_obj_set_y(panel, y);
 }
@@ -728,14 +732,16 @@ void quickpanel_drag_end(void) {
 	// gesture started: the same point-of-no-return feel as the swipe-back.
 	int y = lv_obj_get_y(panel);
 	int travel = y - drag_from_y;
-	bool open = drag_from_y == 0 ? travel > -DRAG_COMMIT_PX : travel > DRAG_COMMIT_PX;
+	// Negative travel is upwards, which is the way in; positive is the way out.
+	int commit = bp_pick(DRAG_COMMIT_V1, DRAG_COMMIT_PX);
+	bool open = drag_from_y == 0 ? travel < commit : travel < -commit;
 
 	// Unless it was a flick, which is over long before it has covered that much.
 	// Then only the direction counts.
 	uint32_t elapsed = lv_tick_elaps(drag_begin_ms);
 	int distance = travel > 0 ? travel : -travel;
 	if (elapsed > 0 && distance >= FLICK_MIN_PX && (distance * 1000) / (int)elapsed >= FLICK_SPEED_PX_S) {
-		open = travel > 0;
+		open = travel < 0;
 	}
 
 	panel_open = open;
@@ -744,7 +750,7 @@ void quickpanel_drag_end(void) {
 	} else {
 		lv_timer_pause(poll_timer);
 	}
-	panel_slide_to(open ? 0 : -panel_h, true);
+	panel_slide_to(open ? 0 : panel_h, true);
 }
 
 static void veil_clicked_cb(lv_event_t *e) {
@@ -752,14 +758,18 @@ static void veil_clicked_cb(lv_event_t *e) {
 	quickpanel_close();
 }
 
-// The upward half of the gesture: a drag anywhere on the sheet carries it back
-// out, following the finger all the way. With buttons past the eighth, a drag
-// down stretches the controls card instead, and a drag up on a stretched card
-// folds it before anything carries the sheet away.
+// The way out: a drag downwards anywhere on the sheet carries it back out,
+// following the finger all the way.
+//
+// A downward drag used to stretch the controls card, uncovering the buttons past
+// the eighth. The sheet comes up from the bottom now and leaves the same way, so
+// a downward drag is spoken for and there is no second meaning to give it: the
+// extra lines are reached with a tap on the handle under the slider, which folds
+// and unfolds the card (see expand_handle_clicked_cb).
 static void panel_drag_cb(lv_event_t *e) {
 	static lv_point_t start;
 	static bool tracking;
-	static enum { DRAG_NONE, DRAG_SHEET, DRAG_CARD } engaged;
+	static bool engaged;
 
 	lv_indev_t *indev = lv_indev_active();
 	if (!indev) {
@@ -774,7 +784,7 @@ static void panel_drag_cb(lv_event_t *e) {
 	if (code == LV_EVENT_PRESSED) {
 		lv_indev_get_point(indev, &start);
 		tracking = panel_open;
-		engaged = DRAG_NONE;
+		engaged = false;
 		press_dragged = false;
 		return;
 	}
@@ -787,37 +797,156 @@ static void panel_drag_cb(lv_event_t *e) {
 	int dy = p.y - start.y;
 
 	if (code == LV_EVENT_PRESSING) {
-		if (engaged == DRAG_NONE) {
-			if (dy <= -8) {
-				engaged = expand_h > 0 ? DRAG_CARD : DRAG_SHEET;
-			} else if (dy >= 8 && expand_full > 0 && expand_h < expand_full) {
-				engaged = DRAG_CARD;
-			} else {
-				return; // not a drag yet, or a drag down with nothing to uncover
+		if (!engaged) {
+			if (dy < 8) {
+				return; // not a drag yet, or the way in rather than the way out
 			}
+			engaged = true;
 			press_dragged = true;
-			if (engaged == DRAG_CARD) {
-				expand_drag_begin();
-			} else {
-				quickpanel_drag_begin();
-			}
+			quickpanel_drag_begin();
 		}
-		if (engaged == DRAG_CARD) {
-			expand_drag_update(dy);
-		} else {
-			quickpanel_drag_update(dy);
-		}
+		quickpanel_drag_update(dy);
 		return;
 	}
 
 	if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
 		tracking = false;
-		if (engaged == DRAG_CARD) {
-			expand_drag_end();
-		} else if (engaged == DRAG_SHEET) {
+		if (engaged) {
+			engaged = false;
 			quickpanel_drag_end();
+			return;
 		}
-		engaged = DRAG_NONE;
+
+		// A flick quick enough to be over between two reads of the touch panel
+		// produces a press and a release with no PRESSING in between, so nothing
+		// was followed and the sheet stayed up -- which from the outside is a
+		// control centre that sometimes ignores a quick swipe. The gesture did
+		// happen: the finger went down on the sheet and came up this far below
+		// where it landed.
+		int dx = p.x - start.x;
+		int adx = dx < 0 ? -dx : dx;
+		if (code == LV_EVENT_RELEASED && dy >= QP_EDGE_FLICK_PX && dy > adx) {
+			quickpanel_close();
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The way in: a pull up from the bottom edge
+//
+// The stock firmware's gesture, and the place the status bar used to hold: the
+// control centre comes up from the foot of the screen.
+//
+// It is watched at the input device rather than owned by a strip along the
+// bottom, because such a strip would be an object of the interface sitting over
+// the last few pixels of every page and taking the taps that land there -- a
+// list's last row, the player's transport, a key of the keyboard. The device
+// sees every press and every release whatever is under the finger, so nothing is
+// taken from anybody, and the panel only starts to move once the finger has
+// travelled upwards.
+//
+// Two rules keep it out of the way. The press has to land within QP_EDGE_H of
+// the bottom edge, and it has to land on the PAGE: the top layer carries the
+// interface's chrome -- the status bar, the two sheets, a confirmation's veil,
+// the power menu, the notice card -- and a swipe upwards while a question is on
+// the screen is somebody answering it, not somebody reaching for the brightness.
+// ---------------------------------------------------------------------------
+
+static lv_indev_t *edge_indev;
+static lv_point_t edge_start;
+static bool edge_armed;   // the press landed in the band: watch what it does
+static bool edge_engaged; // the pull has been handed to the sheet
+static lv_timer_t *edge_timer;
+
+static bool edge_may_open(void) {
+	// One sheet at a time, and never over a page that owns the device.
+	return panel && !panel_open && !quickpanel_blocked() && !coverflow_is_open();
+}
+
+// True when the press landed on a page rather than on the chrome above it.
+static bool edge_on_page(lv_obj_t *obj) {
+	if (!obj) {
+		return true; // nothing under the finger: a page's own background
+	}
+	for (lv_obj_t *o = obj; o; o = lv_obj_get_parent(o)) {
+		if (o == lv_layer_top()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static void edge_poll_cb(lv_timer_t *timer) {
+	(void)timer;
+	if (!edge_armed || !edge_indev) {
+		return;
+	}
+	lv_point_t p;
+	lv_indev_get_point(edge_indev, &p);
+	int dy = p.y - edge_start.y;
+	int dx = p.x - edge_start.x;
+	if (!edge_engaged) {
+		int adx = dx < 0 ? -dx : dx;
+		if (dy > -QP_EDGE_COMMIT_PX || -dy <= adx) {
+			return; // not a pull yet, or a sideways one
+		}
+		edge_engaged = true;
+		quickpanel_drag_begin();
+	}
+	quickpanel_drag_update(dy);
+}
+
+static void edge_indev_cb(lv_event_t *e) {
+	lv_indev_t *indev = lv_indev_active();
+	if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) {
+		return;
+	}
+
+	lv_event_code_t code = lv_event_get_code(e);
+	lv_point_t p;
+	lv_indev_get_point(indev, &p);
+
+	if (code == LV_EVENT_PRESSED) {
+		edge_indev = indev;
+		edge_start = p;
+		edge_engaged = false;
+		edge_armed = edge_may_open() && p.y >= panel_h - QP_EDGE_H &&
+					 edge_on_page((lv_obj_t *)lv_event_get_param(e));
+		if (edge_armed) {
+			lv_timer_resume(edge_timer);
+		}
+		return;
+	}
+
+	if (!edge_armed) {
+		return;
+	}
+	if (code != LV_EVENT_RELEASED && code != LV_EVENT_INDEV_RESET) {
+		return;
+	}
+
+	edge_armed = false;
+	lv_timer_pause(edge_timer);
+
+	if (edge_engaged) {
+		edge_engaged = false;
+		// The last travel the timer saw is up to one poll old; the release is
+		// where the finger actually stopped.
+		if (code == LV_EVENT_RELEASED) {
+			quickpanel_drag_update(p.y - edge_start.y);
+		}
+		quickpanel_drag_end();
+		return;
+	}
+
+	// A flick quick enough to be over between two reads of the panel: nothing
+	// was followed, but the finger did go up from the bottom edge, so the sheet
+	// comes up the way it would have anyway.
+	int dy = p.y - edge_start.y;
+	int dx = p.x - edge_start.x;
+	int adx = dx < 0 ? -dx : dx;
+	if (code == LV_EVENT_RELEASED && dy <= -QP_EDGE_FLICK_PX && -dy > adx) {
+		quickpanel_open();
 	}
 }
 
@@ -1949,10 +2078,12 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_set_hidden(veil, true);
 	lv_obj_add_event_cb(veil, veil_clicked_cb, LV_EVENT_CLICKED, NULL);
 
-	// The sheet fills the whole screen, iOS-control-centre style.
+	// The sheet fills the whole screen, iOS-control-centre style, and is parked
+	// a screen below the bottom edge: it rises from the foot of the panel like
+	// the stock firmware's, and goes back the same way.
 	panel = lv_obj_create(veil);
 	lv_obj_set_size(panel, cfg->screen_width, panel_h);
-	lv_obj_set_pos(panel, 0, -panel_h);
+	lv_obj_set_pos(panel, 0, panel_h);
 	lv_obj_add_style(panel, &theme_style_screen, 0);
 	lv_obj_set_style_radius(panel, 0, 0);
 	lv_obj_set_style_border_width(panel, 0, 0);
@@ -1968,17 +2099,21 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_add_event_cb(panel, panel_drag_cb, LV_EVENT_RELEASED, NULL);
 	lv_obj_add_event_cb(panel, panel_drag_cb, LV_EVENT_PRESS_LOST, NULL);
 
-	// Two cards stacked under the status bar: a small gap above the first, one
-	// between them and a strip at the bottom for the close line. Regular panels
-	// split the remainder evenly; compact panels give the 2x4 controls the
-	// larger share. All measurements are inside the sheet's padding.
+	// Two cards stacked under the status bar, with the grabber in the strip
+	// between: the bar first, then the grabber, a small gap, and the cards with
+	// one gap between them. Regular panels split the remainder evenly; compact
+	// panels give the 2x4 controls the larger share. All measurements are inside
+	// the sheet's padding.
 	int content_h = panel_h - panel_pad_top - panel_pad_bottom;
-	int top_inset = cfg->top_bar_height - panel_pad_top + card_top_gap;
-	if (top_inset < 0) {
-		top_inset = 0; // a bar shorter than the padding leaves nothing to clear
+	// Where the status bar ends, in the content box's coordinates: the grabber
+	// lives under the bar, which is brought in front of the sheet while it is up.
+	int bar_clear = cfg->top_bar_height - panel_pad_top;
+	if (bar_clear < 0) {
+		bar_clear = 0; // a bar shorter than the padding leaves nothing to clear
 	}
+	int top_inset = bar_clear + hint_strip_h + card_top_gap;
 	int card_w = cfg->screen_width - 2 * cfg->padding;
-	int cards_room = content_h - top_inset - hint_strip_h - card_gap;
+	int cards_room = content_h - top_inset - card_gap;
 	int controls_h;
 	int now_playing_h;
 	if (qp_compact) {
@@ -2314,19 +2449,22 @@ void quickpanel_init(gui_config_t *cfg) {
 	}
 	lv_obj_center(np_star_icon);
 
-	// --- The way out: a short bar at the bottom, a home-indicator rather than a
-	// chevron, because it reads as "drag me" instead of "press me" and dragging
-	// is what actually closes the panel. The line is not clickable: a finger
-	// landing on it talks to the surface underneath, where the gesture lives.
+	// --- The way out: a short bar at the top, under the status bar -- a
+	// home-indicator rather than a chevron, because it reads as "drag me"
+	// instead of "press me" and dragging is what actually closes the panel.
+	// The bar comes up from the bottom, so the way back out is a drag downwards
+	// and the handle belongs at the edge that is dragged from. The line is not
+	// clickable: a finger landing on it talks to the surface underneath, where
+	// the gesture lives.
 	lv_obj_t *close_btn = lv_obj_create(panel);
 	lv_obj_set_ignore_layout(close_btn, true);
 	lv_obj_set_size(close_btn, 140, hint_strip_h - 8);
-	// Flush with the bottom of the sheet's content box, which centres the line in
-	// the band between the last card and the screen edge: the band is
-	// hint_strip_h below the card plus panel_pad_bottom under the content box,
-	// and the button is hint_strip_h - 8 tall, so its middle lands halfway. Any
-	// offset here takes it off centre.
-	lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+	// Clear of the status bar, which is over the sheet while it is up, and
+	// centred in the rest of the strip: the band is hint_strip_h and the button
+	// is hint_strip_h - 8 tall, so it sits a few pixels down from the bar and
+	// leaves the same few pixels of gap above the first card. Any offset here
+	// takes the line off that centre.
+	lv_obj_align(close_btn, LV_ALIGN_TOP_MID, 0, bar_clear);
 	lv_obj_set_style_bg_opa(close_btn, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_shadow_width(close_btn, 0, 0);
 	lv_obj_set_style_border_width(close_btn, 0, 0);
@@ -2352,4 +2490,15 @@ void quickpanel_init(gui_config_t *cfg) {
 
 	poll_timer = lv_timer_create(poll_cb, PANEL_POLL_MS, NULL);
 	lv_timer_pause(poll_timer);
+
+	// The way in. Watched on every pointer the interface has -- on the device the
+	// touch panel, in the simulator the mouse -- because there is no object of
+	// the interface to hang it on: see the note over edge_indev_cb.
+	edge_timer = lv_timer_create(edge_poll_cb, QP_EDGE_POLL_MS, NULL);
+	lv_timer_pause(edge_timer);
+	for (lv_indev_t *indev = lv_indev_get_next(NULL); indev; indev = lv_indev_get_next(indev)) {
+		if (lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER) {
+			lv_indev_add_event_cb(indev, edge_indev_cb, LV_EVENT_ALL, NULL);
+		}
+	}
 }

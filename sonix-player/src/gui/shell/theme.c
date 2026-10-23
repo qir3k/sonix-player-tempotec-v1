@@ -1,7 +1,8 @@
 #include "theme.h"
 
-#include "src/system/device/bootlogo.h"
 #include "src/system/core/config.h"
+#include "src/system/device/bootlogo.h"
+#include "src/system/device/bootpic.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -337,22 +338,39 @@ static void apply_palette(void) {
 }
 
 // Which picture the next power-on shows (Appearance > Boot screen): the
-// stock light/dark pair, Retrospace, Space or Travelling in space. Retrospace
-// is the default, and it is also what a device with no marker at all draws,
-// because the stock script's fallback file is the one that carries it -- see
-// bootlogo.h.
+// stock light/dark pair, Retrospace, Space or Travelling in space, or the
+// custom picture from the card. Retrospace is the default, and it is also what
+// a device with no marker at all draws, because the stock script's fallback
+// file is the one that carries it -- see bootlogo.h.
+//
+// Custom is answered with Retrospace while the copy is not there. The boot
+// script would draw the fallback in its place anyway -- a factory reset of
+// /usr/data takes the copy with it, and a card that has been through a
+// computer takes the file it was made from -- and a page that showed Custom
+// as chosen while the device boots something else would be lying about what
+// the next power-on does.
 int theme_boot_screen(void) {
 	int choice = (int)config_get_int("ui", "boot_screen", BOOTLOGO_RETROSPACE);
-	if (choice < BOOTLOGO_STOCK || choice > BOOTLOGO_TRAVELLING) {
+	if (choice < BOOTLOGO_STOCK || choice > BOOTLOGO_CUSTOM) {
 		choice = BOOTLOGO_RETROSPACE; // a config written by a newer firmware
+	}
+	if (choice == BOOTLOGO_CUSTOM && !bootpic_present()) {
+		choice = BOOTLOGO_RETROSPACE;
 	}
 	return choice;
 }
 
 // Remembers the choice and moves the flash marker now rather than at the next
 // theme switch: the setting is only worth anything from the next boot on.
+//
+// Custom with no copy behind it is refused rather than written, for the reason
+// above. The picker makes the copy before it asks for the choice, so this is
+// only ever the answer to something else having taken the copy away.
 void theme_set_boot_screen(int choice) {
-	if (choice < BOOTLOGO_STOCK || choice > BOOTLOGO_TRAVELLING) {
+	if (choice < BOOTLOGO_STOCK || choice > BOOTLOGO_CUSTOM) {
+		return;
+	}
+	if (choice == BOOTLOGO_CUSTOM && !bootpic_present()) {
 		return;
 	}
 
@@ -360,6 +378,18 @@ void theme_set_boot_screen(int choice) {
 	config_save();
 
 	bootlogo_set(choice, active->dark);
+}
+
+// Which file in the Bootlogo folder the custom picture was made from. The name
+// and nothing else: the card it came from may not be the one in the slot, and
+// the copy on the partition is what boots either way.
+const char *theme_boot_screen_custom(void) {
+	return config_get("ui", "boot_screen_custom", "");
+}
+
+void theme_set_boot_screen_custom(const char *name) {
+	config_set("ui", "boot_screen_custom", name ? name : "");
+	config_save();
 }
 
 void theme_init(void) {
@@ -420,6 +450,11 @@ void theme_init(void) {
 	// The marker the boot script reads has to agree with the setting too, not
 	// only with the theme. The added palettes use the dark variant of that
 	// legacy light/dark boot-logo switch.
+	//
+	// Asked for at startup, this is also what puts right a marker whose
+	// picture has gone: a Custom whose copy is no longer on the partition
+	// reads back as Retrospace, and the marker follows, so the boot script
+	// stops waiting for a file that is not there.
 	bootlogo_set(theme_boot_screen(), selected_palette()->dark);
 
 	// The accent slot is shared across themes; slot zero resolves to each new
