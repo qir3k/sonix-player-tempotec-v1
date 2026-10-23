@@ -44,6 +44,22 @@ $(BUILD)/test_screensaverpics: $(PICS_SRC) $(ROOT)/src/system/device/screensaver
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(PICS_SRC) $(LDFLAGS) $(LDLIBS)
 
+# The Bootlogo folder and the copy made from it: which files the page offers,
+# and that the one chosen comes out the other end as a 240x320 baseline JPEG
+# the boot script can draw. The pictures are written here with the player's own
+# encoder and the copy is checked by decoding it back. Plain C, no LVGL.
+BOOTPIC_SRC = test_bootpic.c $(ROOT)/src/system/device/bootpic.c \
+              $(ROOT)/src/system/image/jpeg_scaled.c $(ROOT)/src/system/image/png_scaled.c \
+              $(ROOT)/src/system/image/stb_image_impl.c $(ROOT)/src/system/library/jpeginfo.c
+.PHONY: bootpic
+bootpic: $(BUILD)/test_bootpic
+	$(BUILD)/test_bootpic
+
+$(BUILD)/test_bootpic: $(BOOTPIC_SRC) $(ROOT)/src/system/device/bootpic.h \
+                       $(ROOT)/src/system/image/jpeg_scaled.h $(ROOT)/src/system/image/png_scaled.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(BOOTPIC_SRC) $(LDFLAGS) $(LDLIBS)
+
 # The software volume's arithmetic -- the whole level law for a USB DAC with
 # no control of its own. Plain C, no ALSA: the three routing answers
 # (Bluetooth, a card on the port, that card's control) are stubbed.
@@ -197,6 +213,7 @@ UI_SRC = $(ROOT)/tests/ui/test_main_menu.c $(ROOT)/src/gui/shell/main_menu.c \
          $(ROOT)/src/gui/library/music.c $(ROOT)/src/gui/shell/popover.c \
 		 $(ROOT)/src/gui/shell/menuorder.c $(ROOT)/src/gui/shell/menuarrange.c \
          $(ROOT)/src/gui/shell/gridpage.c $(ROOT)/src/gui/settings/appearance.c \
+         $(ROOT)/src/gui/settings/bootpicpage.c \
          $(ROOT)/src/gui/shell/corners.c $(ROOT)/src/gui/shell/settingsrow.c \
          $(ROOT)/src/gui/shell/theme.c \
          $(ROOT)/src/gui/shell/icons.c $(ROOT)/src/gui/shell/main_menu_icons.c \

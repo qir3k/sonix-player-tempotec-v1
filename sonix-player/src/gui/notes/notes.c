@@ -48,7 +48,7 @@ static keyboard_t *name_keyboard;
 // finger was on when it lifted. Same guard the file manager and the library
 // lists use.
 static bool gesture_not_tap(void) {
-	return player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active();
+	return player_sheet_drag_active() || switcher_back_drag_active();
 }
 
 static void row_clicked_cb(lv_event_t *e) {

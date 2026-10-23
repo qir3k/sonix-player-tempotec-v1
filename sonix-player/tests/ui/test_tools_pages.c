@@ -95,6 +95,7 @@ int fonts_choices(const char **ids, const char **labels, int max) {
 }
 
 void bootlogo_set(int choice, bool dark) { (void)choice; (void)dark; }
+bool bootpic_present(void) { return false; }
 void device_state_get(device_state_t *out) { memset(out, 0, sizeof(*out)); }
 bool gui_card_available(void) { return true; }
 void gui_notify_no_card(void) { assert(!"the card is there in this test"); }
@@ -132,8 +133,6 @@ void player_sheet_attach_drag(lv_obj_t *obj, bool opening) {
 	player_drag_attaches++;
 }
 bool player_sheet_drag_active(void) { return false; }
-void coverflow_attach_edge(lv_obj_t *obj, gui_config_t *cfg) { (void)obj; (void)cfg; }
-bool coverflow_drag_active(void) { return false; }
 
 bool cover_load_image_file(const char *path, int box_w, int box_h, cover_fit_t fit, cover_image_t *out) {
 	(void)fit;

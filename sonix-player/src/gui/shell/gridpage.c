@@ -46,7 +46,7 @@ static void gridpage_apply_theme_page(gridpage_theme_page_t *page);
 static gridpage_theme_page_t *gridpage_theme_page_for(lv_obj_t *grid);
 
 static void unavailable_cb(lv_event_t *e) {
-	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
+	if (player_sheet_drag_active() || switcher_back_drag_active()) {
 		return; // this was a swipe across the tile, not a tap on it
 	}
 
@@ -60,7 +60,7 @@ static void unavailable_cb(lv_event_t *e) {
 }
 
 static void action_cb(lv_event_t *e) {
-	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
+	if (player_sheet_drag_active() || switcher_back_drag_active()) {
 		return; // a swipe, not a tap
 	}
 
