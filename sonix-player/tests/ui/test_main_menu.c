@@ -180,6 +180,13 @@ void switcher_attach_back_gesture(lv_obj_t *obj) { (void)obj; }
 bool switcher_back_drag_active(void) { return false; }
 void player_sheet_attach_drag(lv_obj_t *obj, bool opening) { (void)obj; (void)opening; }
 bool player_sheet_drag_active(void) { return false; }
+
+/* The carousel's own hooks. The pages here never open it: what they are checked
+ * for is that they leave the pull alone (see the tap guards in gridpage.c). */
+void coverflow_attach_edge(lv_obj_t *obj, gui_config_t *cfg) { (void)obj; (void)cfg; }
+bool coverflow_drag_active(void) { return false; }
+bool coverflow_is_open(void) { return false; }
+
 void player_refresh_now_playing(void) {}
 void player_sheet_open(bool animated) { (void)animated; }
 void medialist_open(const char *title, library_list_t kind, library_filter_t filter, const char *value) {
