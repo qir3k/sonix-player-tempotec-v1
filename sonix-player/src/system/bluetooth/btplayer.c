@@ -30,6 +30,13 @@
 // hammering it helps nobody.
 #define RETRY_MS 3000
 
+// And how often the bus is asked whether bluetoothd exists at all. That is a
+// question for dbus-daemon, answered in a millisecond, so it can be asked far
+// more often than a registration that would fail: the log has RegisterPlayer
+// refused with ServiceUnknown at 20:26:34 and again at 20:26:37, before hci0
+// was even up, and each of those spends the whole call deadline first.
+#define WAIT_BLUEZ_MS 1000
+
 static pthread_t worker;
 static bool worker_started;
 static volatile bool stopping;
@@ -63,7 +70,13 @@ bool btplayer_command_is_duplicate(void) {
 	// A signed difference, so the millisecond counter's wrap every forty-nine
 	// days does not read as "a very long time ago".
 	bool duplicate = last_command_ms != 0 && (int32_t)(now - last_command_ms) < DUPLICATE_WINDOW_MS;
-	last_command_ms = now;
+	// Only a command that is acted on starts a new window. Recording the
+	// dropped ones too made every duplicate push the window forward, so a burst
+	// -- the log has three Previous in 160 ms -- swallowed whatever genuine
+	// press came after it as long as the burst kept arriving.
+	if (!duplicate) {
+		last_command_ms = now;
+	}
 	pthread_mutex_unlock(&command_lock);
 	return duplicate;
 }
@@ -181,7 +194,10 @@ static void write_all_properties(dbus_writer_t *w) {
 // other.
 static void run_command(const char *member) {
 	if (btplayer_command_is_duplicate()) {
-		printf("btplayer: %s also arrived from the input node; leaving it to that one\n", member);
+		// Which road came first cannot be told from here, and the log used to
+		// claim it knew: this only means the same command arrived twice inside
+		// the window.
+		printf("btplayer: %s already handled a moment ago; dropping this one\n", member);
 		return;
 	}
 
@@ -290,6 +306,22 @@ static void emit_metadata(const track_t *t) {
 // Coming up, and staying up
 // ---------------------------------------------------------------------------
 
+// Whether bluetoothd is on the bus. True when the question itself cannot be
+// asked, so that a real problem is reported by the registration and not hidden
+// here.
+static bool bluez_is_there(void) {
+	dbus_writer_t *w = dbus_call_begin(conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+									   "NameHasOwner", "s");
+	dbus_w_string(w, BLUEZ_NAME);
+	if (!dbus_call_send(conn, 2000, NULL, 0)) {
+		return true;
+	}
+	dbus_reader_t r;
+	dbus_reply_reader(conn, &r);
+	bool owned = false;
+	return dbus_r_bool(&r, &owned) && owned;
+}
+
 static bool register_with_bluez(void) {
 	dbus_writer_t *w =
 		dbus_call_begin(conn, BLUEZ_NAME, BLUEZ_ADAPTER, BLUEZ_MEDIA, "RegisterPlayer", "oa{sv}");
@@ -347,6 +379,16 @@ static void *worker_func(void *unused) {
 			conn = dbus_connect_system(NULL, on_call, NULL);
 			if (!conn) {
 				usleep(RETRY_MS * 1000);
+				continue;
+			}
+		}
+
+		// Registration is a step of its own, not part of opening the connection:
+		// at boot this thread runs before bluetoothd does, and a connection kept
+		// open has to be able to register later, on the pass after it appears.
+		if (!registered) {
+			if (!bluez_is_there()) {
+				usleep(WAIT_BLUEZ_MS * 1000);
 				continue;
 			}
 			registered = register_with_bluez();

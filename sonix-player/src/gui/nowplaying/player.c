@@ -20,6 +20,7 @@
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/popover.h"
 #include "src/gui/nowplaying/coverflow.h"
+#include "src/gui/shell/gestures.h"
 #include "src/gui/shell/quickpanel.h"
 #include "src/gui/shell/scrolltext.h"
 #include "src/gui/nowplaying/trackmenu.h"
@@ -6282,19 +6283,19 @@ static void sheet_drag_cb(lv_event_t *e) {
 	}
 }
 
-// Cover Flow, from the player too.
+// The status bar's pull, from the player too.
 //
-// Every other page brings the carousel down from the status bar, and this page
-// hides the status bar, so there is nothing to pull. This strip stands in for
-// it: the same gesture, at the same edge, on a piece of the artwork that has
-// nothing else to do. The bar is not needed for the carousel itself -- it is a
-// sheet over the page either way -- so unlike the control centre this strip does
-// not have to bring anything back.
+// Every other page pulls a sheet down from the status bar, and this page hides
+// the status bar so its artwork can run to the top edge, so there is nothing to
+// pull. This strip stands in for it: the same gesture, at the same edge, on a
+// piece of the artwork that has nothing else to do. Which sheet it brings is the
+// setting in gestures.h -- the control centre in the classic arrangement, Cover
+// Flow in the stock one -- exactly as on every other page.
 //
 // Vertical dominance is required before it engages: a sideways drag across the
-// top of the artwork is somebody putting the player away, not somebody
-// reaching for the records.
-static void coverflow_pull_cb(lv_event_t *e) {
+// top of the artwork is somebody putting the player away, not somebody reaching
+// for the brightness or the records.
+static void player_top_sheet_pull_cb(lv_event_t *e) {
 	static lv_point_t start;
 	static bool tracking;
 	static bool engaged;
@@ -6326,15 +6327,23 @@ static void coverflow_pull_cb(lv_event_t *e) {
 			if (dy < 6 || dy <= adx) {
 				return; // still just a press, or a sideways one
 			}
-			// The setting and a closed library say no here, and the finger is
-			// left alone.
-			if (!coverflow_drag_begin()) {
-				tracking = false;
-				return;
+			// A closed library, the setting, or a device busy with something
+			// else all say no here, and the finger is left alone.
+			if (gestures_stock()) {
+				if (!coverflow_drag_begin()) {
+					tracking = false;
+					return;
+				}
+			} else {
+				quickpanel_drag_begin();
 			}
 			engaged = true;
 		}
-		coverflow_drag_update(dy);
+		if (gestures_stock()) {
+			coverflow_drag_update(dy);
+		} else {
+			quickpanel_drag_update(dy);
+		}
 		return;
 	}
 
@@ -6342,7 +6351,11 @@ static void coverflow_pull_cb(lv_event_t *e) {
 		tracking = false;
 		if (engaged) {
 			engaged = false;
-			coverflow_drag_end();
+			if (gestures_stock()) {
+				coverflow_drag_end();
+			} else {
+				quickpanel_drag_end();
+			}
 		}
 	}
 }
@@ -7376,21 +7389,21 @@ void player_init(gui_config_t *cfg) {
 	aam_build();
 
 	// Last, so it is above the artwork: an invisible strip exactly where the
-	// status bar would be, owning the pull-down that brings Cover Flow in.
-	lv_obj_t *coverflow_edge = lv_obj_create(player_screen);
-	lv_obj_remove_style_all(coverflow_edge);
+	// status bar would be, owning the pull-down that brings the sheet in.
+	lv_obj_t *top_edge = lv_obj_create(player_screen);
+	lv_obj_remove_style_all(top_edge);
 	// With the status bar hidden, this strip is the only place to start the
 	// pull. Extend it below the glass edge area so a case lip does not make the
 	// gesture needlessly finicky.
-	lv_obj_set_size(coverflow_edge, cfg->screen_width, bp_pick(cfg->top_bar_height + 20, cfg->top_bar_height + 12));
-	lv_obj_set_pos(coverflow_edge, 0, 0);
-	lv_obj_set_scrollable(coverflow_edge, false);
-	lv_obj_set_clickable(coverflow_edge, true);
-	lv_obj_add_event_cb(coverflow_edge, coverflow_pull_cb, LV_EVENT_PRESSED, NULL);
-	lv_obj_add_event_cb(coverflow_edge, coverflow_pull_cb, LV_EVENT_PRESSING, NULL);
-	lv_obj_add_event_cb(coverflow_edge, coverflow_pull_cb, LV_EVENT_RELEASED, NULL);
-	lv_obj_add_event_cb(coverflow_edge, coverflow_pull_cb, LV_EVENT_PRESS_LOST, NULL);
-	lv_obj_move_foreground(coverflow_edge);
+	lv_obj_set_size(top_edge, cfg->screen_width, bp_pick(cfg->top_bar_height + 20, cfg->top_bar_height + 12));
+	lv_obj_set_pos(top_edge, 0, 0);
+	lv_obj_set_scrollable(top_edge, false);
+	lv_obj_set_clickable(top_edge, true);
+	lv_obj_add_event_cb(top_edge, player_top_sheet_pull_cb, LV_EVENT_PRESSED, NULL);
+	lv_obj_add_event_cb(top_edge, player_top_sheet_pull_cb, LV_EVENT_PRESSING, NULL);
+	lv_obj_add_event_cb(top_edge, player_top_sheet_pull_cb, LV_EVENT_RELEASED, NULL);
+	lv_obj_add_event_cb(top_edge, player_top_sheet_pull_cb, LV_EVENT_PRESS_LOST, NULL);
+	lv_obj_move_foreground(top_edge);
 
 	// The backdrop over a loaded cover is always the dark treatment -- same
 	// look in both themes; only the no-cover panel follows the theme.

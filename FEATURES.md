@@ -88,7 +88,7 @@
 - **Album Art Max layout** - the sleeve instead of the controls: the picture at the width of the panel with the status bar kept above it, the format, the shuffle mode, the menu and the heart in one row under that bar, and a minimal scrub bar along the foot of the artwork, with the artist, the track name and the place in the queue on a black strip below. There is no transport on the page - the physical keys are the transport, which the status bar's play/pause mark confirms - and double-tapping the left or right side of the picture is the previous or next track. Nothing is written over the photograph and the strip carries everything that names the track: the artist first, in the record's colour, then the title in the theme's ink, each given the width of its own words so that neither scrolls unless it has to. The scrub bar, the heart, the format line and the queue count are all drawn in the colour of the album art, so the page belongs to the record rather than to the theme. The bar is a thin band of colour that deepens towards the playhead, which is a tab rather than a knob. The two clocks appear in the middle of the picture, large, only while a track is being scrubbed (a finger on the bar or a held skip key), with the artwork dimmed behind them. *Scrub bar on the left* moves the bar up the left edge instead, where the thumb travels vertically. The V1's panel only, where every number in it is measured; the other boards keep the standard arrangement.
 - **Player layout** - Standard, Waveform, Alternative, Immersive, Poster or Album Art Max, in Settings → Music → Display options; the choice is remembered across restarts.
 - **Tint controls from album art** - optional, off by default, in the same Display options: the play/pause button and the played part of the progress bar take the main colour of the playing track's artwork, in every layout, while previous and next keep their colour. The colour is the one already worked out from the decoded artwork, so nothing extra is decoded and playback is untouched; a track with no artwork keeps the theme's colours.
-- **Cover Flow** - an album carousel, pulled down from the top edge of the screen. It follows the finger, comes over whatever page is showing, and goes back up the same way -- from anywhere on the sheet, or from the grip at its foot. Off by default in Settings → Music → Display options.
+- **Cover Flow** - an album carousel: pull up from the bottom of the main menu and it follows the finger up over the page; drag it back down -- from anywhere on the sheet, or from the grip under the status bar -- and it goes away. With **Appearance → Stock gestures** on it comes down from the top edge of any page instead, and goes back up, as on the original firmware. Off by default in Settings → Music → Display options.
 - **Queue**, **Details** and, while an audiobook is loaded, **Chapters**.
 
 ## Streaming
@@ -218,8 +218,8 @@ a self-signed certificate), and HLS.
 - **Calculator** - a display and the twenty keys of an ordinary pocket
   calculator: the four operations, sign, percent, backspace and clear. The sum
   in progress is kept while you leave the page and come back. The keys are
-  laid out from the panel's own measurements, so the same page fills a V1 and a
-  480-pixel HiBy player. The operator keys are drawn a size up and in bold: a
+  laid out from the panel's own measurements, so the page fills the V1's 240×320
+  screen. The operator keys are drawn a size up and in bold: a
   face sets a multiplication sign a little over half the height of the digits
   it sits beside and a hyphen a tenth of it, so at the digits' own size the
   operator column reads as specks next to the numbers it works on.
@@ -270,9 +270,9 @@ a self-signed certificate), and HLS.
   nearest-neighbour scaling, leaving a compact touch D-pad and A/B buttons
   below. The physical Play/Pause button acts as Game Boy Start, and the skip
   buttons act as Select, so neither needs an on-screen button. The shader
-  overlays (the pixel grid of the real LCD panels) are drawn inside the 3x
-  upscale the 480-px HiBy panels use and are not offered on the V1; palettes
-  and GBC color correction apply on every board.
+  overlays (the pixel grid of the real LCD panels) live inside a 3x upscale
+  sized for a 480-pixel panel and are not offered on the V1; palettes and GBC
+  color correction do apply.
 
 ## Keyboard
 
@@ -290,10 +290,11 @@ a self-signed certificate), and HLS.
 
 ## Settings
 
-- **Appearance** - dark and light, plus the V1 palettes Tokyo Night, Amber on Black and OLED (true black with no grey cards, white as its accent, and a main menu without the title and tagline); twelve accent colors, clock position, a dynamic tint that borrows the accent's hue for backgrounds and cards, a toggle to show/hide the battery percentage, and **rounded screen corners** (off by default). On the V1 the arc is 16 px, sized to the 2" 240×320 panel's glass rather than scaled down from the 28 px HiBy mask.
+- **Appearance** - dark and light, plus the V1 palettes Tokyo Night, Amber on Black and OLED (true black with no grey cards, white as its accent, and a main menu without the title and tagline); twelve accent colors, clock position, a dynamic tint that borrows the accent's hue for backgrounds and cards, a toggle to show/hide the battery percentage, and **rounded screen corners** (off by default). The arc is 16 px, sized to the 2" 240×320 panel's glass.
 - **Appearance → Browse on home screen** - replaces the Music tile with Browse, opening the card’s file browser in the card’s `Music` folder directly; a card without that folder still opens at its root. The chevron and the root button still walk up to the rest of the card. Off by default; Music remains available when switched off.
 - **Appearance → Show Books on home screen** - replaces the Audiobooks tile with Books, opening the EPUB shelf directly from home. Off by default; Audiobooks remain available when switched off. Switched on, the two swap places in **More** as well: its Books row becomes Audiobooks, so both libraries stay one tap away and neither is listed twice.
 - **Appearance → Main menu icons only** - optionally hide the six main-menu tile labels and show larger, centered icons. Dedicated native-pixel art avoids stretching small toolbar glyphs or repeatedly filtering the colored illustrations. Applies immediately in every theme and is saved across restarts; other menus, the status bar and the now-playing strip are unchanged. Off by default.
+- **Appearance → Stock gestures** - moves the two sheets to the edges the original firmware pulls them from: Cover Flow down from the top edge of any page, and the control centre up from the bottom of the screen. Off by default, which keeps this player's own arrangement — the control centre pulled down from the status bar, Cover Flow pulled up from the bottom of the main menu — so an update never moves a gesture that is already in the fingers. Both sheets pick the new edges up at the next pull, with no restart; the grip each one is dragged out by moves with them, and in the stock arrangement the extra control-centre buttons are unfolded with a tap on the handle under the brightness slider rather than by dragging the card down.
 - **Appearance → Boot screen** - the picture the next power-on opens with: Retrospace (the default), Space, Travelling in space, Stock, the firmware's own light and dark pictures, or **Custom**, one of your own. The choice is written to the flash marker the boot script reads, so it takes effect at the next boot.
   > **Custom** is a JPEG or PNG from the `Bootlogo` folder in the root of the card, picked from the list under **Custom picture** on the same page. Any size will do: it is scaled to fill the panel and cropped where it overflows, so a landscape photograph boots as a full-screen picture rather than a band between two black bars. The chosen picture is copied into the player, which is why it still boots with the card out — and why a change to the file on the card means choosing it again.
 - **Appearance → Font** - the face the whole interface is drawn with: MiSans (the default), Neon 80s and, where the image carries them, Roboto or Roboto Mono. Text can also be sized Normal or Large. Any `.ttf` or `.otf` file put in the `Fonts` folder on the card is offered beside those, so people can install their own; a face without Cyrillic, Hangul, kanji or Greek still draws the whole interface, because MiSans stays behind it for the letters it does not have.
@@ -311,7 +312,7 @@ a self-signed certificate), and HLS.
   lives in a pocket, where the hand holding it wants to know the music has
   stopped without looking at it. The menu is the only place the interface offers
   a reboot, so that comes back with the option.
-- **LED effects** - on the V1 and the R3 Pro II the status light is driven
+- **LED effects** - the status light is driven
   directly rather than through the firmware's preset patterns: it fades in on
   power-on, cross-fades between colours, breathes red while charging, turns
   green when the charge is done and fades out on the way down. Brightness (1-5)
@@ -320,9 +321,12 @@ a self-signed certificate), and HLS.
   the clock automatically (including the time zone, estimated from the internet
   connection, and daylight-saving rules) or lets you set it by hand; the clock
   is written through to the RTC, with a 24-hour clock option.
-- **Language** - English, Italiano, Deutsch, Español, Français, Russian, Chinese,
-  Japanese. Titles and tags in Korean, Thai and Arabic are shown too, Arabic
-  right to left.
+- **Language** - English, Italiano, Deutsch, Español, Français, Nederlands,
+  Polski, Português BR. The eight language files are read from the resource
+  folder, so dropping another `.ini` in beside them adds a language. Titles and
+  tags come out in whatever script the interface font covers too - Cyrillic,
+  Greek, kana, kanji, Hangul, Thai and Arabic, Arabic right to left - so a
+  Russian or Japanese album title still reads.
 - **Remap buttons** - the three media buttons and the two volume buttons, each
   assignable to nothing, play/pause, previous, next, volume up or volume down.
 - **Keyboard layout** - six layouts: English, Italian, German, Spanish, French

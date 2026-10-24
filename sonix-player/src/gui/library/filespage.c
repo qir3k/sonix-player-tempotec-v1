@@ -38,7 +38,7 @@ lv_obj_t *filespage_screen;
 // began on, so a tap handler has to ignore a click that closed a drag. Same
 // guard the browser, the media lists and the grid pages use.
 static bool gesture_not_tap(void) {
-	return player_sheet_drag_active() || switcher_back_drag_active();
+	return player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active();
 }
 
 // How deep the page will follow a path, and how many entries it will list from

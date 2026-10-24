@@ -359,6 +359,20 @@ static void relabel_everything(const table_t *from, const table_t *to) {
 // public
 // ---------------------------------------------------------------------------
 
+// One language loaded from its file, and the line the log has for it. The
+// table is emptied on failure as well as by load_file() on success, so nothing
+// half-loaded is left for a fallback to answer out of.
+static bool load_named(table_t *t, const char *name) {
+	char path[512];
+	path_for(path, sizeof(path), name);
+	if (!load_file(t, path)) {
+		table_reset(t);
+		return false;
+	}
+	printf("lang: %s, %d texts from %s\n", name, t->count, path);
+	return true;
+}
+
 void lang_init(const char *dir) {
 	if (dir && dir[0]) {
 		snprintf(dir_path, sizeof(dir_path), "%s", dir);
@@ -373,27 +387,41 @@ void lang_init(const char *dir) {
 	const char *chosen = config_get("ui", "language", NULL);
 	snprintf(current, sizeof(current), "%s", chosen ? chosen : LANG_FIRST_BOOT);
 
-	char path[512];
-	path_for(path, sizeof(path), current);
-	if (load_file(&live, path)) {
-		printf("lang: %s, %d texts from %s\n", current, live.count, path);
-	} else {
-		// Since the move to tags the source holds no Italian: it holds tags
-		// ("podcast_search_for_a_podcast"), and every language, Italian included, is a
-		// file to load. Without its file the interface shows bare tags --
-		// deliberately ugly, because that is the unmistakable sign the .ini
-		// files were not installed, not a case to paper over. Italian is still
-		// tried as a fallback, being the file most likely to be present.
-		fprintf(stderr, "lang: no %s.ini in %s: THE TAGS WILL SHOW. Install the language files.\n", current,
-				dir_path);
-		if (strcmp(current, "Italiano") != 0) {
-			path_for(path, sizeof(path), "Italiano");
-			if (load_file(&live, path)) {
-				snprintf(current, sizeof(current), "Italiano");
-				printf("lang: falling back to Italiano, %d texts\n", live.count);
-			}
+	if (load_named(&live, current)) {
+		return;
+	}
+
+	// The name on file can be one this firmware no longer carries: this fork
+	// ships eight languages and a device updated from a build that had Russian,
+	// Chinese or Japanese selected keeps that name in its settings with nothing
+	// behind it. It falls back rather than showing tags -- tags are the sign the
+	// language folder is missing altogether, not the sign one language was
+	// dropped -- and the name it settled on is written back, so the next boot
+	// starts there and the settings page does not go on offering a choice that
+	// cannot be honoured.
+	//
+	// English first, and then Italian, which is the language the source strings
+	// are written in: since the move to tags the source holds tags
+	// ("podcast_search_for_a_podcast"), and every language, Italian included,
+	// is a file to load.
+	static const char *const fallbacks[] = {LANG_FIRST_BOOT, "Italiano"};
+	for (size_t i = 0; i < sizeof(fallbacks) / sizeof(fallbacks[0]); i++) {
+		if (strcmp(current, fallbacks[i]) == 0) {
+			continue;
+		}
+		if (load_named(&live, fallbacks[i])) {
+			printf("lang: %s is not in %s; starting in %s\n", current, dir_path, fallbacks[i]);
+			snprintf(current, sizeof(current), "%s", fallbacks[i]);
+			config_set("ui", "language", current);
+			config_save();
+			return;
 		}
 	}
+
+	// Nothing could be read at all. Without its file the interface shows bare
+	// tags -- deliberately ugly, because that is the unmistakable sign the .ini
+	// files were not installed, not a case to paper over.
+	fprintf(stderr, "lang: no %s.ini in %s: THE TAGS WILL SHOW. Install the language files.\n", current, dir_path);
 }
 
 const char *tr(const char *text) {

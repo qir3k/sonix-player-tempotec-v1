@@ -10,6 +10,7 @@
 #include "src/gui/nowplaying/coverloader.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
+#include "src/gui/shell/gestures.h"
 #include "src/gui/shell/quickpanel.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/scrolltext.h"
@@ -98,14 +99,23 @@
 #define CF_FLING_MAX_PLACES 6
 
 // The travel that separates a press from a pull, in either direction: how far
-// the finger has to move down before the sheet starts following it in, and up
-// before it starts following it out.
+// the finger has to move before the sheet starts following it in, and the other
+// way before it starts following out.
 #define CF_EDGE_COMMIT_PX 8
 
-// The grip at the bottom -- the way out is a pull upwards, so the handle sits
-// where the finger that pulled the sheet down leaves off. How far from the edge
-// it sits, and how tall a target it is (the larger board gets more).
+// The band at the bottom of the main menu where the opening pull has to start in
+// the classic arrangement (see gestures.h). Only that arrangement has it: in the
+// stock one this edge belongs to the control centre, and the carousel comes down
+// from the top.
+#define CF_EDGE_H 80
+
+// The grip: how far from its edge it sits and how tall a target it is (the
+// larger board gets more). Which edge depends on the arrangement -- the stock
+// firmware pulls the sheet down from the top and pushes it back up from its
+// foot; the classic one pulls it up from the bottom and puts it back down from
+// the top, so the grip is at the top, under the status bar.
 #define CF_BAR_INSET 2
+#define CF_BAR_TOP 2
 #define CF_BAR_HIT_W 180
 #define CF_BAR_HIT_H 28
 
@@ -226,9 +236,12 @@ static int32_t glow_best;
 static int glow_centre_x;
 static int glow_width;
 static uint32_t glow_tone;
-static int sheet_h;      // the screen height: the sheet is parked a screen above it
+static int sheet_h;      // the screen height: the sheet is parked a screen away from its edge
 static bool sheet_open;
 static bool sheet_ready; // the buffers are allocated and the album list is open
+static gui_config_t *sheet_cfg;
+static int grip_h;               // the height of the grip's target
+static int placed_scheme = -1;   // the arrangement the sheet is laid out for
 
 static bool enabled;
 static bool enabled_loaded;
@@ -247,6 +260,7 @@ static int window_count;
 
 static void relayout(void);
 static void sheet_park(void);
+static int parked_y(void);
 
 // At most one read from the thumbnail database per pass over the places: see
 // the note in slot_bind().
@@ -1447,6 +1461,59 @@ static void remember_centre(void) {
 // one page that hides the bar and offers the pull from its own strip.
 static bool raised_topbar;
 
+// Lays the sheet out for the arrangement in force: which edge the grip sits on,
+// where the row starts and how much room the album name has. Everything else --
+// the records, the projection, the covers -- is the same.
+//
+// It is asked for whenever the sheet is about to come in, so the setting can be
+// switched under it and the next pull uses the new one. It costs a few alignments
+// and only when the answer has actually changed.
+static void apply_scheme(void) {
+	if (!sheet_cfg || !viewport || !bar_hit || !title_label) {
+		return;
+	}
+	int scheme = gestures_stock() ? 1 : 0;
+	if (scheme == placed_scheme) {
+		return;
+	}
+	placed_scheme = scheme;
+
+	int top;
+	if (gestures_stock()) {
+		// Down from the top edge: the grip is at the foot of the sheet, where
+		// the thumb that pulled it down leaves off, and the row starts right
+		// under the status bar.
+		lv_obj_align(bar_hit, LV_ALIGN_BOTTOM_MID, 0, -CF_BAR_INSET);
+		lv_obj_align(title_label, LV_ALIGN_BOTTOM_MID, 0, -(grip_h + CF_BAR_INSET + 4));
+		top = sheet_cfg->top_bar_height + CF_BAR_INSET;
+	} else {
+		// Up from the bottom of the main menu: the grip is under the status
+		// bar, which is the edge it is dragged back down from, and the row
+		// starts below that.
+		lv_obj_align(bar_hit, LV_ALIGN_TOP_MID, 0, sheet_cfg->top_bar_height + CF_BAR_TOP);
+		lv_obj_align(title_label, LV_ALIGN_BOTTOM_MID, 0, -34);
+		top = sheet_cfg->top_bar_height + CF_BAR_TOP + grip_h;
+	}
+
+	int bottom = bp_pick(60, 74); // room for the album name below the crate
+	int height = sheet_cfg->screen_height - top - bottom;
+	lv_obj_set_pos(viewport, 0, top);
+	lv_obj_set_size(viewport, sheet_cfg->screen_width, height);
+	// From the numbers, not from the object: a size just set is not a size LVGL
+	// has laid out yet, so asking for it here returns zero.
+	mid_y = height / 2;
+	mid_x = sheet_cfg->screen_width / 2;
+
+	if (!sheet_open) {
+		lv_obj_set_y(sheet, parked_y());
+	} else if (sheet_ready) {
+		// The row is drawn against the middle of the viewport, which has just
+		// moved: throw the placed records away so they are put back around it.
+		layout_base = INT32_MIN;
+		relayout();
+	}
+}
+
 static bool sheet_prepare(void) {
 	if (sheet_ready) {
 		return true;
@@ -1458,6 +1525,8 @@ static bool sheet_prepare(void) {
 	if (!buffers_alloc()) {
 		return false;
 	}
+
+	apply_scheme();
 
 	albums = library_index_open(LIBRARY_LIST_ALBUMS, LIBRARY_FILTER_NONE, NULL, LIBRARY_ORDER_DEFAULT, false);
 	album_count = albums ? library_index_count(albums) : 0;
@@ -1514,13 +1583,18 @@ static void restore_topbar(void) {
 	}
 }
 
+// Where the sheet waits while it is not up: a screen below the bottom edge when
+// it is pulled up from there, a screen above the top edge when it comes down
+// from the status bar. Which of the two is the setting in gestures.h.
+static int parked_y(void) { return gestures_stock() ? -sheet_h : sheet_h; }
+
 // Puts everything down. Called when the sheet has finished sliding away, and
 // when something else takes the screen from under it.
 static void sheet_park(void) {
 	lv_anim_delete(sheet, NULL);
 	lv_anim_delete(NULL, scroll_anim_cb);
 	sheet_open = false;
-	lv_obj_set_y(sheet, -sheet_h);
+	lv_obj_set_y(sheet, parked_y());
 	lv_obj_set_hidden(sheet, true);
 	restore_topbar();
 	if (!sheet_ready) {
@@ -1574,8 +1648,10 @@ static void sheet_slide_to(int y, bool animate) {
 static int drag_from_y;
 static bool sheet_dragging;
 
-// The sheet is parked a screen above the top edge and comes down to y = 0, so a
-// downward drag brings it in and an upward one puts it away.
+// The sheet is parked a screen away from the edge it is pulled from and comes to
+// y = 0: down from the top in the stock arrangement, up from the bottom in the
+// classic one. The same three calls serve both, because the travel is measured
+// from wherever it started.
 static bool sheet_drag_begin(void) {
 	if (sheet_dragging) {
 		return true;
@@ -1585,7 +1661,7 @@ static bool sheet_drag_begin(void) {
 		return false;
 	}
 	sheet_dragging = true;
-	drag_from_y = sheet_open ? 0 : -sheet_h;
+	drag_from_y = sheet_open ? 0 : parked_y();
 	lv_obj_set_y(sheet, drag_from_y);
 	return true;
 }
@@ -1594,11 +1670,12 @@ static void sheet_drag_update(int dy) {
 	if (!sheet_dragging) {
 		return;
 	}
+	int parked = parked_y();
 	int y = drag_from_y + dy;
-	if (y < -sheet_h) {
-		y = -sheet_h;
+	if (parked > 0 ? y > parked : y < parked) {
+		y = parked;
 	}
-	if (y > 0) {
+	if (parked > 0 ? y < 0 : y > 0) {
 		y = 0;
 	}
 	lv_obj_set_y(sheet, y);
@@ -1611,13 +1688,19 @@ static void sheet_drag_end(void) {
 	sheet_dragging = false;
 
 	// A quarter of the travel decides it, in whichever direction the gesture
-	// started: the same point of no return as the control centre.
+	// started: the same point of no return as the control centre. open_dir is
+	// the dy that brings the sheet in -- down from the top, up from the bottom --
+	// and `towards` the travel measured towards whichever end it is heading for.
+	int parked = parked_y();
+	int open_dir = parked > 0 ? -1 : 1;
 	int y = lv_obj_get_y(sheet);
 	int travel = y - drag_from_y;
-	bool open = drag_from_y == 0 ? travel > -sheet_h / 4 : travel > sheet_h / 4;
+	int opening = drag_from_y != 0;
+	int towards = travel * open_dir * (opening ? 1 : -1);
+	bool open = opening ? towards > sheet_h / 4 : towards <= sheet_h / 4;
 
 	sheet_open = open;
-	sheet_slide_to(open ? 0 : -sheet_h, true);
+	sheet_slide_to(open ? 0 : parked, true);
 }
 
 // Whether the sheet can come down at all.
@@ -1654,7 +1737,9 @@ void coverflow_open(void) {
 		return;
 	}
 	sheet_open = true;
-	lv_obj_set_y(sheet, -sheet_h);
+	// From wherever the sheet waits in the arrangement in force now: the setting
+	// may have been switched since it was last put away.
+	lv_obj_set_y(sheet, parked_y());
 	sheet_slide_to(0, true);
 }
 
@@ -1786,13 +1871,16 @@ static void row_drag_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 // the way out
 //
-// The sheet follows the finger up and stays wherever it is let go of, exactly
-// as it followed the finger down on the way in. The grip at the bottom is where
-// that is shown -- a line rather than a chevron, because it reads as "drag me"
-// and dragging is what actually puts the carousel away -- but it is not the only
-// place the drag starts: anywhere on the sheet the row has not claimed closes it
-// too. The row takes the horizontal drags, so a press that turns vertical is
-// this one.
+// The sheet follows the finger back towards the edge it came from and stays
+// wherever it is let go of, exactly as it followed the finger in: up in the
+// stock arrangement, down in the classic one. The grip is where that is shown --
+// a line rather than a chevron, because it reads as "drag me" and dragging is
+// what actually puts the carousel away -- and it sits at that edge: the foot of
+// the sheet in the stock arrangement, under the status bar in the classic one.
+//
+// It is not the only place the drag starts: anywhere on the sheet the row has not
+// claimed closes it too. The row takes the horizontal drags, so a press that
+// turns vertical is this one.
 //
 // The back of the record is not part of it: that card stands over everything,
 // and a vertical drag there is somebody scrolling a track list.
@@ -1827,7 +1915,9 @@ static void sheet_pull_cb(lv_event_t *e) {
 		if (!engaged) {
 			int dx = p.x - start.x;
 			int adx = dx < 0 ? -dx : dx;
-			if (dy > -CF_EDGE_COMMIT_PX || -dy <= adx) {
+			// Up in the stock arrangement, down in the classic one.
+			int out_dir = gestures_stock() ? -1 : 1;
+			if (dy * out_dir < CF_EDGE_COMMIT_PX || dy * out_dir <= adx) {
 				return; // still a press, or a sideways one for the row
 			}
 			engaged = true;
@@ -1846,6 +1936,101 @@ static void sheet_pull_cb(lv_event_t *e) {
 			sheet_drag_end();
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// the pull that brings the sheet up, in the classic arrangement
+//
+// There is no extra strip along the bottom of the main menu: an object pinned
+// there would sit over the last few pixels of the home cards and eat their taps.
+// The gesture lives on the grid and the visible mini-player instead, and refuses
+// to start unless the finger went down in the bottom band. A tap is untouched
+// either way, because nothing happens until the finger has travelled upwards.
+//
+// In the stock arrangement this band belongs to the control centre, so the
+// handler never arms; the carousel is pulled down from the top instead.
+// ---------------------------------------------------------------------------
+
+// True from the moment the upward pull is recognised until one tick after the
+// gesture's last event. The pull can start on a main-menu card or on the
+// mini-player, and that target still gets its CLICKED when the finger lifts:
+// without this the sheet would come up with Music or Now Playing opened behind it.
+static bool edge_committed;
+
+bool coverflow_drag_active(void) { return edge_committed; }
+
+// Runs from lv_async_call, a tick after RELEASED and the CLICKED that follows
+// it: the tap this flag exists to swallow has already been discarded by then.
+static void edge_committed_clear_cb(void *unused) {
+	(void)unused;
+	edge_committed = false;
+}
+
+static void edge_drag_cb(lv_event_t *e) {
+	static bool tracking;
+	static bool armed;
+	static lv_point_t start;
+
+	lv_indev_t *indev = lv_indev_active();
+	if (!indev) {
+		return;
+	}
+	lv_event_code_t code = lv_event_get_code(e);
+	int band = (int)(uintptr_t)lv_event_get_user_data(e);
+
+	if (code == LV_EVENT_PRESSED) {
+		lv_indev_get_point(indev, &start);
+		tracking = !gestures_stock() && coverflow_enabled() && !sheet_open && !quickpanel_is_open() &&
+				   start.y >= band;
+		armed = false;
+		return;
+	}
+	if (!tracking) {
+		return;
+	}
+
+	lv_point_t p;
+	lv_indev_get_point(indev, &p);
+	int dy = p.y - start.y;
+
+	if (code == LV_EVENT_PRESSING) {
+		if (!armed) {
+			int dx = p.x - start.x;
+			int adx = dx < 0 ? -dx : dx;
+			if (dy > -CF_EDGE_COMMIT_PX || -dy <= adx) {
+				return;
+			}
+			if (!sheet_drag_begin()) {
+				tracking = false;
+				return;
+			}
+			armed = true;
+			edge_committed = true;
+		}
+		// The travel that armed it counts, so the sheet is already under the
+		// finger rather than a dozen pixels behind it.
+		sheet_drag_update(dy);
+		return;
+	}
+	if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+		tracking = false;
+		if (armed) {
+			armed = false;
+			sheet_drag_end();
+			lv_async_call(edge_committed_clear_cb, NULL);
+		}
+	}
+}
+
+void coverflow_attach_edge(lv_obj_t *target, gui_config_t *cfg) {
+	if (!target) {
+		return;
+	}
+	void *band = (void *)(uintptr_t)(cfg->screen_height - CF_EDGE_H);
+	lv_obj_add_event_cb(target, edge_drag_cb, LV_EVENT_PRESSED, band);
+	lv_obj_add_event_cb(target, edge_drag_cb, LV_EVENT_PRESSING, band);
+	lv_obj_add_event_cb(target, edge_drag_cb, LV_EVENT_RELEASED, band);
+	lv_obj_add_event_cb(target, edge_drag_cb, LV_EVENT_PRESS_LOST, band);
 }
 
 // ---------------------------------------------------------------------------
@@ -1884,6 +2069,7 @@ static void refresh_theme(void) {
 }
 
 void coverflow_init(gui_config_t *cfg) {
+	sheet_cfg = cfg;
 	sheet_h = cfg->screen_height;
 	record_scale = bp_pick(224, LV_SCALE_NONE);
 	back_card_width = LV_MIN(CF_BACK_W, (int)cfg->screen_width - 2 * bp_pick(12, 24));
@@ -1906,7 +2092,7 @@ void coverflow_init(gui_config_t *cfg) {
 	lv_obj_remove_style_all(sheet);
 	lv_obj_add_style(sheet, &theme_style_screen, 0);
 	lv_obj_set_size(sheet, cfg->screen_width, cfg->screen_height);
-	lv_obj_set_pos(sheet, 0, -sheet_h); // parked above the top edge
+	lv_obj_set_pos(sheet, 0, parked_y()); // a screen away from the edge it comes from
 	lv_obj_set_scrollable(sheet, false);
 	lv_obj_set_hidden(sheet, true);
 	// The sheet covers the page underneath: a press that lands on it must not
@@ -1918,9 +2104,10 @@ void coverflow_init(gui_config_t *cfg) {
 	lv_obj_add_event_cb(sheet, sheet_pull_cb, LV_EVENT_RELEASED, NULL);
 	lv_obj_add_event_cb(sheet, sheet_pull_cb, LV_EVENT_PRESS_LOST, NULL);
 
-	// The grip. It sits at the bottom edge, under everything else, and the cover
-	// row is not allowed to reach it.
-	int grip_h = bp_pick(CF_BAR_HIT_H, 44);
+	// The grip. It sits at the edge the sheet is dragged back out by -- the foot
+	// of the sheet in the stock arrangement, under the status bar in the classic
+	// one -- and apply_scheme() puts it there.
+	grip_h = bp_pick(CF_BAR_HIT_H, 44);
 	bar_hit = lv_obj_create(sheet);
 	lv_obj_remove_style_all(bar_hit);
 	lv_obj_set_size(bar_hit, CF_BAR_HIT_W, grip_h);
@@ -1943,9 +2130,9 @@ void coverflow_init(gui_config_t *cfg) {
 
 	// Everything in the horizontal row lives in here and is clipped to it, which is
 	// how a record that reaches either side stops at the viewport edge instead of
-	// sliding over the sheet chrome. The sheet comes down from the top edge, so
-	// the row starts just under the status bar; the album name and the grip share
-	// the band left at the bottom.
+	// sliding over the sheet chrome. Where it starts depends on the arrangement --
+	// under the status bar with the grip at the foot of the sheet, or below the
+	// grip under the bar -- so apply_scheme() places and sizes it.
 	int top = cfg->top_bar_height + CF_BAR_INSET;
 	int bottom = bp_pick(60, 74); // room for the album name below the crate
 	int height = cfg->screen_height - top - bottom;
@@ -2119,6 +2306,10 @@ void coverflow_init(gui_config_t *cfg) {
 
 	refresh_theme();
 	theme_register_refresh(refresh_theme);
+
+	// The grip and the row in the arrangement chosen at startup. Every open asks
+	// again, so switching the setting needs no rebuild.
+	apply_scheme();
 
 	coverloader_start();
 }

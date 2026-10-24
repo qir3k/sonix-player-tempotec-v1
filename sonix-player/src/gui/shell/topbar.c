@@ -12,6 +12,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/nowplaying/coverflow.h"
+#include "src/gui/shell/gestures.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/quickpanel.h"
 #include "src/gui/shell/theme.h"
@@ -82,7 +83,7 @@ static int battery_icon_size = BATTERY_ICON_SIZE;
 #define CHARGE_SETTLE_POLLS 3
 
 // How far down a press has to end, with no drag having started, for the pull on
-// the status bar to count as a flick and bring Cover Flow down anyway.
+// the status bar to count as a flick and bring its sheet in anyway.
 // Comfortably more than the wobble of a tap.
 #define FLICK_OPEN_PX 24
 
@@ -936,15 +937,47 @@ static void topbar_refresh_theme(void) {
 	topbar_refresh_playback();
 }
 
-// A downward drag starting on the status bar brings Cover Flow down, and the
-// carousel follows the finger the whole way instead of snapping open the moment
-// the gesture is recognised. A short drag released early goes back up.
+// A downward drag starting on the status bar pulls a sheet in, and that sheet
+// follows the finger the whole way instead of snapping open the moment the
+// gesture is recognised. A short drag released early goes back out.
 //
-// This is the gesture the stock firmware puts here, and it is why the bar is the
-// place for it: the bar is the top edge of every page, so the pull works
-// wherever the carousel makes sense without a strip of its own going over the
-// first few pixels of each page's content. The control centre came from here
-// before; it comes from the bottom edge now (see quickpanel.c).
+// Which sheet is the setting in gestures.h: the control centre in the classic
+// arrangement, which is the default, and Cover Flow in the stock one. Either way
+// the bar is the right place for it -- it is the top edge of every page, so the
+// pull works wherever it makes sense without a strip of its own going over the
+// first few pixels of each page's content.
+static bool bar_sheet_begin(void) {
+	if (gestures_stock()) {
+		return coverflow_drag_begin();
+	}
+	quickpanel_drag_begin();
+	return true;
+}
+
+static void bar_sheet_update(int dy) {
+	if (gestures_stock()) {
+		coverflow_drag_update(dy);
+	} else {
+		quickpanel_drag_update(dy);
+	}
+}
+
+static void bar_sheet_end(void) {
+	if (gestures_stock()) {
+		coverflow_drag_end();
+	} else {
+		quickpanel_drag_end();
+	}
+}
+
+static void bar_sheet_open(void) {
+	if (gestures_stock()) {
+		coverflow_open();
+	} else {
+		quickpanel_open();
+	}
+}
+
 static void topbar_drag_cb(lv_event_t *e) {
 	static lv_point_t start;
 	static bool tracking;
@@ -958,10 +991,9 @@ static void topbar_drag_cb(lv_event_t *e) {
 	lv_event_code_t code = lv_event_get_code(e);
 	if (code == LV_EVENT_PRESSED) {
 		lv_indev_get_point(indev, &start);
-		// The bar drives the sheet directly through coverflow_drag_*(), so the
-		// block and the "one sheet at a time" rule have to be asked here as well
-		// as inside coverflow_open(); the drag handler is the path a finger
-		// actually takes.
+		// The bar drives the sheet directly through the drag calls, so the block
+		// and the "one sheet at a time" rule have to be asked here as well as
+		// inside the open(); the drag handler is the path a finger actually takes.
 		tracking = !quickpanel_is_open() && !quickpanel_blocked() && !coverflow_is_open();
 		engaged = false;
 		return;
@@ -979,15 +1011,16 @@ static void topbar_drag_cb(lv_event_t *e) {
 			if (dy < 8) {
 				return; // still a press, not a pull
 			}
-			// The setting, a closed library and a device busy with something
-			// else all say no here, and the finger is left alone.
-			if (!coverflow_drag_begin()) {
+			// A closed library, a device busy with something else, or a sheet
+			// that cannot come in at all all say no here, and the finger is left
+			// alone.
+			if (!bar_sheet_begin()) {
 				tracking = false;
 				return;
 			}
 			engaged = true;
 		}
-		coverflow_drag_update(dy);
+		bar_sheet_update(dy);
 		return;
 	}
 
@@ -995,25 +1028,25 @@ static void topbar_drag_cb(lv_event_t *e) {
 		tracking = false;
 		if (engaged) {
 			engaged = false;
-			coverflow_drag_end();
+			bar_sheet_end();
 			return;
 		}
 
 		// A flick quick enough to be over between two reads of the touch panel
 		// produces a press and a release with no PRESSING in between, so the
-		// drag above never began and the sheet stayed up -- which from the
-		// outside is a carousel that sometimes ignores a fast swipe. The gesture
-		// did happen: the finger went down on the bar and came up this far below
+		// drag above never began and the sheet stayed out -- which from the
+		// outside is a sheet that sometimes ignores a fast swipe. The gesture did
+		// happen: the finger went down on the bar and came up this far below
 		// where it landed.
 		if (dy >= FLICK_OPEN_PX) {
-			coverflow_open();
+			bar_sheet_open();
 		}
 	}
 }
 
 // Nothing inside the bar takes a press; the bar does.
 //
-// Every press on the status bar has one meaning -- pull Cover Flow down -- and
+// Every press on the status bar has one meaning -- pull its sheet down -- and
 // topbar_drag_cb() is on the bar itself, so a child that takes the press
 // first is a strip of bar where the gesture does not start. LVGL hands the
 // press to the topmost clickable object under the finger and nothing bubbles up
@@ -1071,8 +1104,8 @@ void topbar_init(gui_config_t *cfg) {
 	lv_obj_set_style_pad_all(container_left, 0, 0);
 	lv_obj_set_style_pad_gap(container_left, topbar_compact ? 2 : 8, 0);
 	lv_obj_set_scrollable(container_left, false);
-	// Not clickable, so presses reach the bar itself, whose drag handler brings
-	// the carousel down.
+	// Not clickable, so presses reach the bar itself, whose drag handler pulls
+	// the sheet down.
 	lv_obj_set_clickable(container_left, false);
 	lv_obj_set_flex_flow(container_left, LV_FLEX_FLOW_ROW);
 	lv_obj_set_flex_align(container_left, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);

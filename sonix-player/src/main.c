@@ -1188,11 +1188,9 @@ static lv_display_t *host_display;
 
 // The keyboard stands in for the buttons on the case.
 //
-// On the R3 Pro II and TempoTec V1 the two skip keys arrive from the kernel
-// swapped -- NEXTSONG is the physical previous button and PREVIOUSSONG the
-// physical next one (see keymap_button_for_code). On the R1, whose one skip key
-// sends NEXTSONG, B is that key and M stands for a previous key the R1 does not
-// have.
+// On the TempoTec V1 the two skip keys arrive from the kernel swapped --
+// NEXTSONG is the physical previous button and PREVIOUSSONG the physical next
+// one (see keymap_button_for_code). So B is the previous key and M the next.
 static const struct {
 	SDL_Keycode key;
 	int code;

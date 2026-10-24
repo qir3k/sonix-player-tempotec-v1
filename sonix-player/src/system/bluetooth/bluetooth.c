@@ -217,6 +217,16 @@ static int g_pending_volume = -1; // coalesces a held volume key into one write
 static bt_stream_t g_rx_stream;
 static unsigned g_rx_serial; // moves every time the worker reads the line above
 
+// The codecs the sending device offers, read on the worker with the rest of the
+// receiver's state and read here from the cache. The receiver page's codec menu
+// used to ask btstack directly, from the GUI thread, on a connection whose
+// single waiting-reply slot belongs to the worker: a question asked there could
+// take the worker's pending reply with it -- which is what "no reply" after a
+// full call deadline looks like (Discoverable = false, 23:03:04).
+static char g_rx_codecs[BT_MAX_CODECS][BT_CODEC_MAX];
+static int g_rx_codec_count;
+static char g_rx_codec_selected[BT_CODEC_MAX];
+
 static void post_job(const job_t *job);
 
 // ---------------------------------------------------------------------------
@@ -1777,8 +1787,33 @@ static void refresh_devices(void) {
 // rather than all at once at the end.
 #define SCAN_SECONDS 10
 
+// How many times a refused discovery is asked for again, and how long between.
+// NotReady is what bluez answers while the controller is coming back from a
+// reset, and the log has three of them inside a second at 23:13:49 with the
+// chip down under bluealsa at the same moment ("Couldn't get HCI version:
+// Network is down"). Retried, the search starts a little late instead of
+// failing under the user's finger.
+#define SCAN_START_TRIES 3
+#define SCAN_START_WAIT_MS 400
+
 static void do_scan(void) {
-	if (!btstack_discovery(true)) {
+	bool started = false;
+	for (int attempt = 0; attempt < SCAN_START_TRIES && !started; attempt++) {
+		if (attempt) {
+			sleep_ms(SCAN_START_WAIT_MS);
+			pthread_mutex_lock(&lock);
+			bool abandon = !g_enabled;
+			if (abandon) {
+				g_scanning = false;
+			}
+			pthread_mutex_unlock(&lock);
+			if (abandon) {
+				return;
+			}
+		}
+		started = btstack_discovery(true);
+	}
+	if (!started) {
 		// Said here as well as at the end, because this is the branch a user with
 		// no radio takes: with no line here their log carries nothing about the
 		// search, which reads as a search that ran and found nothing.
@@ -2006,7 +2041,14 @@ static bool connect_was_refused(const char *why) {
 	return strstr(why, "org.bluez.Error.Failed") != NULL && strstr(why, "Host is down") == NULL;
 }
 
-static bool connect_device(const char *mac, bool source_only) {
+static bool connect_device_ex(const char *mac, bool source_only, char *why_out, size_t why_size);
+
+// connect_device() with bluez's own words for a refusal, so the caller can tell
+// a device that is switched off from this side not being ready yet.
+static bool connect_device_ex(const char *mac, bool source_only, char *why_out, size_t why_size) {
+	if (why_out && why_size) {
+		why_out[0] = '\0';
+	}
 	if (source_only) {
 		fprintf(stderr, "bluetooth: requesting receiver stream from %s\n", mac);
 		bool ok = btstack_connect_a2dp_source(mac, CONNECT_TIMEOUT_MS);
@@ -2079,6 +2121,9 @@ static bool connect_device(const char *mac, bool source_only) {
 		}
 	}
 	fprintf(stderr, "bluetooth: connect %s -> %s\n", mac, ok ? "ok" : "FAILED");
+	if (!ok && why_out && why_size) {
+		snprintf(why_out, why_size, "%s", why);
+	}
 	if (ok) {
 		remember_last_device(mac);
 		// The ACL reply is not the audio profile: bluealsa's PCM is the sign
@@ -2098,6 +2143,10 @@ static bool connect_device(const char *mac, bool source_only) {
 	}
 	refresh_devices();
 	return ok;
+}
+
+static bool connect_device(const char *mac, bool source_only) {
+	return connect_device_ex(mac, source_only, NULL, 0);
 }
 
 // How long a bond reported as failed is looked for in bluez all the same.
@@ -2138,7 +2187,23 @@ static bool pair_and_connect(const char *mac) {
 	btstack_discovery(false);
 
 	fprintf(stderr, "bluetooth: pairing %s\n", mac);
-	if (!btstack_pair(mac, PAIR_TIMEOUT_MS)) {
+	char why[160] = "";
+	if (!btstack_pair_why(mac, PAIR_TIMEOUT_MS, why, sizeof(why))) {
+		// No answer at all means the call deadline ran out while bluez was
+		// still bonding: it allows its own attempt two minutes, and until that
+		// ends every adapter property write and every Connect queues behind the
+		// mgmt command and comes back "no reply" or NotReady -- which is what
+		// left the list page's Discoverable false unanswered, the radio visible
+		// on a page that had closed, and a tap on a device in the list failing
+		// for no reason the row could report. Told to stop, so the next thing
+		// the user asks for is answered.
+		//
+		// An error name means bluez had already finished: nothing to cancel,
+		// and "InProgress" is a reason to leave the attempt alone.
+		if (!why[0]) {
+			fprintf(stderr, "bluetooth: abandoning the bonding attempt bluez is still running for %s\n", mac);
+			btstack_cancel_pairing(mac);
+		}
 		// Some earbuds complete the bond and close the link before bluez has
 		// the answer to Pair, which then reports a failure or a timeout while
 		// the bond is saved -- and after the next Bluetooth restart the device
@@ -2302,6 +2367,13 @@ static void reconnect_last(void) {
 	// Up to three goes. The first can land while bluealsa has a process but has
 	// not registered its endpoint with bluez yet, and then the link comes up with
 	// no audio profile on it.
+	//
+	// What bluez answered decides what the wait is worth. "Host is down" is the
+	// page timeout of the device itself -- switched off, in a drawer, out of
+	// range -- and two more of those are ten more seconds of the worker that
+	// cannot succeed. "NotReady" is this side, and needs longer than the 1.5 s
+	// the attempts were spaced by: the log has all three refused inside two
+	// seconds of the stack coming up, 0.14 s apart from it.
 	for (int attempt = 1; attempt <= 3; attempt++) {
 		// Checked again here and not only between the attempts: the previous
 		// connect_device() took seconds, and this is the last moment before a
@@ -2310,7 +2382,8 @@ static void reconnect_last(void) {
 			return;
 		}
 		fprintf(stderr, "bluetooth: going back to %s (attempt %d)\n", mac, attempt);
-		connect_device(mac, false);
+		char why[160] = "";
+		connect_device_ex(mac, false, why, sizeof(why));
 
 		if (btstack_audio_sink(sink, sizeof(sink)) && strcasecmp(sink, mac) == 0) {
 			fprintf(stderr, "bluetooth: %s is back with audio\n", mac);
@@ -2319,7 +2392,11 @@ static void reconnect_last(void) {
 		if (reconnect_should_stop(mac)) {
 			return;
 		}
-		sleep_ms(1500);
+		if (strstr(why, "Host is down")) {
+			fprintf(stderr, "bluetooth: %s is not there (%s); not asking again\n", mac, why);
+			return;
+		}
+		sleep_ms(strstr(why, "NotReady") ? 4000 : 1500);
 	}
 	fprintf(stderr, "bluetooth: %s did not come back with an audio profile after three tries\n", mac);
 }
@@ -2799,6 +2876,13 @@ static void do_read_receiver(void) {
 	bool sending = btstack_audio_source(mac, sizeof(mac));
 	bool have = sending && btstack_stream_info(mac, true, &info);
 
+	char codecs[BT_MAX_CODECS][BT_CODEC_MAX];
+	char selected[BT_CODEC_MAX] = "";
+	int codec_count = 0;
+	if (sending) {
+		codec_count = btstack_codecs_dir(mac, true, codecs, BT_MAX_CODECS, selected, sizeof(selected));
+	}
+
 	// What the sender is doing, read outright: bluez announces every later
 	// change, but nothing has been announced yet at the moment the link comes
 	// up, and that is exactly when the first key can arrive.
@@ -2820,6 +2904,11 @@ static void do_read_receiver(void) {
 	} else {
 		memset(&g_rx_stream, 0, sizeof(g_rx_stream));
 	}
+	g_rx_codec_count = codec_count;
+	for (int i = 0; i < codec_count; i++) {
+		snprintf(g_rx_codecs[i], BT_CODEC_MAX, "%s", codecs[i]);
+	}
+	snprintf(g_rx_codec_selected, sizeof(g_rx_codec_selected), "%s", selected);
 	g_rx_serial++;
 	g_serial++;
 	pthread_mutex_unlock(&lock);
@@ -2880,11 +2969,17 @@ int bluetooth_receiver_codecs(char out[][BT_CODEC_MAX], int max, char *selected,
 		return 0;
 	}
 
-	char mac[BT_MAC_MAX];
-	if (!btstack_audio_source(mac, sizeof(mac))) {
-		return 0;
+	// Read here, asked on the worker: see g_rx_codecs.
+	pthread_mutex_lock(&lock);
+	int count = g_rx_codec_count < max ? g_rx_codec_count : max;
+	for (int i = 0; i < count; i++) {
+		snprintf(out[i], BT_CODEC_MAX, "%s", g_rx_codecs[i]);
 	}
-	return btstack_codecs_dir(mac, true, out, max, selected, selected_size ? (size_t)selected_size : 0);
+	if (selected && selected_size > 0) {
+		snprintf(selected, (size_t)selected_size, "%s", g_rx_codec_selected);
+	}
+	pthread_mutex_unlock(&lock);
+	return count;
 }
 
 bool bluetooth_receiver_track(bt_track_t *out) {
@@ -3091,6 +3186,58 @@ static void restart_bluealsa(const char *why) {
 	}
 }
 
+// A source that refused the invitation is not asked again for a minute.
+//
+// Every invitation is a ConnectProfile with a twenty-five second deadline, and
+// the receiver page is opened and closed as often as the user likes: with no
+// memory of the refusal the same phone that is switched off was asked again on
+// every visit, five seconds of the worker each time, and the log carries that
+// as a "ConnectProfile(A2DP source) ... NotReady" storm. Worker thread only,
+// so no lock.
+#define INVITE_BACKOFF_MS 60000
+#define INVITE_BACKOFF_MAX 8
+
+static struct {
+	char mac[BT_MAC_MAX];
+	uint32_t until;
+} invite_backoff[INVITE_BACKOFF_MAX];
+
+static bool invite_is_blocked(const char *mac) {
+	for (int i = 0; i < INVITE_BACKOFF_MAX; i++) {
+		if (invite_backoff[i].mac[0] && strcasecmp(invite_backoff[i].mac, mac) == 0) {
+			return (int32_t)(now_ms() - invite_backoff[i].until) < 0;
+		}
+	}
+	return false;
+}
+
+static void invite_remember(const char *mac, bool refused) {
+	for (int i = 0; i < INVITE_BACKOFF_MAX; i++) {
+		if (invite_backoff[i].mac[0] && strcasecmp(invite_backoff[i].mac, mac) == 0) {
+			if (!refused) {
+				invite_backoff[i].mac[0] = '\0';
+			} else {
+				invite_backoff[i].until = now_ms() + INVITE_BACKOFF_MS;
+			}
+			return;
+		}
+	}
+	if (!refused) {
+		return;
+	}
+	for (int i = 0; i < INVITE_BACKOFF_MAX; i++) {
+		if (!invite_backoff[i].mac[0]) {
+			snprintf(invite_backoff[i].mac, sizeof(invite_backoff[i].mac), "%s", mac);
+			invite_backoff[i].until = now_ms() + INVITE_BACKOFF_MS;
+			return;
+		}
+	}
+	// Full: the oldest entry goes, so the newest refusal is still honoured.
+	memmove(&invite_backoff[0], &invite_backoff[1], sizeof(invite_backoff[0]) * (INVITE_BACKOFF_MAX - 1));
+	snprintf(invite_backoff[INVITE_BACKOFF_MAX - 1].mac, sizeof(invite_backoff[0].mac), "%s", mac);
+	invite_backoff[INVITE_BACKOFF_MAX - 1].until = now_ms() + INVITE_BACKOFF_MS;
+}
+
 // When receiver mode opens, invite a phone/computer that is already linked,
 // and reconnect a bonded A2DP source that dropped its ACL while the local Sink
 // endpoint was unavailable. Headphones are never invited in this direction.
@@ -3117,20 +3264,35 @@ static void invite_sources(void) {
 			continue;
 		}
 
+		if (invite_is_blocked(devices[i].address)) {
+			continue;
+		}
+
 		if (!waited) {
 			sleep_ms(800); // the new daemon registers its endpoints after its name
 			waited = true;
 		}
 		fprintf(stderr, "bluetooth: asking %s to stream here%s\n", devices[i].address,
 				devices[i].connected ? "" : " (reconnecting paired source)");
-		if (!btstack_connect_a2dp_source(devices[i].address, CONNECT_TIMEOUT_MS)) {
+		char why[160] = "";
+		bool asked = btstack_connect_a2dp_source_why(devices[i].address, CONNECT_TIMEOUT_MS, why, sizeof(why));
+		if (!asked && strstr(why, "NotReady")) {
+			// This side, not that device: bluez has not finished registering
+			// the endpoints the new bluealsa put up, and answers at once. One
+			// more try a moment later is what turns the log's
+			// "ConnectProfile(A2DP source) -> NotReady" a second after
+			// "bluealsa on the bus" into a connection.
+			sleep_ms(1500);
+			asked = btstack_connect_a2dp_source_why(devices[i].address, CONNECT_TIMEOUT_MS, why, sizeof(why));
+		}
+		if (!asked) {
 			// One unavailable old phone must not keep the worker from servicing
-			// other Bluetooth events for every paired source on the device.
-			if (!devices[i].connected) {
-				return;
-			}
+			// other Bluetooth events for every paired source on the device --
+			// and must not be asked again on the next visit to the page either.
+			invite_remember(devices[i].address, true);
 			continue;
 		}
+		invite_remember(devices[i].address, false);
 		if (!wait_for_receiver_audio(devices[i].address, A2DP_CONFIRM_MS)) {
 			fprintf(stderr,
 					"bluetooth: A2DP source profile accepted for %s; receiver PCM not visible yet\n",
@@ -3262,8 +3424,20 @@ static void *bluetooth_worker(void *arg) {
 				break;
 			}
 
-			case JOB_DISCONNECT:
+			case JOB_DISCONNECT: {
 				name_for(job.mac, name, sizeof(name));
+				// A device that is not connected has nothing to disconnect. The
+				// row stays tappable while the first teardown is still moving
+				// the audio back to the jack, so "disconnect" reached here twice
+				// three seconds apart in the log -- and each time it sent a
+				// Disconnect to a peer that had already gone.
+				bool up = true;
+				if (btstack_device_connected(job.mac, &up) && !up) {
+					fprintf(stderr, "bluetooth: %s is already disconnected; nothing to do\n", job.mac);
+					refresh_devices();
+					set_op(BT_OP_OK, name);
+					break;
+				}
 				// Logged, because in the log a link closed from here and a
 				// speaker dropping the link look exactly the same otherwise.
 				fprintf(stderr, "bluetooth: disconnecting %s (asked for)\n", job.mac);
@@ -3272,6 +3446,7 @@ static void *bluetooth_worker(void *arg) {
 				refresh_devices();
 				set_op(BT_OP_OK, name);
 				break;
+			}
 
 			case JOB_FORGET:
 				name_for(job.mac, name, sizeof(name));
@@ -3295,6 +3470,20 @@ static void *bluetooth_worker(void *arg) {
 				break;
 
 			case JOB_RECEIVER_PROFILE: {
+				// Opening and closing the receiver page posts this once each,
+				// and going back to the list and in again puts two of them in
+				// the queue only seconds apart. Acting on both restarts
+				// bluealsa twice, and each restart takes bluez's stream with it;
+				// the log has forty restarts in twenty minutes, most of them
+				// pairs like that. The newer job reads the same flag, so the
+				// older one only has to get out of its way.
+				pthread_mutex_lock(&lock);
+				bool superseded = queue_has(JOB_RECEIVER_PROFILE);
+				pthread_mutex_unlock(&lock);
+				if (superseded) {
+					fprintf(stderr, "bluetooth: receiver profile changed again; leaving it to the newer job\n");
+					break;
+				}
 				bool want = receiver_profile_wanted();
 				if (process_running("bluealsa") && bluealsa_has_sink() != want) {
 					restart_bluealsa(want ? "receiver open" : "receiver closed");
@@ -3645,11 +3834,24 @@ int bluetooth_get_found(bt_device_t *out, int max) {
 	return count;
 }
 
+// A start that failed leaves g_scanning false, and the list page's own tick
+// asks again on the next half second: while the controller is down, bluez got
+// three StartDiscovery calls inside a second (23:13:49) and would have got them
+// for as long as the page stayed open. One attempt per this many milliseconds
+// is enough for the page to look alive without that.
+#define SCAN_RESTART_MS 2000
+
 void bluetooth_scan_start(void) {
+	static uint32_t last_start_ms;
+
 	pthread_mutex_lock(&lock);
 	bool skip = g_scanning || !g_enabled || g_busy;
+	if (!skip && last_start_ms != 0 && (int32_t)(now_ms() - last_start_ms) < SCAN_RESTART_MS) {
+		skip = true;
+	}
 	if (!skip) {
 		g_scanning = true;
+		last_start_ms = now_ms();
 	}
 	pthread_mutex_unlock(&lock);
 

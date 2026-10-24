@@ -102,9 +102,9 @@ static screensaver_source_t source;
 // itself, so a picture is drawn as it was made and never shrunk (see
 // screensaverpics.h).
 //
-// The V1 is the exception. Its firmware carries the R1's resource tree, texts
-// included, and the note shown when the folder holds nothing usable says
-// pictures may be up to the R1's 480x800. With its own 240x320 panel as the
+// The V1 is the exception. Its language files are the ones the upstream
+// resource tree shipped, and the note shown when the folder holds nothing
+// usable promises pictures up to 480x800. With its own 240x320 panel as the
 // limit, the V1 turned every such picture away, and the note sent people
 // looking for a mistake that was not theirs. So the V1 takes what the note
 // promises. The cover loader brings each picture down to the panel, cropped to

@@ -49,8 +49,8 @@ bool topbar_is_hidden(void);
 
 // Draws the bar above everything else on the top layer. Both sheets ask for
 // this on the way in: the control centre covers the whole screen, and the
-// carousel comes down under the bar, so the clock, battery and volume have to
-// stay readable over them.
+// carousel comes down under the bar in the stock arrangement, so the clock,
+// battery and volume have to stay readable over either of them.
 void topbar_bring_to_front(void);
 
 // Shows or hides the charge percentage next to the battery shell (config

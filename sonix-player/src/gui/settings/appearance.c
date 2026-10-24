@@ -10,6 +10,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/corners.h"
+#include "src/gui/shell/gestures.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/main_menu.h"
 #include "src/gui/shell/menuarrange.h"
@@ -33,6 +34,7 @@ static lv_obj_t *btn_clock[4]; // left / centre / right / hidden
 static lv_obj_t *btn_accent[THEME_ACCENT_COUNT]; // the coloured circles
 static lv_obj_t *tint_toggle;
 static lv_obj_t *main_menu_icons_toggle;
+static lv_obj_t *stock_gestures_toggle;
 static lv_obj_t *battery_percent_toggle;
 static lv_obj_t *rounded_corners_toggle;
 static lv_obj_t *text_size_pill[FONTS_TEXT_COUNT]; // normal / large / small
@@ -67,6 +69,14 @@ static void dynamic_tint_cb(lv_event_t *e) {
 static void main_menu_icons_cb(lv_event_t *e) {
 	(void)e;
 	main_menu_set_icons_only(lv_obj_has_state(main_menu_icons_toggle, LV_STATE_CHECKED));
+}
+
+// Which edge each sheet is pulled from (see gestures.h). Nothing is rebuilt here:
+// both sheets ask for the arrangement as they open, so the next pull is the one
+// that changes.
+static void stock_gestures_cb(lv_event_t *e) {
+	(void)e;
+	gestures_set_stock(lv_obj_has_state(stock_gestures_toggle, LV_STATE_CHECKED));
 }
 
 static void refresh_text_size_pills(void) {
@@ -634,6 +644,21 @@ void appearance_init(gui_config_t *cfg) {
 	lv_obj_add_style(menu_note, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(menu_note, &font_ui_22, 0);
 	lv_label_set_text(menu_note, tr("appearance_main_menu_icons_only_note"));
+
+	// The two sheets, and which edge each is pulled from. Classic -- the control
+	// centre from the status bar, Cover Flow up from the main menu -- is what this
+	// fork has always done, so it stays the default and nobody's gestures move
+	// because of an update. The stock arrangement is the TempoTec firmware's.
+	settingsrow_toggle(container, "appearance_stock_gestures", &stock_gestures_toggle, stock_gestures_cb);
+	if (gestures_stock()) {
+		lv_obj_add_state(stock_gestures_toggle, LV_STATE_CHECKED);
+	}
+	lv_obj_t *gesture_note = lv_label_create(container);
+	lv_label_set_long_mode(gesture_note, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(gesture_note, lv_pct(100));
+	lv_obj_add_style(gesture_note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(gesture_note, &font_ui_22, 0);
+	lv_label_set_text(gesture_note, tr("appearance_stock_gestures_note"));
 
 	settingsrow_add(container, "main_menu", NULL, switch_screen_cb, menuarrange_screen);
 

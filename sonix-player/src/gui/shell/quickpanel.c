@@ -9,6 +9,7 @@
 #include "src/gui/shell/confirm.h"
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
+#include "src/gui/shell/gestures.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/settings/musicsettings.h"
@@ -209,6 +210,11 @@ static uint32_t drag_begin_ms;
 #define DRAG_COMMIT_PX 180   // a quarter of 720
 #define DRAG_COMMIT_V1 80    // a quarter of 320
 
+// Where the sheet waits while it is not up: a screen below the bottom edge when
+// it rises from there, a screen above the top edge when it comes down from the
+// status bar. Which of the two is the setting in gestures.h.
+static int parked_y(void) { return gestures_stock() ? panel_h : -panel_h; }
+
 // The pull up from the bottom edge, which is the way in.
 //
 // How close to the edge the press has to land; how far it has to travel before
@@ -236,10 +242,12 @@ static uint32_t drag_begin_ms;
 // out altogether once it is covered, so a tap under the stretched card cannot
 // reach its transport.
 //
-// A drag used to do this, and a tap only folded what a drag had stretched. The
-// sheet comes up from the bottom now and leaves by a drag downwards, so that
-// direction is the sheet's own and the handle is what is left: one tap to
-// unfold, one tap to fold.
+// Which of the two ways it opens depends on the arrangement (see gestures.h). In
+// the classic one the sheet came down from the top and left upwards, so a drag
+// downwards on the card was free and stretched it; the handle was what folded
+// what a drag had stretched. In the stock arrangement the sheet rises from the
+// bottom and leaves by that same downward drag, so the direction is spoken for
+// and the handle is the whole story: one tap to unfold, one tap to fold.
 // ---------------------------------------------------------------------------
 
 static lv_obj_t *controls_card;
@@ -250,11 +258,18 @@ static lv_obj_t *extra_row;	   // the rest, inside that window
 static lv_obj_t *bright_row;	   // moved down by the stretch
 static lv_obj_t *expand_handle; // the line under the slider, and a tap target
 static lv_obj_t *expand_pill;
+static lv_obj_t *grabber; // the line the sheet is dragged out by
 static int card_h_rest;		   // controls card height with nothing past the eighth
-static int card_top;		   // the controls card's top, inside the sheet
+static int card_top;		   // the controls card's top, in the arrangement in force
+static int card_top_classic; // ... and in each of the two
+static int card_top_stock;
+static int bar_clear;        // where the status bar ends, inside the sheet's padding
+static int placed_scheme = -1; // the arrangement the cards and grabber are placed for
 static int card_h_base;		   // the controls card's height at rest, handle room included
 static int expand_full;		   // how far the card stretches; 0 when nothing is past the eighth
 static int expand_h;		   // how far it is stretched now
+static int expand_from;		   // where a drag found it (classic arrangement)
+static uint32_t expand_begin_ms;
 
 // Set once a press has moved the sheet, so the click that ends the same press
 // does not also fold the card from its handle.
@@ -615,12 +630,66 @@ static void expand_to(int h, bool animate) {
 	lv_anim_start(&a);
 }
 
+static void expand_drag_begin(void) {
+	lv_anim_delete(controls_card, expand_anim_cb);
+	expand_from = expand_h;
+	expand_begin_ms = lv_tick_get();
+}
+
+static void expand_drag_update(int dy) { expand_set(expand_from + dy); }
+
+// Past halfway it stays stretched, short of it it folds back; a flick goes the
+// way it was flicked, as the sheet's own drag does.
+static void expand_drag_end(void) {
+	int travel = expand_h - expand_from;
+	bool open = expand_h * 2 > expand_full;
+	uint32_t elapsed = lv_tick_elaps(expand_begin_ms);
+	int distance = travel > 0 ? travel : -travel;
+	if (elapsed > 0 && distance >= FLICK_MIN_PX && (distance * 1000) / (int)elapsed >= FLICK_SPEED_PX_S) {
+		open = travel > 0;
+	}
+	expand_to(open ? expand_full : 0, true);
+}
+
 static void expand_handle_clicked_cb(lv_event_t *e) {
 	(void)e;
 	if (press_dragged) {
 		return;
 	}
 	expand_to(expand_h > 0 ? 0 : expand_full, true);
+}
+
+// Puts the cards and the grabber where the arrangement in force wants them.
+//
+// Only the grabber moves: in the stock arrangement it is under the status bar,
+// at the edge the sheet is dragged out by, and in the classic one it is at the
+// foot of the sheet, which is the edge that one leaves from. The strip it lives
+// in is the same height either way and the cards keep the same room, so what
+// changes is which side of them it sits on -- a dozen pixels of offset, and the
+// cards' top.
+//
+// Called when the sheet is about to open, so a change of setting is picked up at
+// the next pull rather than at the next boot.
+static void place_sheet(void) {
+	int scheme = gestures_stock() ? 1 : 0;
+	if (scheme == placed_scheme) {
+		return;
+	}
+	placed_scheme = scheme;
+	card_top = gestures_stock() ? card_top_stock : card_top_classic;
+	if (controls_card) {
+		lv_obj_align(controls_card, LV_ALIGN_TOP_MID, 0, card_top);
+	}
+	if (np_card) {
+		lv_obj_set_y(np_card, card_top + card_h_base + card_gap);
+	}
+	if (grabber) {
+		if (gestures_stock()) {
+			lv_obj_align(grabber, LV_ALIGN_TOP_MID, 0, bar_clear);
+		} else {
+			lv_obj_align(grabber, LV_ALIGN_BOTTOM_MID, 0, 0);
+		}
+	}
 }
 
 // Everything the sheet has to freshen before it becomes visible, whether it is
@@ -645,6 +714,8 @@ static void panel_prepare(void) {
 
 	refresh_now_playing_card();
 	refresh_audio_buttons();
+
+	place_sheet();
 
 	// The sheet always comes in folded, as Android's does.
 	expand_to(0, false);
@@ -686,6 +757,9 @@ void quickpanel_open(void) {
 	}
 	panel_open = true;
 	panel_prepare();
+	// From wherever the sheet waits in the arrangement in force now: the setting
+	// may have been switched since it was last put away.
+	lv_obj_set_y(panel, parked_y());
 	lv_timer_resume(poll_timer);
 	panel_slide_to(0, true);
 }
@@ -696,7 +770,7 @@ void quickpanel_close(void) {
 	}
 	panel_open = false;
 	lv_timer_pause(poll_timer);
-	panel_slide_to(panel_h, true);
+	panel_slide_to(parked_y(), true);
 }
 
 // ---------------------------------------------------------------------------
@@ -710,12 +784,12 @@ void quickpanel_drag_begin(void) {
 	}
 	lv_anim_delete(panel, anim_y_cb);
 	drag_active = true;
-	drag_from_y = panel_open ? 0 : panel_h;
+	drag_from_y = panel_open ? 0 : parked_y();
 	drag_begin_ms = lv_tick_get();
 
 	if (!panel_open) {
 		panel_prepare();
-		lv_obj_set_y(panel, panel_h);
+		lv_obj_set_y(panel, drag_from_y);
 		lv_timer_resume(poll_timer); // the card is visible from the first pixel of travel
 	}
 }
@@ -724,11 +798,13 @@ void quickpanel_drag_update(int dy) {
 	if (!drag_active) {
 		return;
 	}
+	// Between parked and up, whichever side of the screen the sheet is parked on.
+	int parked = parked_y();
 	int y = drag_from_y + dy;
-	if (y > panel_h) {
-		y = panel_h;
+	if (parked > 0 ? y > parked : y < parked) {
+		y = parked;
 	}
-	if (y < 0) {
+	if (parked > 0 ? y < 0 : y > 0) {
 		y = 0;
 	}
 	lv_obj_set_y(panel, y);
@@ -742,18 +818,27 @@ void quickpanel_drag_end(void) {
 
 	// A fixed stretch of travel decides the outcome, in whichever direction the
 	// gesture started: the same point-of-no-return feel as the swipe-back.
+	//
+	// Which way is "in" depends on the side the sheet waits on: pulled up from the
+	// bottom edge it is a negative dy that brings it in, pulled down from the
+	// status bar a positive one. open_dir is the dy that opens it; `towards` is
+	// the travel measured towards whichever end this gesture is heading for, so
+	// the same number of pixels decides both directions.
+	int parked = parked_y();
+	int open_dir = parked > 0 ? -1 : 1;
 	int y = lv_obj_get_y(panel);
 	int travel = y - drag_from_y;
-	// Negative travel is upwards, which is the way in; positive is the way out.
-	int commit = bp_pick(DRAG_COMMIT_V1, DRAG_COMMIT_PX);
-	bool open = drag_from_y == 0 ? travel < commit : travel < -commit;
+	int commit = gestures_stock() ? bp_pick(DRAG_COMMIT_V1, DRAG_COMMIT_PX) : DRAG_COMMIT_PX;
+	bool opening = drag_from_y != 0;
+	int towards = travel * open_dir * (opening ? 1 : -1);
+	bool open = opening ? towards > commit : towards <= commit;
 
 	// Unless it was a flick, which is over long before it has covered that much.
 	// Then only the direction counts.
 	uint32_t elapsed = lv_tick_elaps(drag_begin_ms);
 	int distance = travel > 0 ? travel : -travel;
 	if (elapsed > 0 && distance >= FLICK_MIN_PX && (distance * 1000) / (int)elapsed >= FLICK_SPEED_PX_S) {
-		open = travel < 0;
+		open = opening ? towards > 0 : towards <= 0;
 	}
 
 	panel_open = open;
@@ -762,7 +847,7 @@ void quickpanel_drag_end(void) {
 	} else {
 		lv_timer_pause(poll_timer);
 	}
-	panel_slide_to(open ? 0 : panel_h, true);
+	panel_slide_to(open ? 0 : parked, true);
 }
 
 static void veil_clicked_cb(lv_event_t *e) {
@@ -770,18 +855,20 @@ static void veil_clicked_cb(lv_event_t *e) {
 	quickpanel_close();
 }
 
-// The way out: a drag downwards anywhere on the sheet carries it back out,
-// following the finger all the way.
+// The way out, which is a drag towards the edge the sheet came from: upwards in
+// the classic arrangement, downwards in the stock one. Either way it follows the
+// finger and stays wherever it is let go of.
 //
-// A downward drag used to stretch the controls card, uncovering the buttons past
-// the eighth. The sheet comes up from the bottom now and leaves the same way, so
-// a downward drag is spoken for and there is no second meaning to give it: the
-// extra lines are reached with a tap on the handle under the slider, which folds
-// and unfolds the card (see expand_handle_clicked_cb).
+// In the classic arrangement a drag the other way (back towards the status bar,
+// downwards) has a second meaning, as it always had: it stretches the controls
+// card over the now-playing one and uncovers the buttons past the eighth. In the
+// stock arrangement that direction is the sheet's own way out, so it is not free
+// to give away, and the extra lines are reached with a tap on the handle under
+// the slider (see expand_handle_clicked_cb).
 static void panel_drag_cb(lv_event_t *e) {
 	static lv_point_t start;
 	static bool tracking;
-	static bool engaged;
+	static enum { DRAG_NONE, DRAG_SHEET, DRAG_CARD } engaged;
 
 	lv_indev_t *indev = lv_indev_active();
 	if (!indev) {
@@ -796,7 +883,7 @@ static void panel_drag_cb(lv_event_t *e) {
 	if (code == LV_EVENT_PRESSED) {
 		lv_indev_get_point(indev, &start);
 		tracking = panel_open;
-		engaged = false;
+		engaged = DRAG_NONE;
 		press_dragged = false;
 		return;
 	}
@@ -809,45 +896,68 @@ static void panel_drag_cb(lv_event_t *e) {
 	int dy = p.y - start.y;
 
 	if (code == LV_EVENT_PRESSING) {
-		if (!engaged) {
-			if (dy < 8) {
-				return; // not a drag yet, or the way in rather than the way out
+		if (engaged == DRAG_NONE) {
+			if (gestures_stock()) {
+				// Up from the bottom, so down is the way out and nothing else.
+				if (dy < 8) {
+					return; // not a drag yet
+				}
+				engaged = DRAG_SHEET;
+			} else if (dy <= -8) {
+				// Down from the top: up is the way out, unless the card is
+				// stretched and this folds it first.
+				engaged = expand_h > 0 ? DRAG_CARD : DRAG_SHEET;
+			} else if (dy >= 8 && expand_full > 0 && expand_h < expand_full) {
+				engaged = DRAG_CARD;
+			} else {
+				return; // not a drag yet, or a drag down with nothing to uncover
 			}
-			engaged = true;
 			press_dragged = true;
-			quickpanel_drag_begin();
+			if (engaged == DRAG_CARD) {
+				expand_drag_begin();
+			} else {
+				quickpanel_drag_begin();
+			}
 		}
-		quickpanel_drag_update(dy);
+		if (engaged == DRAG_CARD) {
+			expand_drag_update(dy);
+		} else {
+			quickpanel_drag_update(dy);
+		}
 		return;
 	}
 
 	if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
 		tracking = false;
-		if (engaged) {
-			engaged = false;
+		if (engaged == DRAG_CARD) {
+			expand_drag_end();
+		} else if (engaged == DRAG_SHEET) {
 			quickpanel_drag_end();
-			return;
+		} else {
+			// A flick quick enough to be over between two reads of the touch
+			// panel produces a press and a release with no PRESSING in between,
+			// so nothing was followed and the sheet stayed up -- which from the
+			// outside is a control centre that sometimes ignores a quick swipe.
+			// The gesture did happen: the finger went down on the sheet and came
+			// up this far from where it landed.
+			int close_dir = gestures_stock() ? 1 : -1; // the dy that puts it away
+			int dx = p.x - start.x;
+			int adx = dx < 0 ? -dx : dx;
+			if (code == LV_EVENT_RELEASED && dy * close_dir >= QP_EDGE_FLICK_PX && dy * close_dir > adx) {
+				quickpanel_close();
+			}
 		}
-
-		// A flick quick enough to be over between two reads of the touch panel
-		// produces a press and a release with no PRESSING in between, so nothing
-		// was followed and the sheet stayed up -- which from the outside is a
-		// control centre that sometimes ignores a quick swipe. The gesture did
-		// happen: the finger went down on the sheet and came up this far below
-		// where it landed.
-		int dx = p.x - start.x;
-		int adx = dx < 0 ? -dx : dx;
-		if (code == LV_EVENT_RELEASED && dy >= QP_EDGE_FLICK_PX && dy > adx) {
-			quickpanel_close();
-		}
+		engaged = DRAG_NONE;
 	}
 }
 
 // ---------------------------------------------------------------------------
-// The way in: a pull up from the bottom edge
+// The way in, in the stock arrangement: a pull up from the bottom edge
 //
 // The stock firmware's gesture, and the place the status bar used to hold: the
-// control centre comes up from the foot of the screen.
+// control centre comes up from the foot of the screen. With the classic
+// arrangement chosen instead this never arms, and the status bar carries the
+// pull (see topbar.c).
 //
 // It is watched at the input device rather than owned by a strip along the
 // bottom, because such a strip would be an object of the interface sitting over
@@ -922,7 +1032,10 @@ static void edge_indev_cb(lv_event_t *e) {
 		edge_indev = indev;
 		edge_start = p;
 		edge_engaged = false;
-		edge_armed = edge_may_open() && p.y >= panel_h - QP_EDGE_H &&
+		// Only in the stock arrangement: in the classic one this edge belongs to
+		// Cover Flow (see coverflow.c), and the control centre comes from the
+		// status bar.
+		edge_armed = gestures_stock() && edge_may_open() && p.y >= panel_h - QP_EDGE_H &&
 					 edge_on_page((lv_obj_t *)lv_event_get_param(e));
 		if (edge_armed) {
 			lv_timer_resume(edge_timer);
@@ -2090,12 +2203,12 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_set_hidden(veil, true);
 	lv_obj_add_event_cb(veil, veil_clicked_cb, LV_EVENT_CLICKED, NULL);
 
-	// The sheet fills the whole screen, iOS-control-centre style, and is parked
-	// a screen below the bottom edge: it rises from the foot of the panel like
-	// the stock firmware's, and goes back the same way.
+	// The sheet fills the whole screen, iOS-control-centre style, and waits a
+	// screen away from the edge it is pulled from: below the bottom in the stock
+	// arrangement, above the top in the classic one.
 	panel = lv_obj_create(veil);
 	lv_obj_set_size(panel, cfg->screen_width, panel_h);
-	lv_obj_set_pos(panel, 0, panel_h);
+	lv_obj_set_pos(panel, 0, parked_y());
 	lv_obj_add_style(panel, &theme_style_screen, 0);
 	lv_obj_set_style_radius(panel, 0, 0);
 	lv_obj_set_style_border_width(panel, 0, 0);
@@ -2117,15 +2230,21 @@ void quickpanel_init(gui_config_t *cfg) {
 	// panels give the 2x4 controls the larger share. All measurements are inside
 	// the sheet's padding.
 	int content_h = panel_h - panel_pad_top - panel_pad_bottom;
-	// Where the status bar ends, in the content box's coordinates: the grabber
-	// lives under the bar, which is brought in front of the sheet while it is up.
-	int bar_clear = cfg->top_bar_height - panel_pad_top;
+	// Where the status bar ends, in the content box's coordinates.
+	bar_clear = cfg->top_bar_height - panel_pad_top;
 	if (bar_clear < 0) {
 		bar_clear = 0; // a bar shorter than the padding leaves nothing to clear
 	}
-	int top_inset = bar_clear + hint_strip_h + card_top_gap;
+	// The grabber's strip is under the status bar in the stock arrangement and
+	// at the foot of the sheet in the classic one: the band is hint_strip_h
+	// either way, so the cards get exactly the same room and only their place
+	// moves. That is what lets the setting be switched without rebuilding the
+	// page (see place_sheet()).
+	card_top_stock = bar_clear + hint_strip_h + card_top_gap;
+	card_top_classic = bar_clear + card_top_gap;
 	int card_w = cfg->screen_width - 2 * cfg->padding;
-	int cards_room = content_h - top_inset - card_gap;
+	int cards_room = content_h - card_top_classic - card_gap - hint_strip_h;
+	card_top = gestures_stock() ? card_top_stock : card_top_classic;
 	int controls_h;
 	int now_playing_h;
 	if (qp_compact) {
@@ -2146,11 +2265,10 @@ void quickpanel_init(gui_config_t *cfg) {
 	}
 
 	// --- First card: the quick controls. ---
-	controls_card = make_card(panel, card_w, controls_h, top_inset);
+	controls_card = make_card(panel, card_w, controls_h, card_top);
 	card_h_rest = controls_h;
 	np_card_h_rest = now_playing_h;
 	card_h_base = controls_h;
-	card_top = top_inset;
 	lv_obj_set_flex_flow(controls_card, LV_FLEX_FLOW_COLUMN);
 	// Brightness under the buttons; the buttons take the height above it and
 	// their rows are centred in it, so a single row of four sits midway between
@@ -2362,7 +2480,7 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_set_clickable(expand_pill, false);
 
 	// --- Second card: what is playing, and its transport. ---
-	np_card = make_card(panel, card_w, now_playing_h, top_inset + controls_h + card_gap);
+	np_card = make_card(panel, card_w, now_playing_h, card_top + controls_h + card_gap);
 	lv_obj_set_flex_flow(np_card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(np_card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_set_style_pad_gap(np_card, qp_compact ? 2 : 6, 0);
@@ -2461,30 +2579,29 @@ void quickpanel_init(gui_config_t *cfg) {
 	}
 	lv_obj_center(np_star_icon);
 
-	// --- The way out: a short bar at the top, under the status bar -- a
+	// --- The way out: a short bar at the edge the sheet is dragged out by -- a
 	// home-indicator rather than a chevron, because it reads as "drag me"
 	// instead of "press me" and dragging is what actually closes the panel.
-	// The bar comes up from the bottom, so the way back out is a drag downwards
-	// and the handle belongs at the edge that is dragged from. The line is not
+	// Which edge that is depends on the arrangement: the foot of the sheet in
+	// the stock one, under the status bar in the classic one. The line is not
 	// clickable: a finger landing on it talks to the surface underneath, where
 	// the gesture lives.
-	lv_obj_t *close_btn = lv_obj_create(panel);
-	lv_obj_set_ignore_layout(close_btn, true);
-	lv_obj_set_size(close_btn, 140, hint_strip_h - 8);
-	// Clear of the status bar, which is over the sheet while it is up, and
-	// centred in the rest of the strip: the band is hint_strip_h and the button
-	// is hint_strip_h - 8 tall, so it sits a few pixels down from the bar and
-	// leaves the same few pixels of gap above the first card. Any offset here
-	// takes the line off that centre.
-	lv_obj_align(close_btn, LV_ALIGN_TOP_MID, 0, bar_clear);
-	lv_obj_set_style_bg_opa(close_btn, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_shadow_width(close_btn, 0, 0);
-	lv_obj_set_style_border_width(close_btn, 0, 0);
-	lv_obj_set_style_pad_all(close_btn, 0, 0);
-	lv_obj_set_clickable(close_btn, false);
-	lv_obj_set_scrollable(close_btn, false);
+	grabber = lv_obj_create(panel);
+	lv_obj_set_ignore_layout(grabber, true);
+	lv_obj_set_size(grabber, 140, hint_strip_h - 8);
+	// Placed by place_sheet() for whichever arrangement is in force: clear of the
+	// status bar and over the first card in the stock one, flush with the foot of
+	// the sheet in the classic one. Either way the band is hint_strip_h and the
+	// line is hint_strip_h - 8 tall, so it sits in the middle of what is left.
+	lv_obj_align(grabber, LV_ALIGN_TOP_MID, 0, bar_clear);
+	lv_obj_set_style_bg_opa(grabber, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_shadow_width(grabber, 0, 0);
+	lv_obj_set_style_border_width(grabber, 0, 0);
+	lv_obj_set_style_pad_all(grabber, 0, 0);
+	lv_obj_set_clickable(grabber, false);
+	lv_obj_set_scrollable(grabber, false);
 
-	lv_obj_t *hint = lv_image_create(close_btn);
+	lv_obj_t *hint = lv_image_create(grabber);
 	lv_image_set_src(hint, &icon_control_center_line);
 	lv_obj_add_style(hint, &theme_style_icon, 0);
 	lv_obj_set_style_image_opa(hint, LV_OPA_60, 0);
@@ -2499,6 +2616,10 @@ void quickpanel_init(gui_config_t *cfg) {
 	// exist to arrange.
 	order_load();
 	order_apply();
+
+	// The cards and the grabber for the arrangement in force at startup. Every
+	// open asks again, so switching the setting needs no rebuild.
+	place_sheet();
 
 	poll_timer = lv_timer_create(poll_cb, PANEL_POLL_MS, NULL);
 	lv_timer_pause(poll_timer);

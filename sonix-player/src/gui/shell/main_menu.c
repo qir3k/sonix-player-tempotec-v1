@@ -501,6 +501,11 @@ void main_menu_init(gui_config_t *cfg) {
 	int columns = count > 3 ? 2 : (count > 1 ? 2 : 1);
 	int rows = LV_MAX((count + columns - 1) / columns, 1);
 	menu_grid = gridpage_build(main_menu_screen, cfg, entries, count, columns, rows, false);
+	// Cover Flow, in the classic arrangement: pull up from the bottom edge, just
+	// as the music grid used to, without entering Music first. With the stock
+	// arrangement chosen the handler stands down by itself (see gestures.h), so
+	// it can be attached either way and needs no rebuild when the setting moves.
+	coverflow_attach_edge(menu_grid, cfg);
 
 	// Tokyo Night's compact home chrome: the header, note and live mini-player
 	// are ordinary LVGL objects, and remain hidden in the unchanged Dark/Light

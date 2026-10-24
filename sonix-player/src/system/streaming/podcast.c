@@ -42,8 +42,8 @@ static const char *api_base(void) { return config_get("podcast", "api_base", POD
 
 // The ISO code of the interface language, so a user running the player in
 // Italian does not get an all-English chart. The directory takes a
-// comma-separated list: the regional tags many Brazilian and Chinese feeds
-// declare are listed beside the bare code.
+// comma-separated list: the regional tag Brazilian feeds declare is listed
+// beside the bare code.
 //
 // The table lives here rather than in lang.c because this is its only caller:
 // lang.c works in language names, which is what a menu needs, and teaching it
@@ -58,11 +58,8 @@ static const char *interface_language_code(void) {
 		{"Deutsch", "de"},
 		{"Fran\xC3\xA7\x61is", "fr"},
 		{"Espa\xC3\xB1ol", "es"},
-		{"Japanese", "ja"},
 		{"Nederlands", "nl"},
 		{"Polski", "pl"},
-		{"Russian", "ru"},
-		{"Chinese", "zh,zh-cn"},
 		{"Portugu\xC3\xAAs BR", "pt,pt-br"},
 	};
 	const char *current = lang_current();

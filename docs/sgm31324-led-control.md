@@ -24,8 +24,8 @@ The routines below do exactly that, from a shell on the device:
 rmmod leds_sgm31324_add
 ```
 
-The boot script *adds* the module (the vendor rootfs's `module_driver/leds_sgm31324_add.sh`),
-so `rmmod` is what releases it. Unloading does not reset the chip - it keeps
+The stock boot script *adds* the module (the V1 firmware carries it under
+`module_driver/`), so `rmmod` is what releases it. Unloading does not reset the chip - it keeps
 running on the last register values it was given - which is why the routines
 below program every register they depend on.
 
@@ -422,5 +422,4 @@ fade_out 48 1200              # slower, finer steps
   and fade out on the way down. It knows the LED is an SGM31324 from the model
   table (`sysinfo_model()->sgm31324_led`), not from the driver's pattern node,
   so it works with the module disabled. The driver's registered patterns remain
-  the fallback, used only when the controller cannot be taken over or on the R1,
-  which has no SGM31324 at all.
+  the fallback, used only when the controller cannot be taken over.
