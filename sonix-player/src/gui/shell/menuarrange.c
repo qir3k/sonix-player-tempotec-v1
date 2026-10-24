@@ -172,7 +172,7 @@ void menuarrange_init(gui_config_t *cfg) {
 	(void)cfg;
 	menuarrange_screen = lv_obj_create(NULL);
 	lv_obj_add_style(menuarrange_screen, &theme_style_screen, 0);
-	lv_obj_t *container = settingsrow_page(menuarrange_screen, cfg, "main_menu");
+	lv_obj_t *container = settingsrow_page(menuarrange_screen, cfg, "menu_reorder");
 	player_sheet_attach_drag(container, true);
 	settingsrow_page_title(menuarrange_screen);
 	lv_obj_t *tabs = lv_obj_create(container);
@@ -183,7 +183,7 @@ void menuarrange_init(gui_config_t *cfg) {
 	lv_obj_set_style_pad_gap(tabs, bp_pick(4, 8), 0);
 	lv_obj_set_scrollable(tabs, false);
 	lv_obj_set_flex_flow(tabs, LV_FLEX_FLOW_ROW);
-	home_tab = make_tab(tabs, "main_menu", MENUORDER_HOME);
+	home_tab = make_tab(tabs, "menu_section_home", MENUORDER_HOME);
 	more_tab = make_tab(tabs, "more", MENUORDER_MORE);
 	rows = lv_obj_create(container);
 	lv_obj_set_width(rows, lv_pct(100));

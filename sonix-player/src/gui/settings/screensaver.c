@@ -65,8 +65,13 @@ static int strip_h;
 // runs the sign through the figures. A lift, rather than a change of the
 // strip's padding: it moves the clock and nothing else, so the title and the
 // artist keep the places they were tuned for, and the clock gains its air
-// under every face.
-#define CLOCK_LIFT bp_pick(8, 12)
+// under every face. Three pixels more than the first attempt: the sign hangs
+// 4 px off the foot of the screen, and with the smaller lift the air under the
+// figures was plainly thinner than the air under the sign. Three more again:
+// at 11 the gap above the sign still read wider than the one below it, because
+// the sign's own box carries a few pixels of slack under its glyph. Now the two
+// bands read as one margin.
+#define CLOCK_LIFT bp_pick(14, 18)
 
 // The Framed style's sleeve. It keeps at least this much of the panel free on
 // either side, and above and below itself inside the area over the strip; its

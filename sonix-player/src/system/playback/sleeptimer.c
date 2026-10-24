@@ -23,6 +23,9 @@ static const struct {
 	[SLEEPTIMER_MUSIC] = {"player", "sleep_timer", "sleep_minutes", "music"},
 	[SLEEPTIMER_AUDIOBOOK] = {"audiobook", "sleep_timer", "sleep_minutes", "audiobook"},
 	[SLEEPTIMER_PODCAST] = {"podcast", "sleep_timer", "sleep_minutes", "podcast"},
+	// Radio's own, beside the stations' other settings: a stretch set for
+	// falling asleep to a station should not be counting over an album.
+	[SLEEPTIMER_RADIO] = {"radio", "sleep_timer", "sleep_minutes", "radio"},
 };
 
 typedef struct {

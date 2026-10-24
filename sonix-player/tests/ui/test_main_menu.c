@@ -476,7 +476,8 @@ int main(int argc, char **argv) {
 	assert(gesture_toggle && !lv_obj_has_state(gesture_toggle, LV_STATE_CHECKED));
 
 	assert(find_label(lv_obj_get_child(grid, 3), tr("audiobooks")));
-	assert(find_label(appearance_screen, tr("main_menu")));
+	assert(find_label(appearance_screen, tr("menu_reorder")));
+	assert(find_label(menuarrange_screen, tr("menu_section_home")));
 	assert(!find_label(appearance_screen, tr("appearance_home_books")));
 	assert(!find_label(appearance_screen, tr("appearance_home_browse")));
 	/* Reorder and hide Home entries through the shared Home/More editor. */

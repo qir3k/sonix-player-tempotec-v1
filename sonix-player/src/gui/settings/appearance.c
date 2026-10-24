@@ -660,7 +660,7 @@ void appearance_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_font(gesture_note, &font_ui_22, 0);
 	lv_label_set_text(gesture_note, tr("appearance_stock_gestures_note"));
 
-	settingsrow_add(container, "main_menu", NULL, switch_screen_cb, menuarrange_screen);
+	settingsrow_add(container, "menu_reorder", NULL, switch_screen_cb, menuarrange_screen);
 
 	// A second card: which picture the next power-on shows. Unlike every
 	// other choice on this page it is not only a config value -- it also

@@ -7,6 +7,7 @@
 
 #include "lvgl/lvgl.h"
 
+#include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/azindex.h"
 #include "src/gui/shell/gui.h"
@@ -23,6 +24,7 @@
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/library/library.h"
+#include "src/system/playback/sleeptimer.h"
 #include "src/system/streaming/radio.h"
 #include "src/system/net/wifi.h"
 
@@ -94,17 +96,46 @@ static char marked_station[RADIO_URL_MAX];
 static gui_config_t *g_cfg;
 
 // --- the hub ---
+//
+// One list of the places the page offers, in an order and with a visibility the
+// user chooses in Radio settings. Recently played used to be a corner button
+// beside the heart and the search; it is a row among the categories now, where
+// it belongs -- it is a list of stations, like the others.
+#define HUB_ROWS 5
+enum {
+	HUB_RECENT = 0,
+	HUB_LANGUAGE,
+	HUB_COUNTRY,
+	HUB_GENRE,
+	HUB_CUSTOM,
+};
+
+static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom"};
+static const char *const HUB_LABELS[HUB_ROWS] = {"radio_recently_played", "language", "radio_country", "genre",
+												  "radio_custom"};
+
 static lv_obj_t *hub_container;
 static lv_obj_t *hub_wifi_warning;
 static lv_obj_t *hub_wifi_row;
-static lv_obj_t *hub_browse_rows[3];
+static lv_obj_t *hub_rows[HUB_ROWS];
 static lv_obj_t *hub_favourites_btn;
-static lv_obj_t *hub_recent_btn;
 static lv_obj_t *hub_search_btn;
-static lv_obj_t *hub_custom_btn;
+static lv_obj_t *hub_settings_btn;
+
+static int hub_order[HUB_ROWS];
+static bool hub_hidden[HUB_ROWS];
+
+// --- Radio settings ---
+static lv_obj_t *radio_settings_screen;
+static lv_obj_t *radio_settings_rows;
+static settingsrow_duration_t radio_sleep_row;
+static lv_obj_t *radio_arrange_rows[HUB_ROWS];
+static lv_obj_t *radio_arrange_switches[HUB_ROWS];
 
 // --- the search page ---
 static lv_obj_t *search_field;
+static lv_obj_t *search_history_list;
+static lv_obj_t *search_history_empty;
 static keyboard_t *search_keyboard;
 static lv_timer_t *hub_timer;
 
@@ -137,6 +168,52 @@ static unsigned last_job_serial;
 
 static radio_term_t terms[300];
 static int term_count;
+
+// Which of the directory's languages the language list keeps. The directory
+// answers with a couple of hundred of them, sorted by how many stations stand
+// behind each, and nobody reads past the handful they actually speak: this is
+// the handful, chosen once in Radio settings.
+enum {
+	LANGS_ALL = 0,
+	LANGS_POLISH_ENGLISH,
+	LANGS_POLISH,
+	LANGS_ENGLISH,
+	LANGS_COUNT,
+};
+
+static lv_obj_t *radio_lang_pills[LANGS_COUNT];
+
+// The directory names its languages in lower-case English ("polish",
+// "english"), which is also the term it expects back, so the filter compares
+// against those names rather than against anything translated.
+static long radio_langs(void) {
+	long value = config_get_int("radio", "languages", LANGS_ALL);
+	return (value < LANGS_ALL || value >= LANGS_COUNT) ? LANGS_ALL : value;
+}
+
+static bool language_kept(long which, const char *name) {
+	bool polish = strcasecmp(name, "polish") == 0;
+	bool english = strcasecmp(name, "english") == 0;
+	if (which == LANGS_POLISH_ENGLISH) {
+		return polish || english;
+	}
+	return which == LANGS_POLISH ? polish : english;
+}
+
+// Keeps the wanted languages, in place, and answers with the new count.
+static int languages_filter(radio_term_t *list, int count) {
+	long which = radio_langs();
+	if (which == LANGS_ALL) {
+		return count;
+	}
+	int kept = 0;
+	for (int i = 0; i < count; i++) {
+		if (language_kept(which, list[i].name)) {
+			list[kept++] = list[i];
+		}
+	}
+	return kept;
+}
 
 // Four pages held at once. A country can hold thousands of stations, so the
 // list is paged rather than capped: the next hundred are asked for when the
@@ -861,6 +938,9 @@ static void list_poll_cb(lv_timer_t *timer) {
 
 	if (list_mode == LIST_TERMS) {
 		term_count = radio_get_terms(terms, (int)(sizeof(terms) / sizeof(terms[0])));
+		if (list_browse == RADIO_BROWSE_LANGUAGES) {
+			term_count = languages_filter(terms, term_count);
+		}
 		station_count = 0;
 		page_more = false;
 		terms_sort();
@@ -1236,44 +1316,124 @@ static void wifi_row_cb(lv_event_t *e) {
 	switch_screen(wifisettings_screen);
 }
 
+// ---------------------------------------------------------------------------
+// the hub's order and which of its rows there are
+//
+// Written in the config as the slugs, not as numbers: a build that gains a row
+// later appends it rather than mistaking an old index for it. The hidden set is
+// a bit mask, one bit per row, for the same reason -- its bits are the ids in
+// this file and go nowhere else.
+// ---------------------------------------------------------------------------
+
+static void hub_layout_load(void) {
+	for (int i = 0; i < HUB_ROWS; i++) {
+		hub_order[i] = i;
+		hub_hidden[i] = false;
+	}
+
+	const char *saved = config_get("radio", "hub_order", "");
+	bool seen[HUB_ROWS] = {false};
+	int at = 0;
+	const char *p = saved ? saved : "";
+	while (*p && at < HUB_ROWS) {
+		while (*p == ',' || *p == ' ') {
+			p++;
+		}
+		const char *start = p;
+		while (*p && *p != ',') {
+			p++;
+		}
+		size_t len = (size_t)(p - start);
+		while (len > 0 && start[len - 1] == ' ') {
+			len--;
+		}
+		for (int id = 0; id < HUB_ROWS && len; id++) {
+			if (!seen[id] && strlen(HUB_SLUGS[id]) == len && strncmp(HUB_SLUGS[id], start, len) == 0) {
+				seen[id] = true;
+				hub_order[at++] = id;
+				break;
+			}
+		}
+	}
+	// Anything the file does not name keeps its place at the end, so a row
+	// added in a later build shows up instead of disappearing.
+	for (int id = 0; id < HUB_ROWS; id++) {
+		if (!seen[id] && at < HUB_ROWS) {
+			hub_order[at++] = id;
+		}
+	}
+
+	long mask = config_get_int("radio", "hub_hidden", 0);
+	for (int i = 0; i < HUB_ROWS; i++) {
+		hub_hidden[i] = ((mask >> i) & 1) != 0;
+	}
+}
+
+static void hub_layout_save(void) {
+	char order[64];
+	size_t used = 0;
+	for (int slot = 0; slot < HUB_ROWS && used < sizeof(order); slot++) {
+		used += (size_t)snprintf(order + used, sizeof(order) - used, "%s%s", slot ? "," : "",
+								 HUB_SLUGS[hub_order[slot]]);
+	}
+	config_set("radio", "hub_order", order);
+
+	long mask = 0;
+	for (int i = 0; i < HUB_ROWS; i++) {
+		if (hub_hidden[i]) {
+			mask |= 1L << i;
+		}
+	}
+	config_set_int("radio", "hub_hidden", mask);
+	config_save();
+}
+
+// Puts the rows in the chosen order and hides the ones switched off. Called
+// from the hub's refresh, which also knows whether there is a network at all.
+static void hub_layout_apply(bool connected) {
+	int position = 0;
+	for (int slot = 0; slot < HUB_ROWS; slot++) {
+		int id = hub_order[slot];
+		lv_obj_t *row = hub_rows[id];
+		if (!row) {
+			continue;
+		}
+		if (!connected || hub_hidden[id]) {
+			hide(row);
+			continue;
+		}
+		show(row);
+		lv_obj_move_to_index(row, position++);
+	}
+}
+
 // Shows or hides what needs a network, from whether there is one.
 static void hub_refresh(void) {
 	bool connected = wifi_is_connected();
 
-	for (int i = 0; i < 3; i++) {
-		if (connected) {
-			show(hub_browse_rows[i]);
-		} else {
-			hide(hub_browse_rows[i]);
-		}
-	}
-
 	// With no network the page is the notice and nothing else. The starred and
 	// recent lists do come out of the database rather than the directory, but
 	// every station in them is a stream: offering them over a page that says
-	// the Wi-Fi is off leads to three corner buttons that open lists nothing in
-	// which can be played.
+	// the Wi-Fi is off leads to a list nothing in which can be played.
 	if (connected) {
 		show(hub_favourites_btn);
-		show(hub_recent_btn);
 		show(hub_search_btn);
-		show(hub_custom_btn);
 		hide(hub_wifi_warning);
 		hide(hub_wifi_row);
 	} else {
 		hide(hub_favourites_btn);
-		hide(hub_recent_btn);
 		hide(hub_search_btn);
-		// The file is on the card and reads without a network, but every line
-		// in it is a stream: a list nothing in which can be played is the same
-		// empty promise the other three would be.
-		hide(hub_custom_btn);
 		show(hub_wifi_warning);
 		show(hub_wifi_row);
 	}
+	// Settings needs no network: the sleep timer and the arrangement of this
+	// very page are as useful off a card as on one.
+	show(hub_settings_btn);
+
+	hub_layout_apply(connected);
 
 	// The heading gets the width the buttons are not using.
-	settingsrow_title_corner_slots(settingsrow_page_title(radiopage_screen), g_cfg, connected ? 4 : 0);
+	settingsrow_title_corner_slots(settingsrow_page_title(radiopage_screen), g_cfg, connected ? 3 : 1);
 }
 
 static void hub_poll_cb(lv_timer_t *timer) {
@@ -1286,22 +1446,410 @@ static void hub_poll_cb(lv_timer_t *timer) {
 
 static void hub_loaded_cb(lv_event_t *e) {
 	(void)e;
+	// The order or the visibility may have changed while the settings page was
+	// up, and the file is the authority: read it again rather than trust the
+	// copy taken at startup.
+	hub_layout_load();
 	hub_refresh();
+}
+
+// ---------------------------------------------------------------------------
+// Radio settings
+//
+// Three things, and all of them are about this page rather than about the
+// stations: a sleep timer of its own (a stretch set for a station should not be
+// counting over an album in the morning), which languages the language list
+// offers, and the list on the page -- which rows there are, and in what order.
+// The arrangement is the same idea as the main menu's editor, with the same
+// pair of arrows and a switch.
+// ---------------------------------------------------------------------------
+
+static void radio_lang_refresh(void) {
+	long which = radio_langs();
+	for (int i = 0; i < LANGS_COUNT; i++) {
+		if (radio_lang_pills[i]) {
+			settingsrow_pill_active(radio_lang_pills[i], i == (int)which);
+		}
+	}
+}
+
+static void radio_lang_pick_cb(lv_event_t *e) {
+	config_set_int("radio", "languages", (long)(intptr_t)lv_event_get_user_data(e));
+	radio_lang_refresh();
+}
+
+static void radio_sleep_refresh(void) {
+	settingsrow_duration_set_minutes(&radio_sleep_row, sleeptimer_minutes(SLEEPTIMER_RADIO));
+	settingsrow_duration_expanded(&radio_sleep_row, sleeptimer_enabled(SLEEPTIMER_RADIO));
+	settingsrow_duration_repaint(&radio_sleep_row);
+}
+
+static void radio_arrange_move_cb(lv_event_t *e);
+static void radio_arrange_toggle_cb(lv_event_t *e);
+
+static void radio_sleep_toggle_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_enabled(SLEEPTIMER_RADIO, lv_obj_has_state(radio_sleep_row.toggle, LV_STATE_CHECKED));
+	radio_sleep_refresh();
+}
+
+static void radio_sleep_wheel_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_minutes(SLEEPTIMER_RADIO, settingsrow_duration_minutes(&radio_sleep_row));
+}
+
+static void radio_arrange_rebuild(void) {
+	if (!radio_settings_rows) {
+		return;
+	}
+	lv_obj_clean(radio_settings_rows);
+	for (int pos = 0; pos < HUB_ROWS; pos++) {
+		int id = hub_order[pos];
+		lv_obj_t *row = lv_obj_create(radio_settings_rows);
+		lv_obj_set_size(row, lv_pct(100), bp_pick(40, 56));
+		lv_obj_add_style(row, &theme_style_card, 0);
+		lv_obj_set_style_radius(row, bp_tile_radius(), 0);
+		lv_obj_set_style_border_width(row, 0, 0);
+		lv_obj_set_style_shadow_width(row, 0, 0);
+		lv_obj_set_style_pad_hor(row, bp_pick(6, 12), 0);
+		lv_obj_set_style_pad_gap(row, bp_pick(1, 5), 0);
+		lv_obj_set_scrollable(row, false);
+		lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+		lv_obj_t *name = lv_label_create(row);
+		lv_label_set_text(name, tr(HUB_LABELS[id]));
+		lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+		lv_obj_set_flex_grow(name, 1);
+		lv_obj_add_style(name, &theme_style_text, 0);
+		lv_obj_set_style_text_font(name, bp_is_tempotec_v1() ? &font_ui_16 : &font_ui_22, 0);
+
+		for (int dir = 0; dir < 2; dir++) {
+			lv_obj_t *button = lv_btn_create(row);
+			lv_obj_set_size(button, bp_pick(28, 40), bp_pick(30, 40));
+			lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+			lv_obj_set_style_border_width(button, 0, 0);
+			lv_obj_set_style_shadow_width(button, 0, 0);
+			lv_obj_set_style_pad_all(button, 0, 0);
+			lv_obj_add_event_cb(button, radio_arrange_move_cb, LV_EVENT_CLICKED,
+							 (void *)(intptr_t)((dir ? 0 : 0x100) | pos));
+			lv_obj_t *icon = lv_image_create(button);
+			lv_image_set_src(icon, &icon_chevron_up);
+			lv_image_set_rotation(icon, dir ? 1800 : 0);
+			lv_obj_add_style(icon, &theme_style_icon, 0);
+			lv_obj_center(icon);
+			if ((dir == 0 && pos == 0) || (dir == 1 && pos == HUB_ROWS - 1)) {
+				lv_obj_add_state(button, LV_STATE_DISABLED);
+			}
+		}
+
+		lv_obj_t *toggle = lv_switch_create(row);
+		lv_obj_set_size(toggle, bp_pick(34, 48), bp_pick(20, 28));
+		if (!hub_hidden[id]) {
+			lv_obj_add_state(toggle, LV_STATE_CHECKED);
+		}
+		lv_obj_add_event_cb(toggle, radio_arrange_toggle_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)id);
+	}
+	lv_obj_update_layout(radio_settings_rows);
+}
+
+static void radio_arrange_move_cb(lv_event_t *e) {
+	int encoded = (int)(intptr_t)lv_event_get_user_data(e);
+	int pos = encoded & 0xff;
+	int target = pos + ((encoded & 0x100) ? -1 : 1);
+	if (pos < 0 || pos >= HUB_ROWS || target < 0 || target >= HUB_ROWS) {
+		return;
+	}
+	int swap = hub_order[pos];
+	hub_order[pos] = hub_order[target];
+	hub_order[target] = swap;
+	hub_layout_save();
+	radio_arrange_rebuild();
+	hub_layout_apply(wifi_is_connected());
+}
+
+static void radio_arrange_toggle_cb(lv_event_t *e) {
+	int id = (int)(intptr_t)lv_event_get_user_data(e);
+	if (id < 0 || id >= HUB_ROWS) {
+		return;
+	}
+	lv_obj_t *toggle = lv_event_get_target(e);
+	hub_hidden[id] = !lv_obj_has_state(toggle, LV_STATE_CHECKED);
+	hub_layout_save();
+	hub_layout_apply(wifi_is_connected());
+}
+
+static void radio_settings_loaded_cb(lv_event_t *e) {
+	(void)e;
+	radio_sleep_refresh();
+	radio_lang_refresh();
+	radio_arrange_rebuild();
+}
+
+static void build_radio_settings_page(gui_config_t *cfg) {
+	radio_settings_screen = lv_obj_create(NULL);
+	lv_obj_t *container = settingsrow_page(radio_settings_screen, cfg, "radio_settings");
+
+	// Its own, as the podcasts have theirs: falling asleep to a station is not
+	// falling asleep to an album.
+	settingsrow_toggle_duration(container, "sleep_timer", radio_sleep_toggle_cb, radio_sleep_wheel_cb,
+								&radio_sleep_row);
+
+	// A shortlist of the directory's languages, because the full one is two
+	// hundred entries long and sorted by popularity rather than by anything a
+	// reader can scan. "Polski" and "English" are written as they are rather
+	// than translated: a language names itself, and the app's own Language page
+	// makes the same point.
+	lv_obj_t *lang_pills = NULL;
+	settingsrow_pills(container, "radio_languages_shown", &lang_pills);
+	radio_lang_pills[LANGS_ALL] = settingsrow_pill(lang_pills, "radio_languages_all", LANGS_ALL, radio_lang_pick_cb);
+	radio_lang_pills[LANGS_POLISH_ENGLISH] = settingsrow_pill(lang_pills, "radio_languages_polish_english",
+														  LANGS_POLISH_ENGLISH, radio_lang_pick_cb);
+	radio_lang_pills[LANGS_POLISH] = settingsrow_pill_text(lang_pills, "Polski", LANGS_POLISH, radio_lang_pick_cb);
+	radio_lang_pills[LANGS_ENGLISH] = settingsrow_pill_text(lang_pills, "English", LANGS_ENGLISH, radio_lang_pick_cb);
+	radio_lang_refresh();
+	theme_register_refresh(radio_lang_refresh);
+
+	radio_settings_rows = lv_obj_create(container);
+	lv_obj_set_width(radio_settings_rows, lv_pct(100));
+	lv_obj_set_height(radio_settings_rows, LV_SIZE_CONTENT);
+	lv_obj_set_style_bg_opa(radio_settings_rows, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(radio_settings_rows, 0, 0);
+	lv_obj_set_style_pad_all(radio_settings_rows, 0, 0);
+	lv_obj_set_style_pad_gap(radio_settings_rows, bp_pick(4, 8), 0);
+	lv_obj_set_scrollable(radio_settings_rows, false);
+	lv_obj_set_flex_flow(radio_settings_rows, LV_FLEX_FLOW_COLUMN);
+
+	hub_layout_load();
+	radio_sleep_refresh();
+	radio_lang_refresh();
+	radio_arrange_rebuild();
+	lv_obj_add_event_cb(radio_settings_screen, radio_settings_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	theme_register_refresh(radio_sleep_refresh);
+	switcher_attach_back_gesture(radio_settings_screen);
+	player_sheet_attach_drag(container, true);
+	player_sheet_attach_drag(radio_settings_screen, true);
 }
 
 // ---------------------------------------------------------------------------
 // the search page
 //
-// A field, the keyboard, and that is all: the hits are stations, and there is
-// already a page that draws a list of stations. Pressing the magnifier asks
-// the directory and hands the answer to it.
+// A field, the keyboard, and the last few searches. The hits are stations, and
+// there is already a page that draws a list of stations: pressing the magnifier
+// asks the directory and hands the answer to it.
+//
+// The history is Tidal's and the podcast section's, in the radio's own part of
+// the configuration file: eight terms, newest first, a row to run one again and
+// an x to forget it. The keyboard and the history take turns in the same space
+// under the field, because on the V1's 320 px they cannot both be there.
 // ---------------------------------------------------------------------------
+
+#define SEARCH_HISTORY_MAX 8
+#define SEARCH_HISTORY_LEN 96
+
+static char radio_history[SEARCH_HISTORY_MAX][SEARCH_HISTORY_LEN];
+static int radio_history_count;
+static bool radio_history_loaded;
+
+static void search_history_rebuild(void);
+static void search_keyboard_show(bool visible);
+static void search_accept_cb(lv_event_t *e);
+
+// Rebuilding deletes the row whose tap asked for it, so the work is queued.
+static void search_history_rebuild_async(void *user) {
+	(void)user;
+	search_history_rebuild();
+}
+
+static void radio_history_load(void) {
+	if (radio_history_loaded) {
+		return;
+	}
+	radio_history_loaded = true;
+	radio_history_count = 0;
+
+	int stored = (int)config_get_int("radio", "search_history_count", 0);
+	if (stored < 0) {
+		stored = 0;
+	}
+	if (stored > SEARCH_HISTORY_MAX) {
+		stored = SEARCH_HISTORY_MAX;
+	}
+	for (int i = 0; i < stored; i++) {
+		char key[24];
+		snprintf(key, sizeof(key), "search_history_%d", i);
+		const char *term = config_get("radio", key, "");
+		if (term && term[0]) {
+			snprintf(radio_history[radio_history_count], SEARCH_HISTORY_LEN, "%s", term);
+			radio_history_count++;
+		}
+	}
+}
+
+static void radio_history_save(void) {
+	config_set_int("radio", "search_history_count", radio_history_count);
+	for (int i = 0; i < SEARCH_HISTORY_MAX; i++) {
+		char key[24];
+		snprintf(key, sizeof(key), "search_history_%d", i);
+		config_set("radio", key, i < radio_history_count ? radio_history[i] : "");
+	}
+	config_save();
+}
+
+// Puts the term on top, once: searching for the same thing twice does not fill
+// the history with it.
+static void radio_history_remember(const char *term) {
+	radio_history_load();
+	while (term && *term == ' ') {
+		term++;
+	}
+	if (!term || !*term) {
+		return;
+	}
+
+	char kept[SEARCH_HISTORY_MAX][SEARCH_HISTORY_LEN];
+	int kept_count = 0;
+	for (int i = 0; i < radio_history_count && kept_count < SEARCH_HISTORY_MAX - 1; i++) {
+		if (strcmp(radio_history[i], term) == 0) {
+			continue;
+		}
+		snprintf(kept[kept_count], SEARCH_HISTORY_LEN, "%s", radio_history[i]);
+		kept_count++;
+	}
+	snprintf(radio_history[0], SEARCH_HISTORY_LEN, "%s", term);
+	for (int i = 0; i < kept_count; i++) {
+		snprintf(radio_history[i + 1], SEARCH_HISTORY_LEN, "%s", kept[i]);
+	}
+	radio_history_count = kept_count + 1;
+	radio_history_save();
+}
+
+static void search_keyboard_show(bool visible) {
+	if (!search_keyboard) {
+		return;
+	}
+	keyboard_set_visible(search_keyboard, visible);
+	if (visible) {
+		if (search_history_list) {
+			lv_obj_set_hidden(search_history_list, true);
+		}
+		if (search_history_empty) {
+			lv_obj_set_hidden(search_history_empty, true);
+		}
+	} else {
+		search_history_rebuild();
+	}
+}
+
+static void history_forget_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= radio_history_count) {
+		return;
+	}
+	for (int i = index; i + 1 < radio_history_count; i++) {
+		snprintf(radio_history[i], SEARCH_HISTORY_LEN, "%s", radio_history[i + 1]);
+	}
+	radio_history_count--;
+	radio_history_save();
+	gui_post(search_history_rebuild_async, NULL);
+}
+
+static void history_pick_cb(lv_event_t *e);
+
+// Draws the last few searches, in place of the keyboard while nothing is being
+// typed.
+static void search_history_rebuild(void) {
+	if (!search_history_list) {
+		return;
+	}
+	radio_history_load();
+	lv_obj_clean(search_history_list);
+
+	bool any = radio_history_count > 0;
+	lv_obj_set_hidden(search_history_list, !any);
+	if (search_history_empty) {
+		lv_obj_set_hidden(search_history_empty, any);
+	}
+	if (!any) {
+		return;
+	}
+
+	for (int i = 0; i < radio_history_count; i++) {
+		lv_obj_t *row = lv_btn_create(search_history_list);
+		lv_obj_set_width(row, lv_pct(100));
+		lv_obj_set_height(row, bp_pick(40, 68));
+		lv_obj_add_style(row, &theme_style_card, 0);
+		lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
+		lv_obj_set_style_radius(row, bp_pick(10, 12), 0);
+		lv_obj_set_style_border_width(row, 0, 0);
+		lv_obj_set_style_shadow_width(row, 0, 0);
+		lv_obj_set_style_pad_hor(row, bp_pick(8, 20), 0);
+		lv_obj_set_style_pad_column(row, bp_pick(4, 10), 0);
+		lv_obj_set_scrollable(row, false);
+		lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+		lv_obj_add_event_cb(row, history_pick_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		lv_obj_t *label = lv_label_create(row);
+		lv_label_set_text(label, radio_history[i]);
+		lv_obj_add_style(label, &theme_style_text, 0);
+		lv_obj_set_style_text_font(label, bp_is_tempotec_v1() ? &font_ui_18 : &font_ui_24, 0);
+		lv_obj_set_flex_grow(label, 1);
+		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+		lv_obj_set_height(label, lv_font_get_line_height(&font_ui_18));
+
+		lv_obj_t *x = lv_btn_create(row);
+		lv_obj_set_size(x, bp_pick(30, 44), bp_pick(30, 44));
+		lv_obj_set_style_bg_opa(x, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(x, 0, 0);
+		lv_obj_set_style_shadow_width(x, 0, 0);
+		lv_obj_set_style_pad_all(x, 0, 0);
+		lv_obj_add_event_cb(x, history_forget_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		lv_obj_t *glyph = lv_image_create(x);
+		lv_image_set_src(glyph, &icon_close);
+		lv_obj_add_style(glyph, &theme_style_icon, 0);
+		lv_obj_set_style_image_opa(glyph, LV_OPA_60, 0);
+		lv_obj_center(glyph);
+	}
+	lv_obj_update_layout(search_history_list);
+}
+
+static void history_pick_cb(lv_event_t *e) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= radio_history_count) {
+		return;
+	}
+	lv_textarea_set_text(search_field, radio_history[index]);
+	search_accept_cb(e);
+}
+
+static void search_field_clicked_cb(lv_event_t *e) {
+	(void)e;
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	search_keyboard_show(true);
+	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
+	lv_obj_send_event(search_field, LV_EVENT_FOCUSED, NULL);
+}
 
 static void run_search(void) {
 	const char *text = lv_textarea_get_text(search_field);
 	if (!text || !text[0]) {
 		return;
 	}
+	radio_history_remember(text);
+	// The results get the whole page: a keyboard left up over a list nobody
+	// asked to see with it would be in the way of every row.
+	search_keyboard_show(false);
 
 	list_mode = LIST_STATIONS;
 	term_count = 0;
@@ -1331,10 +1879,18 @@ static void search_accept_cb(lv_event_t *e) {
 
 static void search_loaded_cb(lv_event_t *e) {
 	(void)e;
-	// A fresh visit opens with the keyboard up and the caret in the field.
-	keyboard_reset(search_keyboard);
-	keyboard_set_visible(search_keyboard, true);
-	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
+	radio_history_load();
+	if (radio_history_count > 0) {
+		// Something to pick up from last time: the history rather than the
+		// keyboard, and a tap on the field brings the keys back.
+		search_keyboard_show(false);
+		lv_obj_remove_state(search_field, LV_STATE_FOCUSED);
+	} else {
+		// Nothing searched yet: the keyboard, as the page always opened.
+		keyboard_reset(search_keyboard);
+		search_keyboard_show(true);
+		lv_obj_add_state(search_field, LV_STATE_FOCUSED);
+	}
 }
 
 static void build_search_page(gui_config_t *cfg) {
@@ -1356,16 +1912,45 @@ static void build_search_page(gui_config_t *cfg) {
 	lv_obj_set_style_pad_all(search_field, 14, 0);
 	lv_obj_set_style_text_font(search_field, &font_ui_24, 0);
 	keyboard_style_caret(search_field);
+	lv_obj_add_event_cb(search_field, search_field_clicked_cb, LV_EVENT_CLICKED, NULL);
+
+	// The history, in the space under the field. The keyboard takes the same
+	// space when one is being typed; on the V1 there is room for one of them.
+	int history_top = top + 70;
+	search_history_list = lv_obj_create(radiosearch_screen);
+	lv_obj_set_size(search_history_list, cfg->screen_width - 2 * cfg->padding,
+					cfg->screen_height - history_top - cfg->padding);
+	lv_obj_set_style_bg_opa(search_history_list, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(search_history_list, 0, 0);
+	lv_obj_set_style_pad_all(search_history_list, 0, 0);
+	lv_obj_set_style_pad_gap(search_history_list, bp_pick(4, 8), 0);
+	lv_obj_set_scroll_dir(search_history_list, LV_DIR_VER);
+	lv_obj_set_scrollbar_mode(search_history_list, LV_SCROLLBAR_MODE_AUTO);
+	lv_obj_set_flex_flow(search_history_list, LV_FLEX_FLOW_COLUMN);
+	lv_obj_align(search_history_list, LV_ALIGN_TOP_LEFT, cfg->padding, history_top);
+
+	search_history_empty = lv_label_create(radiosearch_screen);
+	lv_label_set_text(search_history_empty, tr("radio_search_history_empty"));
+	lv_label_set_long_mode(search_history_empty, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(search_history_empty, cfg->screen_width - 4 * cfg->padding);
+	lv_obj_set_style_text_align(search_history_empty, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_add_style(search_history_empty, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(search_history_empty, &font_ui_18, 0);
+	lv_obj_align(search_history_empty, LV_ALIGN_TOP_MID, 0, history_top + 60);
+	lv_obj_set_hidden(search_history_empty, true);
 
 	// Same regular/compact keyboard height as the other search pages, so it is
 	// the same keyboard in the same place rather than a lookalike.
 	search_keyboard = keyboard_create(radiosearch_screen, cfg->screen_width, cfg->screen_width < 320 ? 144 : 316,
 									  search_field, &icon_search, NULL,
 									  search_accept_cb, NULL);
+	keyboard_set_visible(search_keyboard, false);
 
 	lv_obj_add_event_cb(radiosearch_screen, search_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	switcher_attach_back_gesture(radiosearch_screen);
 }
+
+static void build_radio_settings_page(gui_config_t *cfg);
 
 void radiopage_init(gui_config_t *cfg) {
 	g_cfg = cfg;
@@ -1380,25 +1965,27 @@ void radiopage_init(gui_config_t *cfg) {
 	// the gesture, so as on the Qobuz pages it is attached to both.
 	player_sheet_attach_drag(hub_container, true);
 
-	// Top right, in the corner every page of this player keeps its shortcuts:
-	// the favourite stations, the ones played most recently to their left, and
-	// the search to the left of those. Same buttons, same order, the same
-	// spacing and the same heart as the Music page.
-	hub_favourites_btn = corner_button(cfg, 0, &icon_heart_filled);
+	// Three, and three only: My Stations -- the favourite stations the heart
+	// used to open, in the saved-mark glyph now that the header carries no
+	// heart -- the search, and the settings for this page. Recently played is
+	// a row in the list below, with the categories it belongs beside, so its
+	// corner button and the custom-stations one went with it: the custom list
+	// is a row too, and both can be moved or switched off in Radio settings.
+	hub_favourites_btn = corner_button(cfg, 0, &icon_bookmark_check);
 	lv_obj_add_event_cb(hub_favourites_btn, favourites_cb, LV_EVENT_CLICKED, NULL);
 
-	hub_recent_btn = corner_button(cfg, 1, &icon_radio_recent);
-	lv_obj_add_event_cb(hub_recent_btn, recent_cb, LV_EVENT_CLICKED, NULL);
-
-	hub_custom_btn = corner_button(cfg, 2, &icon_radio_custom);
-	lv_obj_add_event_cb(hub_custom_btn, custom_cb, LV_EVENT_CLICKED, NULL);
-
-	hub_search_btn = corner_button(cfg, 3, &icon_search);
+	hub_search_btn = corner_button(cfg, 1, &icon_search);
 	lv_obj_add_event_cb(hub_search_btn, search_cb, LV_EVENT_CLICKED, NULL);
 
-	hub_browse_rows[0] = settingsrow_add(hub_container, "language", NULL, language_cb, NULL);
-	hub_browse_rows[1] = settingsrow_add(hub_container, "radio_country", NULL, country_cb, NULL);
-	hub_browse_rows[2] = settingsrow_add(hub_container, "genre", NULL, genre_cb, NULL);
+	hub_settings_btn = corner_button(cfg, 2, &icon_music_settings);
+	lv_obj_add_event_cb(hub_settings_btn, switch_screen_cb, LV_EVENT_CLICKED, radio_settings_screen);
+
+	hub_layout_load();
+	hub_rows[HUB_RECENT] = settingsrow_add(hub_container, HUB_LABELS[HUB_RECENT], NULL, recent_cb, NULL);
+	hub_rows[HUB_LANGUAGE] = settingsrow_add(hub_container, HUB_LABELS[HUB_LANGUAGE], NULL, language_cb, NULL);
+	hub_rows[HUB_COUNTRY] = settingsrow_add(hub_container, HUB_LABELS[HUB_COUNTRY], NULL, country_cb, NULL);
+	hub_rows[HUB_GENRE] = settingsrow_add(hub_container, HUB_LABELS[HUB_GENRE], NULL, genre_cb, NULL);
+	hub_rows[HUB_CUSTOM] = settingsrow_add(hub_container, HUB_LABELS[HUB_CUSTOM], NULL, custom_cb, NULL);
 
 	// The same notice as the Wi-Fi transfer page: a centred message, and below
 	// it the "Wi-Fi settings" row that leads to where it can be fixed.
@@ -1417,6 +2004,7 @@ void radiopage_init(gui_config_t *cfg) {
 	lv_obj_set_style_margin_top(hub_wifi_row, 16, 0);
 	hide(hub_wifi_row);
 
+	build_radio_settings_page(cfg);
 	build_list_page(cfg);
 	build_search_page(cfg);
 

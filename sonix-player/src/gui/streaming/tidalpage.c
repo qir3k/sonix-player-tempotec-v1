@@ -372,6 +372,12 @@ static void do_track_add(void *user) {
 		return;
 	}
 	long id = result_tracks[menu_index].id;
+	// The menu says Add only when the mirror says it is not there, so this
+	// should not happen -- but a second request for a favourite and a second
+	// "added" notice are worse than a tap that does nothing.
+	if (tidalsync_is_favorite(id)) {
+		return;
+	}
 	listcache_drop(LISTCACHE_TIDAL_FAV_TRACKS); // the favourites list just changed
 	tidalsync_favorite_toggle(id, true, row_added_done, NULL);
 }
@@ -390,6 +396,9 @@ static void do_album_add(void *user) {
 	if (menu_index < 0 || menu_index >= result_count) {
 		return;
 	}
+	if (tidalsync_album_is_favorite(result_albums[menu_index].id)) {
+		return;
+	}
 	listcache_drop(LISTCACHE_TIDAL_FAV_ALBUMS);
 	tidalsync_album_favorite(result_albums[menu_index].id_text, true, row_added_done, NULL);
 }
@@ -406,6 +415,9 @@ static void do_album_remove(void *user) {
 static void do_artist_add(void *user) {
 	(void)user;
 	if (menu_index < 0 || menu_index >= result_count) {
+		return;
+	}
+	if (tidalsync_artist_is_favorite(result_artists[menu_index].id)) {
 		return;
 	}
 	listcache_drop(LISTCACHE_TIDAL_FAV_ARTISTS);
@@ -729,8 +741,60 @@ static void bulk_confirmed_cb(void *user) {
 	bulk_step();
 }
 
-static void bulk_action_cb(lv_event_t *e) {
-	(void)e;
+// The corner's tick asks what to do rather than doing it: a selection is a
+// deliberate act, and the sheet names the act before anything is written to the
+// account. One entry, because a list can do one thing in bulk -- the same thing
+// its row menu does.
+static const char *bulk_action_label(bulk_kind_t kind) {
+	switch (kind) {
+	case BULK_TRACK_ADD:
+	case BULK_ALBUM_ADD:
+	case BULK_ARTIST_ADD:
+		return "medialist_add_to_favourites";
+	case BULK_TRACK_REMOVE:
+	case BULK_ALBUM_REMOVE:
+	case BULK_ARTIST_REMOVE:
+		return "remove_from_favourites";
+	case BULK_PLAYLIST_REMOVE:
+		return "medialist_remove_from_playlist";
+	case BULK_PLAYLIST_DELETE:
+		return "delete_playlist";
+	default:
+		return NULL;
+	}
+}
+
+static void bulk_begin(void);
+
+static void bulk_sheet_action(void *user) {
+	(void)user;
+	bulk_begin();
+}
+
+static void bulk_sheet_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	if (!selecting || !chosen || bulk_running) {
+		return;
+	}
+	bool any = false;
+	for (int i = 0; i < result_count && !any; i++) {
+		any = chosen[i] != 0;
+	}
+	if (!any) {
+		return;
+	}
+	const char *label = bulk_action_label(bulk_kind_for(list_kind));
+	if (!label) {
+		return;
+	}
+	popover_item_t items[1];
+	memset(items, 0, sizeof(items));
+	items[0].label = label;
+	items[0].action = bulk_sheet_action;
+	popover_show(lv_event_get_current_target(e), items, 1);
+}
+
+static void bulk_begin(void) {
 	if (!selecting || !chosen || bulk_running) {
 		return;
 	}
@@ -924,16 +988,28 @@ static void row_menu_cb(lv_event_t *e) {
 		count = 2;
 		break;
 	case ROW_MENU_ALBUM_ADD:
-		items[0].label = "medialist_add_to_favourites";
-		items[0].action = do_album_add;
+		// The favourites mirror decides, not the list the row came from: an
+		// album favourited from search is a favourite in the next search too.
+		if (tidalsync_album_is_favorite(result_albums[index].id)) {
+			items[0].label = "remove_from_favourites";
+			items[0].action = ask_album_remove;
+		} else {
+			items[0].label = "medialist_add_to_favourites";
+			items[0].action = do_album_add;
+		}
 		break;
 	case ROW_MENU_ALBUM_REMOVE:
 		items[0].label = "remove_from_favourites";
 		items[0].action = ask_album_remove;
 		break;
 	case ROW_MENU_ARTIST_ADD:
-		items[0].label = "medialist_add_to_favourites";
-		items[0].action = do_artist_add;
+		if (tidalsync_artist_is_favorite(result_artists[index].id)) {
+			items[0].label = "remove_from_favourites";
+			items[0].action = ask_artist_remove;
+		} else {
+			items[0].label = "medialist_add_to_favourites";
+			items[0].action = do_artist_add;
+		}
 		break;
 	case ROW_MENU_ARTIST_REMOVE:
 		items[0].label = "remove_from_favourites";
@@ -1309,6 +1385,10 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 		lv_obj_set_style_border_width(menu_btn, 0, 0);
 		lv_obj_set_style_shadow_width(menu_btn, 0, 0);
 		lv_obj_set_style_pad_all(menu_btn, 0, 0);
+		// A few pixels of grace all round: two dots are a narrow target, and a
+		// tap that lands just outside the 32 px square used to be a tap on the
+		// row, which opened the album or played the track instead of the menu.
+		lv_obj_set_ext_click_area(menu_btn, bp_pick(7, 10));
 		if (index >= 0 && index < TIDAL_MAX_HELD) {
 			row_menus[index] = menu_btn;
 			lv_obj_set_hidden(menu_btn, selecting);
@@ -1319,6 +1399,10 @@ static lv_obj_t *make_row(const char *name, const char *detail, const char *cove
 		lv_image_set_src(dots, &icon_ellipsis_vertical);
 		lv_obj_add_style(dots, &theme_style_icon, 0);
 		lv_obj_set_style_image_recolor_opa(dots, LV_OPA_COVER, 0);
+		// 22 px of glyph in the 32 px target: the source is 36, and unscaled it
+		// drew past the button's own edges, so the ends of the dots were not
+		// part of the thing they looked like they belonged to.
+		lv_image_set_scale(dots, (uint32_t)(LV_SCALE_NONE * 22 / 36));
 		lv_obj_center(dots);
 	}
 
@@ -3647,25 +3731,14 @@ static void update_corner_buttons(void) {
 	}
 
 	// The list's own corner, which has no buttons of its own: while rows are
-	// being chosen it holds the action for this kind of list and the way out,
-	// and its heading gets the width those two are not using.
+	// being chosen it holds the tick that asks what to do and the way out, and
+	// its heading gets the width those two are not using. The tick is the same
+	// glyph whatever the list can do; the sheet names the act.
 	if (sel_action_btn) {
 		lv_obj_set_hidden(sel_action_btn, !selecting);
 	}
 	if (sel_close_btn) {
 		lv_obj_set_hidden(sel_close_btn, !selecting);
-	}
-	if (selecting && sel_action_btn) {
-		bulk_kind_t kind = bulk_kind_for(list_kind);
-		bool removes = kind == BULK_TRACK_REMOVE || kind == BULK_PLAYLIST_REMOVE || kind == BULK_ALBUM_REMOVE ||
-					   kind == BULK_ARTIST_REMOVE || kind == BULK_PLAYLIST_DELETE;
-		lv_obj_t *icon = lv_obj_get_child(sel_action_btn, 0);
-		if (icon) {
-			const lv_image_dsc_t *source = kind == BULK_PLAYLIST_REMOVE || kind == BULK_PLAYLIST_DELETE
-										   ? &icon_trash
-										   : (removes ? &icon_heart_filled : &icon_heart_outline);
-			lv_image_set_src(icon, source);
-		}
 	}
 	if (list_title && page_cfg) {
 		settingsrow_title_corner_slots(list_title, page_cfg, selecting ? 2 : 0);
@@ -4173,6 +4246,13 @@ static void home_loaded_cb(lv_event_t *e) {
 	// well have been a one-second disconnection.
 	featured_reset();
 
+	// And the album and artist mirrors are read once, so a row's menu can say
+	// Remove for something already in the favourites: the same answer the track
+	// mirror has always given. Cheap after the first visit -- both return at
+	// once when they are known.
+	tidalsync_albums_refresh(NULL);
+	tidalsync_artists_refresh(NULL);
+
 	// The page is rebuilt on every open, not once at startup. Everything it
 	// depends on can have changed while elsewhere: the network, the keys, and
 	// -- more so than on Qobuz -- the login, because a Tidal token lasts a
@@ -4192,7 +4272,10 @@ static void build_list_page(gui_config_t *cfg) {
 
 	// The list's corner, empty until rows are chosen: the bulk action and the
 	// way out of the mode. Placed and shown by update_corner_buttons().
-	sel_action_btn = corner_button_on(list_screen, cfg, 0, &icon_heart_outline, bulk_action_cb);
+	// The tick confirms a selection, as in the file browser and on the podcast
+	// pages; the x abandons it. The plain check, not a circled one: at the
+	// corner's size the ring reads as a filled disc around the mark.
+	sel_action_btn = corner_button_on(list_screen, cfg, 0, &icon_check, bulk_sheet_cb);
 	sel_close_btn = corner_button_on(list_screen, cfg, 1, &icon_close, bulk_cancel_cb);
 	lv_obj_set_hidden(sel_action_btn, true);
 	lv_obj_set_hidden(sel_close_btn, true);

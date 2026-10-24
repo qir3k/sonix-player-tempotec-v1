@@ -868,16 +868,18 @@ static void audiobook_seek_by(double delta, const device_state_t *state) {
 // down over an album the next morning. Everything else the transport plays --
 // the card, Tidal, Qobuz -- is one thing and gets one timer.
 //
-// Three sources are none of them, and for the same reason: they do not go
-// through the player's transport at all. The radio, the Game Boy and the
-// Bluetooth receiver push their sound out through the external path, and there
-// is no pause to give them -- stopping a station is a disconnection, stopping
-// the emulator is stopping the game, and stopping the receiver is silence in a
-// room where somebody else's phone is still playing. Only the radio ever
-// reports playing here; the other two are written down so that it stays true if
-// they ever start to.
+// The radio has one of its own now. It still has no pause -- stopping a station
+// is a disconnection -- so its timer stops the station instead, which is what
+// somebody falling asleep to one wants anyway. The Game Boy and the Bluetooth
+// receiver are none of them: stopping the emulator is stopping the game, and
+// stopping the receiver is silence in a room where somebody else's phone is
+// still playing. Both ever report playing here; they are written down so that it
+// stays true if they ever do.
 static sleeptimer_kind_t sleeptimer_kind_playing(void) {
-	if (radio_is_active() || gearboy_running() || btreceiver_is_active()) {
+	if (radio_is_active()) {
+		return SLEEPTIMER_RADIO;
+	}
+	if (gearboy_running() || btreceiver_is_active()) {
 		return SLEEPTIMER_COUNT;
 	}
 	if (audiobook_is_playing()) {
@@ -5973,7 +5975,21 @@ static void sleep_timer_cb(lv_timer_t *timer) {
 	for (int i = 0; i < SLEEPTIMER_COUNT; i++) {
 		expired = sleeptimer_expired((sleeptimer_kind_t)i) || expired;
 	}
-	if (!expired || audio_get_status() != AUDIO_STATUS_PLAYING) {
+	if (!expired) {
+		return;
+	}
+
+	// A station is stopped, not paused: there is nothing to resume, and leaving
+	// the connection open all night is exactly what the timer exists to prevent.
+	// The station stays loaded, so the morning starts with the same one and one
+	// tap.
+	if (radio_is_active()) {
+		radio_stop();
+		player_refresh_now_playing();
+		return;
+	}
+
+	if (audio_get_status() != AUDIO_STATUS_PLAYING) {
 		return;
 	}
 

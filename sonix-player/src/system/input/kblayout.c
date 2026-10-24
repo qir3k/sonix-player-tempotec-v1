@@ -143,16 +143,20 @@ static const struct {
 	{"L", "\xc5\x81"},																   // Ł
 	{"n", "\xc3\xb1\xc5\x84"},														   // ñ ń
 	{"N", "\xc3\x91\xc5\x83"},														   // Ñ Ń
-	{"o", "\xc3\xb2\xc3\xb3\xc3\xb4\xc3\xb6\xc3\xb5\xc3\xb8\xc5\x8d\xc5\x93"},		   // ò ó ô ö õ ø ō œ
-	{"O", "\xc3\x92\xc3\x93\xc3\x94\xc3\x96\xc3\x95\xc3\x98\xc5\x8c\xc5\x92"},		   // Ò Ó Ô Ö Õ Ø Ō Œ
+	// ó first, not third: this is a Polish player, and a held O that offers an
+	// oe-ligature before the accent Poles type every day is the wrong default.
+	{"o", "\xc3\xb3\xc3\xb2\xc3\xb4\xc3\xb6\xc3\xb5\xc3\xb8\xc5\x8d\xc5\x93"},		   // ó ò ô ö õ ø ō œ
+	{"O", "\xc3\x93\xc3\x92\xc3\x94\xc3\x96\xc3\x95\xc3\x98\xc5\x8c\xc5\x92"},		   // Ó Ò Ô Ö Õ Ø Ō Œ
 	{"s", "\xc3\x9f\xc5\x9b\xc5\xa1"},												   // ß ś š
 	{"S", "\xc5\x9a\xc5\xa0"},														   // Ś Š
 	{"u", "\xc3\xb9\xc3\xba\xc3\xbb\xc3\xbc\xc5\xab"},								   // ù ú û ü ū
 	{"U", "\xc3\x99\xc3\x9a\xc3\x9b\xc3\x9c\xc5\xaa"},								   // Ù Ú Û Ü Ū
 	{"y", "\xc3\xbf\xc3\xbd"},														   // ÿ ý
 	{"Y", "\xc5\xb8\xc3\x9d"},														   // Ÿ Ý
-	{"z", "\xc5\xbe\xc5\xba\xc5\xbc"},												   // ž ź ż
-	{"Z", "\xc5\xbd\xc5\xb9\xc5\xbb"},												   // Ž Ź Ż
+	// ż first: it is the one a Polish keyboard exists to type, and ź used to
+	// come before it.
+	{"z", "\xc5\xbc\xc5\xbe\xc5\xba"},												   // ż ž ź
+	{"Z", "\xc5\xbb\xc5\xbd\xc5\xb9"},												   // Ż Ž Ź
 	{"\xd0\xb5", "\xd1\x91"},														   // е: ё
 	{"\xd0\x95", "\xd0\x81"},														   // Е: Ё
 };
@@ -298,7 +302,9 @@ int kblayout_variant_count(const char *key) {
 // ---------------------------------------------------------------------------
 
 // The letters whose accents belong to Polish.
-static const char *const ACCENTS_POLISH = "\xc4\x85\xc4\x87\xc4\x99\xc5\x82\xc5\x84\xc3\xb3\xc5\x9b\xc5\xba\xc5\xbc"; // ą ć ę ł ń ó ś ź ż
+// ż before ź, as on a Polish keyboard's own strip: holding Z in Polish has to
+// offer ż first, which is the letter, and ź second, which is the rare one.
+static const char *const ACCENTS_POLISH = "\xc4\x85\xc4\x87\xc4\x99\xc5\x82\xc5\x84\xc3\xb3\xc5\x9b\xc5\xbc\xc5\xba"; // ą ć ę ł ń ó ś ż ź
 // And the ones the western European languages use, which English reads as the
 // accents on borrowed names.
 static const char *const ACCENTS_ENGLISH =

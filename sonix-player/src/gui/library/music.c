@@ -200,14 +200,16 @@ static lv_obj_t *make_browse_button(lv_obj_t *parent, const char *label_key, con
 	lv_obj_t *button = lv_btn_create(parent);
 	music_remove_edges(button);
 	int cell_width = (music_cfg->screen_width - 2 * music_cfg->padding - 14 - 4) / 2;
-	lv_obj_set_size(button, cell_width, 42);
+	lv_obj_set_size(button, cell_width, 36);
 	lv_obj_set_style_bg_color(button, theme_now_playing_fill(), 0);
 	lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
 	lv_obj_add_style(button, &theme_style_card_pressed, LV_STATE_PRESSED);
 	lv_obj_set_style_border_width(button, 0, 0);
 	lv_obj_set_style_radius(button, bp_tile_radius(), 0);
 	lv_obj_set_style_pad_hor(button, 5, 0);
-	lv_obj_set_style_pad_ver(button, 3, 0);
+	// Two, not three: the cell lost two pixels of height and a two-line label
+	// is still 36 px of face, so the room has to come out of the padding.
+	lv_obj_set_style_pad_ver(button, 2, 0);
 	lv_obj_set_style_pad_column(button, 6, 0);
 	lv_obj_set_flex_flow(button, LV_FLEX_FLOW_ROW);
 	lv_obj_set_flex_align(button, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -303,7 +305,7 @@ static void add_shortcut_row(lv_obj_t *card, const char *label_key, const lv_ima
 							 theme_semantic_t tone, bool wrap, lv_event_cb_t callback, int index) {
 	lv_obj_t *button = lv_btn_create(card);
 	music_remove_edges(button);
-	lv_obj_set_size(button, lv_pct(100), wrap ? 42 : 38);
+	lv_obj_set_size(button, lv_pct(100), wrap ? 36 : 32);
 	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
 	lv_obj_add_style(button, &theme_style_card_pressed, LV_STATE_PRESSED);
 	// Rows are separated by spacing only; do not draw hairline borders.
@@ -355,7 +357,7 @@ static lv_obj_t *music_shortcut_card(lv_obj_t *parent) {
 	lv_obj_set_style_radius(card, bp_tile_radius(), 0);
 	lv_obj_set_style_border_width(card, 0, 0);
 	lv_obj_set_style_shadow_width(card, 0, 0);
-	lv_obj_set_style_pad_all(card, 4, 0);
+	lv_obj_set_style_pad_all(card, 3, 0);
 	lv_obj_set_scrollable(card, false);
 	lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -411,8 +413,14 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_style_border_width(tokyo_music_panel, 0, 0);
 	lv_obj_set_style_radius(tokyo_music_panel, 0, 0);
 	lv_obj_set_style_pad_hor(tokyo_music_panel, cfg->padding, 0);
-	lv_obj_set_style_pad_ver(tokyo_music_panel, 4, 0);
-	lv_obj_set_style_pad_gap(tokyo_music_panel, 6, 0);
+	// Two and four, not three and five: the last shortcut row on the V1 -- the
+	// heart -- sat just under the fold, so the page opened with a scroll needed
+	// to see a section that is one tap away on every other theme. Every band
+	// here gives up a pixel or two instead, which is invisible on its own and
+	// adds up to the ~25 px that row needed; the rows themselves are a few
+	// pixels shorter for the same reason.
+	lv_obj_set_style_pad_ver(tokyo_music_panel, 2, 0);
+	lv_obj_set_style_pad_gap(tokyo_music_panel, 4, 0);
 	lv_obj_set_flex_flow(tokyo_music_panel, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(tokyo_music_panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
 	lv_obj_set_scroll_dir(tokyo_music_panel, LV_DIR_VER);
@@ -442,7 +450,7 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_label_set_text(tokyo_recent_empty, tr("music_recent_queue_empty"));
 	lv_label_set_long_mode(tokyo_recent_empty, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(tokyo_recent_empty, lv_pct(100));
-	lv_obj_set_height(tokyo_recent_empty, 30);
+	lv_obj_set_height(tokyo_recent_empty, 28);
 	lv_obj_add_style(tokyo_recent_empty, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(tokyo_recent_empty, &font_ui_14, 0);
 	lv_obj_set_style_text_align(tokyo_recent_empty, LV_TEXT_ALIGN_CENTER, 0);
@@ -452,7 +460,7 @@ static void tokyo_music_build(gui_config_t *cfg) {
 		row->queue_index = -1;
 		row->button = lv_btn_create(tokyo_recent_card);
 		music_remove_edges(row->button);
-		lv_obj_set_size(row->button, lv_pct(100), 39);
+		lv_obj_set_size(row->button, lv_pct(100), 36);
 		lv_obj_set_style_bg_opa(row->button, LV_OPA_TRANSP, 0);
 		lv_obj_add_style(row->button, &theme_style_card_pressed, LV_STATE_PRESSED);
 		lv_obj_set_style_border_width(row->button, 0, 0);
@@ -518,8 +526,8 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_style_radius(browse_card, bp_tile_radius(), 0);
 	lv_obj_set_style_border_width(browse_card, 0, 0);
 	lv_obj_set_style_shadow_width(browse_card, 0, 0);
-	lv_obj_set_style_pad_all(browse_card, 7, 0);
-	lv_obj_set_style_pad_gap(browse_card, 5, 0);
+	lv_obj_set_style_pad_all(browse_card, 6, 0);
+	lv_obj_set_style_pad_gap(browse_card, 4, 0);
 	lv_obj_set_scrollable(browse_card, false);
 	lv_obj_set_flex_flow(browse_card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(browse_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -535,7 +543,7 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_style_bg_opa(tokyo_browse_grid, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(tokyo_browse_grid, 0, 0);
 	lv_obj_set_style_pad_all(tokyo_browse_grid, 0, 0);
-	lv_obj_set_style_pad_gap(tokyo_browse_grid, 4, 0);
+	lv_obj_set_style_pad_gap(tokyo_browse_grid, 3, 0);
 	lv_obj_set_scrollable(tokyo_browse_grid, false);
 	lv_obj_set_flex_flow(tokyo_browse_grid, LV_FLEX_FLOW_ROW_WRAP);
 	lv_obj_set_flex_align(tokyo_browse_grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -545,7 +553,7 @@ static void tokyo_music_build(gui_config_t *cfg) {
 
 	tokyo_scan_button = lv_btn_create(tokyo_music_panel);
 	music_remove_edges(tokyo_scan_button);
-	lv_obj_set_size(tokyo_scan_button, lv_pct(100), 38);
+	lv_obj_set_size(tokyo_scan_button, lv_pct(100), 34);
 	lv_obj_add_style(tokyo_scan_button, &theme_style_card, 0);
 	lv_obj_add_style(tokyo_scan_button, &theme_style_card_pressed, LV_STATE_PRESSED);
 	lv_obj_set_style_radius(tokyo_scan_button, bp_tile_radius(), 0);
