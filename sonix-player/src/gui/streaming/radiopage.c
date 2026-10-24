@@ -13,6 +13,7 @@
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/gui/nowplaying/coverflow.h"
 #include "src/gui/shell/confirm.h"
 #include "src/gui/shell/popover.h"
 #include "src/gui/shell/settingsrow.h"
@@ -35,11 +36,28 @@ lv_obj_t *radiosearch_screen;
 // The list is windowed like every other long list here: a fixed pool of row
 // widgets rides the scroll position. Two hundred stations is well past the
 // point where building a widget per entry is felt on this hardware.
-#define ROW_HEIGHT 100
-#define ROW_GAP 8
+//
+// 100 px was the row the 480-pixel panels drew: at the V1's 240x320 that
+// pitch left two rows and a sliver of a third on screen, and in the terms
+// lists -- languages, countries, genres -- where a row is one line of text
+// and a chevron, most of each row was air. The height now follows the board
+// the way the other lists do it (medialist.c's bp_pick(44, 100) is the same
+// idea): 76 px still holds a station's two lines, the name over its quality
+// badge, with the paddings and radius the rest of the V1's rows use.
+#define ROW_HEIGHT bp_pick(76, 100)
+#define ROW_GAP bp_pick(6, 8)
 #define ROW_PITCH (ROW_HEIGHT + ROW_GAP)
-#define ROW_RADIUS 12
+#define ROW_RADIUS bp_pick(10, 12)
 #define ROW_POOL 10
+
+// The terms lists -- languages, countries, genres -- hold one line of text and
+// a chevron, so on the V1 they take a row of their own: at the station height
+// they were mostly air too, and they are the lists that read as too big. The
+// station rows keep the height above, which their two lines need. On the
+// regular panels both stay the 100 px they have always been.
+#define TERM_ROW_HEIGHT bp_pick(56, 100)
+#define TERM_ROW_GAP bp_pick(4, 8)
+#define TERM_ROW_PITCH (TERM_ROW_HEIGHT + TERM_ROW_GAP)
 
 #define POLL_MS 300
 
@@ -73,13 +91,13 @@ typedef struct {
 #define PLAYMARK_WIDTH 6
 #define PLAYMARK_HEIGHT 52
 #define PLAYMARK_INSET 4 // from the row's left edge
-#define ROW_PAD_HOR 14
+#define ROW_PAD_HOR bp_pick(10, 14)
 
 // radio.txt's headings: a line of dim text over the first station of each
 // group, in the gap the group's rows are pushed down by. Only that list has
 // them, so only that list's rows are placed from a table rather than at a
 // fixed pitch.
-#define HEADING_HEIGHT 56
+#define HEADING_HEIGHT bp_pick(44, 56)
 static int custom_row_y[RADIO_CUSTOM_MAX]; // where each station row sits
 static int custom_list_height;
 static lv_obj_t *heading_labels[RADIO_CUSTOM_MAX];
@@ -468,18 +486,24 @@ static void row_update_playmark(row_t *row) {
 
 static bool list_has_headings(void) { return list_mode == LIST_CUSTOM && heading_count > 0; }
 
+// One row's height and pitch for the list showing. Every place that places,
+// measures or windows a row asks these two, so the pooled buttons, the A-Z
+// strip and the scroll arithmetic cannot disagree about how tall a row is.
+static int row_height(void) { return list_mode == LIST_TERMS ? TERM_ROW_HEIGHT : ROW_HEIGHT; }
+static int row_pitch(void) { return list_mode == LIST_TERMS ? TERM_ROW_PITCH : ROW_PITCH; }
+
 static int row_y(int index) {
 	if (list_has_headings() && index >= 0 && index < RADIO_CUSTOM_MAX) {
 		return custom_row_y[index];
 	}
-	return index * ROW_PITCH;
+	return index * row_pitch();
 }
 
 static int list_height(int count) {
 	if (list_has_headings()) {
 		return custom_list_height;
 	}
-	return count > 0 ? count * ROW_PITCH : ROW_PITCH;
+	return count > 0 ? count * row_pitch() : row_pitch();
 }
 
 // The headings of radio.txt, made again with the list. The labels belong to
@@ -530,6 +554,9 @@ static void row_bind(row_t *row, int index) {
 
 	show(row->button);
 	lv_obj_set_y(row->button, row_y(index));
+	// The pool is shared between the station rows and the terms rows, so the
+	// height is set on every bind rather than once when the pool is built.
+	lv_obj_set_height(row->button, row_height());
 
 	if (list_mode == LIST_TERMS) {
 		lv_label_set_text(row->name, terms[index].label);
@@ -620,7 +647,7 @@ static void list_window_update(void) {
 		scroll = 0;
 	}
 
-	int first = (scroll / ROW_PITCH) - 1;
+	int first = (scroll / row_pitch()) - 1;
 	if (list_has_headings()) {
 		// The first row whose bottom is below the top of the view, and one
 		// before it, as the fixed pitch would give.
@@ -689,7 +716,7 @@ static void list_scroll_cb(lv_event_t *e) {
 	// exactly what this replaces.
 	int scroll = lv_obj_get_scroll_y(list_view);
 	int viewport = lv_obj_get_height(list_view);
-	if (scroll + 2 * viewport >= station_count * ROW_PITCH) {
+	if (scroll + 2 * viewport >= station_count * row_pitch()) {
 		list_load_more();
 	}
 }
@@ -1031,7 +1058,7 @@ static void build_list_page(gui_config_t *cfg) {
 
 	list_body = lv_obj_create(list_view);
 	lv_obj_set_width(list_body, width);
-	lv_obj_set_height(list_body, ROW_PITCH);
+	lv_obj_set_height(list_body, row_pitch());
 	lv_obj_set_pos(list_body, 0, 0);
 	lv_obj_set_style_bg_opa(list_body, 0, 0);
 	lv_obj_set_style_border_width(list_body, 0, 0);
@@ -1063,8 +1090,8 @@ static void build_list_page(gui_config_t *cfg) {
 		lv_obj_set_style_border_width(row->button, 0, 0);
 		lv_obj_set_style_shadow_width(row->button, 0, 0);
 		lv_obj_set_style_pad_hor(row->button, ROW_PAD_HOR, 0);
-		lv_obj_set_style_pad_ver(row->button, 10, 0);
-		lv_obj_set_style_pad_column(row->button, 14, 0);
+		lv_obj_set_style_pad_ver(row->button, bp_pick(8, 10), 0);
+		lv_obj_set_style_pad_column(row->button, bp_pick(10, 14), 0);
 		hide(row->button);
 		lv_obj_set_event_bubble(row->button, true);
 		lv_obj_add_event_cb(row->button, row_clicked_cb, LV_EVENT_CLICKED, NULL);
@@ -1179,7 +1206,9 @@ static void build_list_page(gui_config_t *cfg) {
 	settingsrow_scale_corner_icon(sort_icon, cfg);
 	lv_obj_center(sort_icon);
 
-	list_index = azindex_create(radiolist_screen, cfg, list_view, ROW_PITCH, list_window_update);
+	// The strip only ever has rows on the terms lists (sort_button_update), so
+	// it jumps by their pitch.
+	list_index = azindex_create(radiolist_screen, cfg, list_view, TERM_ROW_PITCH, list_window_update);
 
 	switcher_attach_back_gesture(list_view);
 	switcher_set_back_guard(radiolist_screen, list_back_guard);
@@ -1301,6 +1330,19 @@ static void search_cb(lv_event_t *e) {
 	(void)e;
 	lv_textarea_set_text(search_field, "");
 	switch_screen(radiosearch_screen);
+}
+
+// The header gear: straight to this page's own settings. It runs the same
+// guards switch_screen_cb does -- a swipe that started on the button is a
+// swipe, not a tap -- with the screen as its data rather than through the
+// event's, since the settings screen is not an lv_obj_t this callback can be
+// handed before it exists (see radiopage_init).
+static void radio_settings_cb(lv_event_t *e) {
+	(void)e;
+	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
+		return;
+	}
+	switch_screen(radio_settings_screen);
 }
 
 // The file is read again every time the page is opened, so a card edited under
@@ -1960,25 +2002,33 @@ void radiopage_init(gui_config_t *cfg) {
 	hub_container = settingsrow_page(radiopage_screen, cfg, "radio");
 	settingsrow_title_corner_slots(settingsrow_page_title(radiopage_screen), cfg, 3);
 
+	// Before the header buttons below: the gear's event is bound with the
+	// settings screen as its user data, and LVGL copies that pointer at
+	// registration time. Built after the button, the gear handed it NULL and
+	// pressed nothing -- which is exactly what it did.
+	build_radio_settings_page(cfg);
+
 	// The drag towards the player. The screen already has it (gui.c attaches it
 	// along with the other pages'), but the container sits on top and would take
 	// the gesture, so as on the Qobuz pages it is attached to both.
 	player_sheet_attach_drag(hub_container, true);
 
-	// Three, and three only: My Stations -- the favourite stations the heart
-	// used to open, in the saved-mark glyph now that the header carries no
-	// heart -- the search, and the settings for this page. Recently played is
-	// a row in the list below, with the categories it belongs beside, so its
-	// corner button and the custom-stations one went with it: the custom list
-	// is a row too, and both can be moved or switched off in Radio settings.
-	hub_favourites_btn = corner_button(cfg, 0, &icon_bookmark_check);
+	// Three, and three only, and in the Music page's order once the heart is
+	// back among them: search, the favourites heart, and the settings for this
+	// page. Corner buttons are placed from the right edge, so slot 0 (the right
+	// most) is the settings gear, the heart sits beside it and search is the
+	// leftmost of the three. Recently played is a row in the list below, with
+	// the categories it belongs beside, so its corner button and the custom-
+	// stations one went with it: the custom list is a row too, and both can be
+	// moved or switched off in Radio settings.
+	hub_settings_btn = corner_button(cfg, 0, &icon_music_settings);
+	lv_obj_add_event_cb(hub_settings_btn, radio_settings_cb, LV_EVENT_CLICKED, NULL);
+
+	hub_favourites_btn = corner_button(cfg, 1, &icon_heart_outline);
 	lv_obj_add_event_cb(hub_favourites_btn, favourites_cb, LV_EVENT_CLICKED, NULL);
 
-	hub_search_btn = corner_button(cfg, 1, &icon_search);
+	hub_search_btn = corner_button(cfg, 2, &icon_search);
 	lv_obj_add_event_cb(hub_search_btn, search_cb, LV_EVENT_CLICKED, NULL);
-
-	hub_settings_btn = corner_button(cfg, 2, &icon_music_settings);
-	lv_obj_add_event_cb(hub_settings_btn, switch_screen_cb, LV_EVENT_CLICKED, radio_settings_screen);
 
 	hub_layout_load();
 	hub_rows[HUB_RECENT] = settingsrow_add(hub_container, HUB_LABELS[HUB_RECENT], NULL, recent_cb, NULL);
@@ -2004,7 +2054,6 @@ void radiopage_init(gui_config_t *cfg) {
 	lv_obj_set_style_margin_top(hub_wifi_row, 16, 0);
 	hide(hub_wifi_row);
 
-	build_radio_settings_page(cfg);
 	build_list_page(cfg);
 	build_search_page(cfg);
 

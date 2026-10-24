@@ -42,6 +42,13 @@
 
 /* ---- fonts: every face is LVGL's built-in one ---------------------------- */
 
+/* The page shell's gesture guards, which settingsrow.c asks before it acts on
+ * a tap. Nothing here opens the player sheet or a back swipe, so both always
+ * answer no -- see the same stubs in test_wifi_pages.c. */
+void switcher_attach_back_gesture(lv_obj_t *obj) { (void)obj; }
+bool switcher_back_drag_active(void) { return false; }
+bool player_sheet_drag_active(void) { return false; }
+
 lv_font_t font_ui_14, font_ui_16, font_ui_18, font_ui_20, font_ui_20_bold;
 lv_font_t font_ui_22, font_ui_22_bold, font_ui_24, font_ui_24_bold;
 lv_font_t font_ui_26, font_ui_28, font_ui_32, font_ui_72;

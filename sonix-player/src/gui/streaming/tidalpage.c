@@ -668,9 +668,14 @@ static void bulk_finish(void) {
 		// the action would look like it did nothing.
 		toast_success("added_to_favourites");
 	}
-	// Removals leave the list, additions leave it as it was: either way what is
-	// on screen is a list of favourites that has moved on.
-	reload_current_list();
+	// Removals leave the list on screen, additions leave it as it was. A
+	// favourite added from a playlist's own selection does not touch that
+	// playlist, so re-reading it would only throw the scroll position away;
+	// every other addition is on a screen whose list does not change either
+	// (a search, an album), where the re-read has always been a no-op.
+	if (!added) {
+		reload_current_list();
+	}
 }
 
 static void bulk_step(void);
@@ -764,11 +769,10 @@ static const char *bulk_action_label(bulk_kind_t kind) {
 	}
 }
 
-static void bulk_begin(void);
+static void bulk_begin(bulk_kind_t kind);
 
 static void bulk_sheet_action(void *user) {
-	(void)user;
-	bulk_begin();
+	bulk_begin((bulk_kind_t)(intptr_t)user);
 }
 
 static void bulk_sheet_cb(lv_event_t *e) {
@@ -783,22 +787,42 @@ static void bulk_sheet_cb(lv_event_t *e) {
 	if (!any) {
 		return;
 	}
-	const char *label = bulk_action_label(bulk_kind_for(list_kind));
-	if (!label) {
-		return;
-	}
-	popover_item_t items[1];
+	popover_item_t items[2];
 	memset(items, 0, sizeof(items));
-	items[0].label = label;
-	items[0].action = bulk_sheet_action;
-	popover_show(lv_event_get_current_target(e), items, 1);
+	int count = 0;
+
+	// The sheet holds what the row's own three dots hold. A playlist's track
+	// has both of them -- favourite it, or take it out of this playlist -- and
+	// offering only the removal in bulk made the second of the two
+	// unrepresentable for more than one row.
+	if (list_kind == JOB_PLAYLIST_TRACKS) {
+		items[count].label = "medialist_add_to_favourites";
+		items[count].action = bulk_sheet_action;
+		items[count].user = (void *)(intptr_t)BULK_TRACK_ADD;
+		count++;
+		items[count].label = "medialist_remove_from_playlist";
+		items[count].action = bulk_sheet_action;
+		items[count].user = (void *)(intptr_t)BULK_PLAYLIST_REMOVE;
+		count++;
+	} else {
+		bulk_kind_t kind = bulk_kind_for(list_kind);
+		const char *label = bulk_action_label(kind);
+		if (!label) {
+			return;
+		}
+		items[count].label = label;
+		items[count].action = bulk_sheet_action;
+		items[count].user = (void *)(intptr_t)kind;
+		count++;
+	}
+	popover_show(lv_event_get_current_target(e), items, count);
 }
 
-static void bulk_begin(void) {
+static void bulk_begin(bulk_kind_t kind) {
 	if (!selecting || !chosen || bulk_running) {
 		return;
 	}
-	bulk_kind = bulk_kind_for(list_kind);
+	bulk_kind = kind;
 	bulk_at = 0;
 	bulk_count = 0;
 	bulk_failed = false;
