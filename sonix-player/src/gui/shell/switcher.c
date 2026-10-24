@@ -88,15 +88,20 @@ void back_btn_player_top_inset(int inset) {
 // pointing at the wrong place.
 static int chevron_ink_left(void) {
 	const lv_image_dsc_t *dsc = &icon_chevron_left;
-	if (!dsc->data || dsc->header.cf != LV_COLOR_FORMAT_ARGB8888) {
+	if (!dsc->data) {
 		return 0;
 	}
 	int w = (int)dsc->header.w;
 	int h = (int)dsc->header.h;
 	const uint8_t *px = (const uint8_t *)dsc->data;
+	int stride = (int)dsc->header.stride;
+	// The glyphs are A8 now (see tools/svg_to_lvgl.py): one byte of coverage
+	// per pixel. The coloured tile art that is not a glyph keeps ARGB8888.
+	bool a8 = dsc->header.cf == LV_COLOR_FORMAT_A8;
 	for (int x = 0; x < w; x++) {
 		for (int y = 0; y < h; y++) {
-			if (px[((size_t)y * (size_t)w + (size_t)x) * 4 + 3] > 24) {
+			const uint8_t *p = px + (size_t)y * (size_t)stride;
+			if ((a8 ? p[x] : p[x * 4 + 3]) > 24) {
 				return x;
 			}
 		}

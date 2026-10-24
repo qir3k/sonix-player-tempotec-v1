@@ -17,11 +17,15 @@ Dark/Light illustrations are resized once, directly from the original PNGs.
 
 The V1's glyphs can shrink with the mini-player's font-dependent height, hence
 all integer sizes 1..47. The maximum comes from its header-free OLED grid and
-includes both requested reductions. The two regular-panel glyph sizes are
-138 (OLED) and 173 (other themes); colored art is 74 (V1) or 173 (regular).
-UI tests assert native-size coverage after theme and font reflows. The lookup
-returns NULL for an unknown future layout, allowing the existing scaled art
-as a fallback rather than a missing image.
+includes both requested reductions. Colored art is 74, the V1's icon-only
+tile at the default text size. UI tests assert native-size coverage after theme
+and font reflows. The lookup returns NULL for an unknown future layout,
+allowing the existing scaled art as a fallback rather than a missing image.
+
+This fork draws the V1 only (src/gui/board_profile.h), so the 480-pixel panel's
+native sizes -- glyphs at 138 and 173, color at 173 -- are not generated: no
+layout in this tree asks for them, and they were 6 MB of source that never
+reached the screen.
 """
 
 import argparse
@@ -37,8 +41,8 @@ except ImportError as exc:
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "assets" / "icons"
 OUTPUT = ROOT / "src" / "gui" / "shell" / "main_menu_icons.c"
-GLYPH_SIZES = (*range(1, 48), 138, 173)
-COLOR_SIZES = (74, 173)
+GLYPH_SIZES = range(1, 48)
+COLOR_SIZES = (74,)
 # Tile order: Music, Streaming, Wireless, Audiobooks, More, Settings.
 GLYPHS = (
     "music-2.svg", "radio-player.svg", "wifi-high.svg",
@@ -114,18 +118,9 @@ def generate():
 		if (size >= 1 && size <= 47) {
 			return &glyph_icons[size - 1][tile];
 		}
-		if (size == 138) {
-			return &glyph_icons[47][tile];
-		}
-		if (size == 173) {
-			return &glyph_icons[48][tile];
-		}
 	} else {
 		if (size == 74) {
 			return &color_icons[0][tile];
-		}
-		if (size == 173) {
-			return &color_icons[1][tile];
 		}
 	}
 	return NULL;

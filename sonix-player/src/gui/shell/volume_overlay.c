@@ -212,6 +212,10 @@ void volume_overlay_init(gui_config_t *cfg) {
 
 	overlay_icon = lv_image_create(overlay);
 	lv_image_set_src(overlay_icon, &icon_volume_high);
+	// Alpha-only glyph (see tools/svg_to_lvgl.py): tint it white, the colour the
+	// ARGB bitmap used to carry, or it would draw black on the dimmed backdrop.
+	lv_obj_set_style_image_recolor(overlay_icon, lv_color_white(), 0);
+	lv_obj_set_style_image_recolor_opa(overlay_icon, LV_OPA_COVER, 0);
 	if (compact) {
 		// As in the status bar, make the layout box match the transformed image;
 		// otherwise flex still reserves the 30 px source icon.

@@ -73,6 +73,21 @@ static int strip_h;
 // bands read as one margin.
 #define CLOCK_LIFT bp_pick(14, 18)
 
+// How far the title is lifted out of its line, so the words do not slide down
+// the strip now that the clock no longer sits at its foot.
+#define TITLE_RISE bp_pick(3, 4)
+
+// How far the artist is lifted: one pixel further than the title.
+//
+// The lift above moves the clock and nothing else, which opens the air under
+// the clock but takes the same amount out of the gap above it: with the clock
+// alone raised, the two gaps read 12 px and 7 px at the V1's sizes. The artist
+// is the one line between both gaps, so it is the line that splits what the
+// lift opened. Measured on the renderer, with the title and the clock where
+// they are: at four pixels the two gaps are both 11 (test_screensaver.c
+// checks it, on the rendered rows rather than the boxes).
+#define ARTIST_RISE (TITLE_RISE + 1)
+
 // The Framed style's sleeve. It keeps at least this much of the panel free on
 // either side, and above and below itself inside the area over the strip; its
 // side is the largest square both allow. That is worked out once, from the
@@ -1124,12 +1139,14 @@ void screensaver_init(gui_config_t *cfg) {
 	lv_obj_set_width(title_label, lv_pct(100));
 	lv_obj_set_style_text_font(title_label, &font_ui_28, 0);
 	lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_set_style_translate_y(title_label, -TITLE_RISE, 0);
 	scrolltext_apply(title_label);
 
 	artist_label = lv_label_create(info_strip);
 	lv_obj_set_width(artist_label, lv_pct(100));
 	lv_obj_set_style_text_font(artist_label, &font_ui_22, 0);
 	lv_obj_set_style_text_align(artist_label, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_set_style_translate_y(artist_label, -ARTIST_RISE, 0);
 	scrolltext_apply(artist_label);
 
 	// The time, in the largest figures the screen has -- lifted clear of the

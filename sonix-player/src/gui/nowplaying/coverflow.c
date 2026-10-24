@@ -451,8 +451,11 @@ static void face_fill(uint16_t *face, lv_color_t colour) {
 	}
 }
 
-// Lays an ARGB8888 glyph (which is what every icon in this player is) over the
-// card, tinted, with its own alpha.
+// Lays a glyph over the card, tinted, with its own alpha.
+//
+// The icons are A8 -- one byte of coverage per pixel, the format
+// tools/svg_to_lvgl.py emits for single-colour art -- so the alpha is that
+// byte. ARGB8888 is still read, for the coloured tile art.
 //
 // Drawn at its own size, one pixel to one pixel. The glyph handed in must be
 // rasterised at the size it is drawn at (icon_album_big): enlarging a small
@@ -466,12 +469,13 @@ static void face_draw_glyph(uint16_t *face, const lv_image_dsc_t *glyph, lv_colo
 	int ox = (CF_MID_W - gw) / 2;
 	int oy = (CF_MID_W - gh) / 2;
 	unsigned tr = tint.red, tg = tint.green, tb = tint.blue;
+	bool a8 = glyph->header.cf == LV_COLOR_FORMAT_A8;
 
 	for (int y = 0; y < gh; y++) {
 		const uint8_t *srow = glyph->data + (size_t)y * glyph->header.stride;
 		uint16_t *drow = face + (size_t)(oy + y) * CF_MID_W + ox;
 		for (int x = 0; x < gw; x++) {
-			unsigned a = srow[x * 4 + 3] * opa / 255;
+			unsigned a = (a8 ? srow[x] : srow[x * 4 + 3]) * opa / 255;
 			if (!a) {
 				continue;
 			}

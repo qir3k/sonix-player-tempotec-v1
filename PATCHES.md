@@ -1571,5 +1571,56 @@ it belongs to them. The now-playing page hides it so the artwork can run to the
 top edge, and a strip of that artwork where the bar would be pulls whichever
 sheet the arrangement puts at the top — the control centre in the classic one,
 Cover Flow in the stock one — because hiding the bar must not take the gesture
-away with it. The reader and the two games hide it behind a full-screen picture
-instead, and they keep their own presses.
+away with it.The reader and the two games hide it behind a full-screen picture instead, and they keep their own presses.
+
+## Lighter icon sets, and the screensaver's two gaps
+
+The two generated icon sources were 25 MB of C in the tree (17 MB of
+`icons.c`, 8.4 MB of `main_menu_icons.c`), which is about 4 MB of the flashed
+image. Two thirds of that weight was never drawn.
+
+**`main_menu_icons.c` carried the 480-pixel panels' native art.** It rendered
+the six home tiles at every integer size 1..47 for the V1's icon-only grid, and
+then at 138 and 173 for the regular panels, and the coloured art at 74 and 173.
+This fork draws the V1 and nothing else (`src/gui/board_profile.h` says so in
+its first line), so no layout ever asks for the 138, 173 and 173 colour sets:
+they were 6 MB of source, 1 MB of image and eighteen bitmaps that could not
+appear on a screen. `tools/main_menu_icons.py` no longer renders them, the
+lookup no longer offers them, and the test that covers native-size coverage
+no longer expects them. What is left is the V1's own art: glyphs at 1..47 and
+colour at 74, with NULL -- and the scaled fallback -- for anything else.
+
+**The DAC page's 200 px mark went with the block that drew it.** On the V1 the
+page never draws an illustration at all: the 240x320 panel has no room for
+`icon_dac_page` beside the mode switch, the equaliser card and the status
+lines, so the code was `if (!compact)` inside a fork where `compact` is the only
+answer. The block, the static that held the image, the 200x200 bitmap (152 KB
+of the image) and its source PNG are gone.
+
+**The glyphs are A8, and three readers had to follow.** Single-colour art is
+one byte of coverage per pixel rather than four bytes of white plus alpha, and
+everything that reads an icon's pixels by hand had to be told: the back
+button's ink measurement (`switcher.c`, or the way back would read as pushed
+in), Cover Flow's missing-album glyph (`coverflow.c`, which would have drawn
+nothing over the record), and the screensaver test's own ink scan. Tinting is
+unchanged: `theme_style_icon` carries the palette's ink, and the two places
+dressing a glyph outside it (the Gearboy save badge, the volume overlay) ask
+for it explicitly.
+
+**The checkmark was already one bitmap, and stays one.** `check.svg` is the
+only plain tick in the set and it is shared by every selection row, choice
+list, podcast and language mark -- twenty call sites, one 1.3 KB array. the
+other icons whose name contains "check" are different symbols rather than
+copies: a bookmark with a tick, a database with a tick, and a circled check
+for the success toast.
+
+**The screensaver's two gaps.** Lifting the clock clear of the swipe-up sign
+(`CLOCK_LIFT`, 14 px on the V1) opened the air under it and took the same air
+out of the gap above it: with the clock alone raised the two gaps measured 12
+and 7. The title keeps the place the strip gave it, and the artist -- the line
+between both gaps -- now rises one pixel further than the title
+(`ARTIST_RISE` is `TITLE_RISE + 1`), which splits the difference exactly: on
+the rendered rows the two gaps are 11 and 11 at the V1's MiSans line boxes.
+`tests/ui/test_screensaver.c` now measures them on the rendered frame and
+fails if the two lines ever drift apart again.
+

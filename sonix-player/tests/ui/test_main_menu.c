@@ -332,8 +332,10 @@ static void check_native_assets(void) {
 		for (int size = 1; size <= 173; size++) {
 			const lv_image_dsc_t *glyph = main_menu_icon_native(tile, true, size);
 			const lv_image_dsc_t *color = main_menu_icon_native(tile, false, size);
-			assert((glyph != NULL) == (size <= 47 || size == 138 || size == 173));
-			assert((color != NULL) == (size == 74 || size == 173));
+			// This fork draws the V1 only: its glyphs are 1..47 px, its icon-only
+			// home art is 74. The 480-pixel panel's native sizes are not built.
+			assert((glyph != NULL) == (size <= 47));
+			assert((color != NULL) == (size == 74));
 			const lv_image_dsc_t *sources[] = {glyph, color};
 			for (size_t i = 0; i < 2; i++) {
 				const lv_image_dsc_t *src = sources[i];

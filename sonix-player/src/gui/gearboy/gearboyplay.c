@@ -643,6 +643,10 @@ static void build_badge(void) {
 
 	badge_icon = lv_image_create(badge);
 	lv_image_set_src(badge_icon, &icon_save_state);
+	// The glyph is alpha-only now (see tools/svg_to_lvgl.py): without a tint
+	// LVGL would draw it black, and this badge is white-on-dark in every theme.
+	lv_obj_set_style_image_recolor(badge_icon, lv_color_white(), 0);
+	lv_obj_set_style_image_recolor_opa(badge_icon, LV_OPA_COVER, 0);
 	if (bp_is_tempotec_v1()) {
 		// The 34-px sources at three quarters, the size the corner gears of the
 		// compact pages settled on: at their own size they would fill the 40-px

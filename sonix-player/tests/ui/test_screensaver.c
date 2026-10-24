@@ -485,15 +485,26 @@ static void check_fill(const cover_image_t *sleeve) {
 	}
 }
 
+// Whether the pixel at (x, y) of an icon is inked. The glyphs here are A8
+// (the generator's single-colour format, one byte of coverage per pixel); the
+// coloured tile art keeps its alpha in the fourth byte of ARGB8888.
+static bool icon_pixel_inked(const lv_image_dsc_t *icon, uint32_t x, uint32_t y) {
+	const uint8_t *row = icon->data + (size_t)y * icon->header.stride;
+	if (icon->header.cf == LV_COLOR_FORMAT_A8) {
+		return row[x] != 0;
+	}
+	assert(icon->header.cf == LV_COLOR_FORMAT_ARGB8888);
+	return row[x * 4 + 3] != 0;
+}
+
 // The first row of the icon that carries any ink. The chevron's square is
 // mostly empty -- only the two strokes of the sign are drawn -- so where the
 // object starts is not where the sign starts.
 static int icon_first_ink_row(const lv_image_dsc_t *icon) {
-	assert(icon && icon->header.cf == LV_COLOR_FORMAT_ARGB8888);
+	assert(icon);
 	for (uint32_t y = 0; y < icon->header.h; y++) {
-		const uint8_t *row = icon->data + (size_t)y * icon->header.stride;
 		for (uint32_t x = 0; x < icon->header.w; x++) {
-			if (row[x * 4 + 3]) { // ARGB8888: the alpha is the fourth byte
+			if (icon_pixel_inked(icon, x, y)) {
 				return (int)y;
 			}
 		}
@@ -548,6 +559,71 @@ static void check_clock_clearance(void) {
 	assert(clock_bottom > 0);
 	int gap = sign_top - clock_bottom - 1; // rows of air between the two
 	assert(gap >= CLOCK_CLEARANCE_PX);
+}
+
+// The strip's three lines must sit in two gaps of the same size: the air
+// between the title and the artist is the air between the artist and the
+// clock. The clock is lifted out of its line to clear the swipe-up sign (see
+// CLOCK_LIFT), which opens the lower gap, so the artist is lifted half as far
+// and the two gaps meet in the middle.
+//
+// Measured on the rendered rows rather than the boxes: the faces leave their
+// own leading inside a line box, and it is the ink a reader sees.
+static void check_strip_spacing(void) {
+	lv_obj_update_layout(saver_obj());
+	const lv_image_dsc_t *icon = lv_image_get_src(chevron_icon());
+	assert(icon);
+	lv_area_t icon_area;
+	lv_obj_get_coords(chevron_icon(), &icon_area);
+	int sign_top = (int)icon_area.y1 + icon_first_ink_row(icon);
+
+	lv_area_t strip_area;
+	lv_obj_get_coords(info_strip(), &strip_area);
+	assert(lv_obj_get_style_bg_image_src(info_strip(), 0) == NULL);
+
+	lv_draw_buf_t *shot = lv_snapshot_take(saver_obj(), LV_COLOR_FORMAT_RGB565);
+	assert(shot);
+	int band[8][2];
+	int bands = 0;
+	int y = (int)strip_area.y1;
+	while (y < sign_top) {
+		bool lit = false;
+		for (int x = (int)strip_area.x1; x <= (int)strip_area.x2 && !lit; x++) {
+			lit = pixel_lit(shot, x, y);
+		}
+		if (!lit) {
+			y++;
+			continue;
+		}
+		int top = y;
+		while (y < sign_top) {
+			bool row_lit = false;
+			for (int x = (int)strip_area.x1; x <= (int)strip_area.x2 && !row_lit; x++) {
+				row_lit = pixel_lit(shot, x, y);
+			}
+			if (!row_lit) {
+				break;
+			}
+			y++;
+		}
+		if (bands < 8) {
+			band[bands][0] = top;
+			band[bands][1] = y - 1;
+		}
+		bands++;
+	}
+	lv_draw_buf_destroy(shot);
+
+	// Title, artist and clock: three separate bands of ink. Fewer means two
+	// lines have run together, which is the thing this check exists for.
+	assert(bands == 3);
+	int upper = band[1][0] - band[0][1] - 1;
+	int lower = band[2][0] - band[1][1] - 1;
+	fprintf(stderr, "strip ink rows: title %d..%d artist %d..%d clock %d..%d; gaps %d and %d\n",
+			band[0][0], band[0][1], band[1][0], band[1][1], band[2][0], band[2][1], upper, lower);
+	assert(upper > 0 && lower > 0);
+	// The two gaps are the same to within a pixel of glyph rounding.
+	assert(upper >= lower - 1 && upper <= lower + 1);
 }
 
 static void check_nothing_held(void) {
@@ -773,6 +849,7 @@ int main(int argc, char **argv) {
 	wake();
 	assert(lv_image_get_src(picture()) == NULL);
 	check_clock_clearance();
+	check_strip_spacing();
 	dump_snapshot("clock-clearance");
 	hide_now();
 	check_nothing_held();

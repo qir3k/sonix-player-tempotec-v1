@@ -17,7 +17,6 @@
 lv_obj_t *dacpage_screen;
 
 static lv_obj_t *mode_switch;
-static lv_obj_t *big_icon;
 static lv_obj_t *format_label;
 static lv_obj_t *status_label;
 static lv_obj_t *charge_btn;
@@ -345,25 +344,14 @@ void dacpage_init(gui_config_t *cfg) {
 	// and an object positioned by alignment leaves the flow and is measured as
 	// taking no space, so it would overlap the row above and steal its presses.
 	//
-	// The mark is the regular panel's illustration only. The V1's 240x320 panel
-	// has to hold the mode switch, the equaliser card, the host's sample rate and
-	// the status copy in 248 px -- measured on the real layout engine, the last
-	// line of the note lands past the foot of the screen with even a 48 px mark
-	// in between. So on the compact panel the picture goes and the words stay:
-	// the switch and the status already say what the page is for, and a page
-	// whose status is half cut looks broken rather than decorative.
-	if (!compact) {
-		big_icon = lv_image_create(container);
-		lv_image_set_src(big_icon, &icon_dac_page);
-		const int icon_size = 200;
-		int source_side = LV_MAX((int)icon_dac_page.header.w, (int)icon_dac_page.header.h);
-		lv_obj_set_size(big_icon, icon_size, icon_size);
-		lv_image_set_inner_align(big_icon, LV_IMAGE_ALIGN_CENTER);
-		if (source_side > 0) {
-			lv_image_set_scale(big_icon, (uint32_t)(LV_SCALE_NONE * icon_size / source_side));
-		}
-		lv_obj_set_style_margin_top(big_icon, 24, 0);
-	}
+	// No illustration: the V1's 240x320 panel has to hold the mode switch, the
+	// equaliser card, the host's sample rate and the status copy in 248 px --
+	// measured on the real layout engine, the last line of the note lands past
+	// the foot of the screen with even a 48 px mark in between. The switch and
+	// the status already say what the page is for, and a page whose status is
+	// half cut looks broken rather than decorative. (The 200 px mark the regular
+	// panels carried is not built: this fork draws the V1 only, and the block
+	// that would have drawn it never ran.)
 
 	// The words themselves: the host's rate, then the status copy.
 	//

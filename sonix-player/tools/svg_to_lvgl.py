@@ -151,10 +151,8 @@ ICONS = [
     # buttons that add the chosen rows to a playlist, to the favourites and to
     # the queue, and inside a playlist or the favourites take them out.
     ("list-plus.svg", "list_plus", 34),
-    ("star-plus.svg", "star_plus", 34),
     ("list-queue.svg", "list_queue", 34),
     ("list-x.svg", "list_x", 34),
-    ("star-x.svg", "star_x", 34),
     ("search.svg", "search", 34),
     ("podcast-downloaded.svg", "podcast_downloaded", 34), # podcasts corner: the downloaded episodes
     ("wifi.svg", "wifi", 46),
@@ -258,15 +256,10 @@ ICONS = [
     # it does the same job as list-a-z on the all-tracks page, and two buttons
     # that sort a list should weigh the same.
     ("arrow-down-up.svg", "arrow_down_up", 34),
-    ("star.svg", "star", 32),
-    ("star-filled.svg", "star_filled", 32),
-    # Immersive uses a heart for the same favourite button; other layouts keep
-    # their stars. The filled heart is also used by the coffee QR animation.
+    # Immersive uses a heart for the same favourite button. The filled heart is
+    # also used by the coffee QR animation.
     ("heart-outline.svg", "heart_outline", 32),
     ("heart.svg", "heart_filled", 32),
-    ("star.svg", "star_corner", 34),
-    ("radio-recent.svg", "radio_recent", 34), # stations played most recently
-    ("custom-radio.svg", "radio_custom", 34), # the stations written into radio.txt
     # Under a station's name: the stream's quality, one glyph in four colours
     # that follow the theme, so white like the rest of this list and tinted by
     # the page (radiopage.c). The size of the track rows' quality badges.
@@ -281,19 +274,13 @@ ICONS = [
     ("next_30.svg", "next_30", 50),
     ("prev_60.svg", "prev_60", 50),
     ("next_60.svg", "next_60", 50),
-    ("chapter.svg", "chapter", 34),
     # The same place on a podcast, where the queue is the episode list.
     ("podcast-episodes.svg", "podcast_episodes", 34),
-    # The playback-speed gauge, in the repeat button's place while a book plays.
-    ("play-speed.svg", "play_speed", 34),
     # The DAC page's charging toggle.
     ("zap.svg", "zap", 34),
     ("zap-off.svg", "zap_off", 34),
-    # Corner buttons: Qobuz quality and sign-out, the remap page's side swap,
-    # and Gearboy's two save states.
-    ("qobuz-quality.svg", "qobuz_quality", 34),
+    # Corner buttons: Qobuz's sign-out, and Gearboy's two save states.
     ("log-out.svg", "log_out", 34),
-    ("swap-remap.svg", "swap_remap", 34),
     ("save-state.svg", "save_state", 34),
     ("load-state.svg", "load_state", 34),
     # The turning wheel, at two sizes: beside a row it is a detail, in the
@@ -344,7 +331,6 @@ ICONS = [
     # The battery ring's middle, and the four noise-control modes on the tab
     # bar under the pictures. Lucide glyphs, square like every other icon here.
     ("zap.svg", "airpods_charge", 20),
-    ("noise-control-off.svg", "airpods_noise_off", 32),
     ("noise-cancellation.svg", "airpods_anc", 32),
     ("transparency.svg", "airpods_transparency", 32),
     ("adaptive.svg", "airpods_adaptive", 32),
@@ -399,8 +385,9 @@ COLOR_ICONS = [
     ("hifi-quality.svg", "quality_hifi", 26),
     ("dsd-quality.svg", "quality_dsd", 26),
 
-    # The three pages where the player stops being a player.
-    ("dac-icon-page.png", "dac_page", 200),
+    # The two pages where the player stops being a player. The DAC page has no
+    # mark at all on the V1 (dacpage.c says why), so it has none here: the 200 px
+    # illustration would be 160 KB of bitmap nothing can draw.
     ("sonixlink-icon-page.png", "sonixlink_page", 200),
     ("bluetooth-receiver-icon-page.png", "bluetooth_receiver_page", 200),
 
@@ -432,7 +419,6 @@ COLOR_ICONS = [
     ("podcast.png", "menu_podcast", SECTION_ICON_SIZE),
     ("audiobooks.png", "menu_audiobooks", MAIN_MENU_ICON_SIZE),
     ("audiobook-library.png", "menu_audiobook_library", SECTION_ICON_SIZE),
-    ("audiobook-series.png", "menu_audiobook_series", SECTION_ICON_SIZE),
     ("audiobook-author.png", "menu_audiobook_author", SECTION_ICON_SIZE),
     ("audiobook-continue.png", "menu_audiobook_continue", SECTION_ICON_SIZE),
     ("settings.png", "menu_settings", MAIN_MENU_ICON_SIZE),
@@ -457,7 +443,13 @@ COLOR_ICONS = [
 
 
 def render(svg_path, size):
-    """SVG -> list of BGRA bytes, forced to white so recolouring works.
+    """SVG -> alpha-only (A8) bytes, recoloured by LVGL at draw time.
+
+    The RGB channels of a single-colour glyph are always the same white, so only
+    the alpha carries information. LVGL's A8 format is exactly that mask, and
+    `theme_style_icon` already asks for it to be drawn in the theme's ink -- a
+    quarter of the bytes of the old white ARGB8888 bitmaps, which is 3 MB out of
+    the image across the icon set.
 
     `size` is a side in pixels for the square glyphs, or an explicit
     (width, height) for the AirPods artwork, which is not square.
@@ -466,12 +458,7 @@ def render(svg_path, size):
     png = cairosvg.svg2png(url=svg_path, output_width=width, output_height=height)
     img = Image.open(io.BytesIO(png)).convert("RGBA")
 
-    raw = img.tobytes()  # RGBA, 4 bytes per pixel
-    out = bytearray()
-    for i in range(0, len(raw), 4):
-        # LVGL's ARGB8888 is stored blue, green, red, alpha in memory.
-        out += bytes((255, 255, 255, raw[i + 3]))
-    return bytes(out), img.width, img.height
+    return bytes(img.tobytes()[3::4]), img.width, img.height
 
 
 def render_color(path, size):
@@ -503,6 +490,12 @@ def c_array(data, per_line=12):
 def main():
     parts_c = []
     parts_h = []
+    aliases = []
+    # One bitmap per distinct drawing. Several names have always pointed at the
+    # same pixels (a music note is a music note wherever it is used); the first
+    # name owns the array and the rest become macros for it, so the same click
+    # is not weighed twice in the image.
+    seen = {}
 
     entries = [(f, n, s, False) for f, n, s in ICONS]
     entries += [(f, n, size, True) for f, n, size in COLOR_ICONS]
@@ -513,6 +506,13 @@ def main():
             sys.exit("missing icon: %s" % path)
 
         data, w, h = render_color(path, size) if keep_colour else render(path, size)
+        cf = "LV_COLOR_FORMAT_ARGB8888" if keep_colour else "LV_COLOR_FORMAT_A8"
+
+        key = (cf, w, h, data)
+        if key in seen:
+            aliases.append((name, seen[key]))
+            continue
+        seen[key] = name
 
         parts_c.append(
             "// %s, %dx%d\n"
@@ -520,7 +520,7 @@ def main():
             "const lv_image_dsc_t icon_%s = {\n"
             "\t.header = {\n"
             "\t\t.magic = LV_IMAGE_HEADER_MAGIC,\n"
-            "\t\t.cf = LV_COLOR_FORMAT_ARGB8888,\n"
+            "\t\t.cf = %s,\n"
             "\t\t.w = %d,\n"
             "\t\t.h = %d,\n"
             "\t\t.stride = %d,\n"
@@ -528,7 +528,7 @@ def main():
             "\t.data_size = sizeof(icon_%s_data),\n"
             "\t.data = icon_%s_data,\n"
             "};\n"
-            % (filename, w, h, name, c_array(data), name, w, h, w * 4, name, name)
+            % (filename, w, h, name, c_array(data), name, cf, w, h, w * (4 if keep_colour else 1), name, name)
         )
         parts_h.append("extern const lv_image_dsc_t icon_%s;" % name)
 
@@ -537,7 +537,9 @@ def main():
         " * GENERATED FILE -- do not edit by hand.\n"
         " * Produced from the SVGs in assets/icons by tools/svg_to_lvgl.py.\n"
         " *\n"
-        " * White ARGB8888 bitmaps: tint them with lv_obj_set_style_image_recolor().\n"
+        " * Single-colour glyphs are A8: tint them with\n"
+        " * lv_obj_set_style_image_recolor(). Tile artwork keeps its own colours\n"
+        " * as ARGB8888.\n"
         " */\n\n"
     )
 
@@ -551,7 +553,11 @@ def main():
         f.write("#ifndef ICONS_H\n#define ICONS_H\n\n")
         f.write('#include "lvgl/lvgl.h"\n\n')
         f.write("\n".join(parts_h))
-        f.write("\n\n#endif // ICONS_H\n")
+        if aliases:
+            f.write("\n\n// Names for a bitmap that is already above, so the glyph is stored once.\n")
+            for alias, canonical in aliases:
+                f.write("#define icon_%s icon_%s\n" % (alias, canonical))
+        f.write("\n#endif // ICONS_H\n")
 
     print("wrote %s and %s" % (OUT_C, OUT_H))
 

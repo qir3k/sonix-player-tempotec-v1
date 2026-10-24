@@ -2,7 +2,9 @@
  * GENERATED FILE -- do not edit by hand.
  * Produced from the SVGs in assets/icons by tools/svg_to_lvgl.py.
  *
- * White ARGB8888 bitmaps: tint them with lv_obj_set_style_image_recolor().
+ * Single-colour glyphs are A8: tint them with
+ * lv_obj_set_style_image_recolor(). Tile artwork keeps its own colours
+ * as ARGB8888.
  */
 
 #ifndef ICONS_H
@@ -60,8 +62,6 @@ extern const lv_image_dsc_t icon_power_off;
 extern const lv_image_dsc_t icon_reboot;
 extern const lv_image_dsc_t icon_music2;
 extern const lv_image_dsc_t icon_bird;
-extern const lv_image_dsc_t icon_tidal_mark;
-extern const lv_image_dsc_t icon_qobuz_mark;
 extern const lv_image_dsc_t icon_artist;
 extern const lv_image_dsc_t icon_podcast_list;
 extern const lv_image_dsc_t icon_artist_album;
@@ -81,10 +81,8 @@ extern const lv_image_dsc_t icon_circle_play;
 extern const lv_image_dsc_t icon_ellipsis_vertical;
 extern const lv_image_dsc_t icon_list_music;
 extern const lv_image_dsc_t icon_list_plus;
-extern const lv_image_dsc_t icon_star_plus;
 extern const lv_image_dsc_t icon_list_queue;
 extern const lv_image_dsc_t icon_list_x;
-extern const lv_image_dsc_t icon_star_x;
 extern const lv_image_dsc_t icon_search;
 extern const lv_image_dsc_t icon_podcast_downloaded;
 extern const lv_image_dsc_t icon_wifi;
@@ -125,7 +123,6 @@ extern const lv_image_dsc_t icon_sleep_audiobook_quick;
 extern const lv_image_dsc_t icon_sleep_podcast_quick;
 extern const lv_image_dsc_t icon_gapless_on_quick;
 extern const lv_image_dsc_t icon_gapless_off_quick;
-extern const lv_image_dsc_t icon_files_music;
 extern const lv_image_dsc_t icon_files_audiobook;
 extern const lv_image_dsc_t icon_files_playlist;
 extern const lv_image_dsc_t icon_playlist_overwrite_alert;
@@ -150,13 +147,8 @@ extern const lv_image_dsc_t icon_podcast_cover;
 extern const lv_image_dsc_t icon_shuffle;
 extern const lv_image_dsc_t icon_shuffle_repeat;
 extern const lv_image_dsc_t icon_arrow_down_up;
-extern const lv_image_dsc_t icon_star;
-extern const lv_image_dsc_t icon_star_filled;
 extern const lv_image_dsc_t icon_heart_outline;
 extern const lv_image_dsc_t icon_heart_filled;
-extern const lv_image_dsc_t icon_star_corner;
-extern const lv_image_dsc_t icon_radio_recent;
-extern const lv_image_dsc_t icon_radio_custom;
 extern const lv_image_dsc_t icon_radio_quality;
 extern const lv_image_dsc_t icon_refresh;
 extern const lv_image_dsc_t icon_prev_10;
@@ -165,15 +157,10 @@ extern const lv_image_dsc_t icon_prev_30;
 extern const lv_image_dsc_t icon_next_30;
 extern const lv_image_dsc_t icon_prev_60;
 extern const lv_image_dsc_t icon_next_60;
-extern const lv_image_dsc_t icon_chapter;
 extern const lv_image_dsc_t icon_podcast_episodes;
-extern const lv_image_dsc_t icon_play_speed;
 extern const lv_image_dsc_t icon_zap;
 extern const lv_image_dsc_t icon_zap_off;
-extern const lv_image_dsc_t icon_qobuz_quality;
 extern const lv_image_dsc_t icon_log_out;
-extern const lv_image_dsc_t icon_swap_remap;
-extern const lv_image_dsc_t icon_save_state;
 extern const lv_image_dsc_t icon_load_state;
 extern const lv_image_dsc_t icon_loader_small;
 extern const lv_image_dsc_t icon_loader_big;
@@ -197,9 +184,7 @@ extern const lv_image_dsc_t icon_airpods_gen4_case;
 extern const lv_image_dsc_t icon_airpods_pro_case;
 extern const lv_image_dsc_t icon_airpods_max_big;
 extern const lv_image_dsc_t icon_airpods_charge;
-extern const lv_image_dsc_t icon_airpods_noise_off;
 extern const lv_image_dsc_t icon_airpods_anc;
-extern const lv_image_dsc_t icon_airpods_transparency;
 extern const lv_image_dsc_t icon_airpods_adaptive;
 extern const lv_image_dsc_t icon_ebook_chapter;
 extern const lv_image_dsc_t icon_ebook_font;
@@ -216,13 +201,10 @@ extern const lv_image_dsc_t icon_pencil;
 extern const lv_image_dsc_t icon_calculator;
 extern const lv_image_dsc_t icon_notes;
 extern const lv_image_dsc_t icon_enter;
-extern const lv_image_dsc_t icon_year;
-extern const lv_image_dsc_t icon_most_played;
 extern const lv_image_dsc_t icon_quality_lossy;
 extern const lv_image_dsc_t icon_quality_cd;
 extern const lv_image_dsc_t icon_quality_hifi;
 extern const lv_image_dsc_t icon_quality_dsd;
-extern const lv_image_dsc_t icon_dac_page;
 extern const lv_image_dsc_t icon_sonixlink_page;
 extern const lv_image_dsc_t icon_bluetooth_receiver_page;
 extern const lv_image_dsc_t icon_menu_music;
@@ -233,8 +215,6 @@ extern const lv_image_dsc_t icon_menu_album_artist;
 extern const lv_image_dsc_t icon_menu_genre;
 extern const lv_image_dsc_t icon_menu_explorer;
 extern const lv_image_dsc_t icon_menu_playlist;
-extern const lv_image_dsc_t icon_menu_year;
-extern const lv_image_dsc_t icon_menu_most_played;
 extern const lv_image_dsc_t icon_menu_streaming;
 extern const lv_image_dsc_t icon_menu_wireless;
 extern const lv_image_dsc_t icon_menu_wifi_settings;
@@ -249,7 +229,6 @@ extern const lv_image_dsc_t icon_menu_radio;
 extern const lv_image_dsc_t icon_menu_podcast;
 extern const lv_image_dsc_t icon_menu_audiobooks;
 extern const lv_image_dsc_t icon_menu_audiobook_library;
-extern const lv_image_dsc_t icon_menu_audiobook_series;
 extern const lv_image_dsc_t icon_menu_audiobook_author;
 extern const lv_image_dsc_t icon_menu_audiobook_continue;
 extern const lv_image_dsc_t icon_menu_settings;
@@ -264,5 +243,16 @@ extern const lv_image_dsc_t icon_menu_notes;
 extern const lv_image_dsc_t icon_qobuz_badge;
 extern const lv_image_dsc_t icon_tidal_badge;
 extern const lv_image_dsc_t icon_podcast_badge;
+extern const lv_image_dsc_t icon_tidal_mark;
+extern const lv_image_dsc_t icon_qobuz_mark;
+extern const lv_image_dsc_t icon_year;
+extern const lv_image_dsc_t icon_most_played;
+extern const lv_image_dsc_t icon_menu_year;
+extern const lv_image_dsc_t icon_menu_most_played;
+
+// Names for a bitmap that is already above, so the glyph is stored once.
+#define icon_files_music icon_music2
+#define icon_save_state icon_import
+#define icon_airpods_transparency icon_now_playing
 
 #endif // ICONS_H
