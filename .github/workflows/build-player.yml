@@ -9,9 +9,11 @@ on:
       - sonix-player/lv_conf.h
       - sonix-player/src/**
       - sonix-player/tests/**
+  # The host build and the headless suites are the fast check on a working
+  # branch, not on the branches that hold a tree: those build the firmware
+  # image instead (build-tempotec-v1.yml), which is what is flashed.
   push:
     branches:
-      - main
       - arena/**
     paths:
       - .github/workflows/build-player.yml
@@ -65,3 +67,6 @@ jobs:
 
       - name: Run Subsonic and stream-bridge tests
         run: make -C sonix-player/tests test
+
+      - name: Run stock-firmware credential extractor tests
+        run: make -C sonix-player/tests extractkeys

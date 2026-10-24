@@ -50,6 +50,12 @@ on:
   push:
     branches:
       - main
+      # This fork's own branches. The firmware image is the only way to try a
+      # layout change on the device, so the three branches that hold real trees
+      # build it; the release steps below are gated to personal and to tags,
+      # so a push here only makes an artifact.
+      - dev
+      - personal
       - arena/**
       # This fork's trimmed personal build. It is its own branch so that main
       # keeps the complete asset tree for upstream.

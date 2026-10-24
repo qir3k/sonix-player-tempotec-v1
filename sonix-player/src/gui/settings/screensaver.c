@@ -48,7 +48,16 @@ static int strip_h;
 // is built to order rather than borrowed, so there is nothing to measure. The
 // two V1 palettes use this same stable height for the metadata field they lay
 // over the sleeve rather than under it.
-#define DEFAULT_STRIP_H bp_pick(120, 220)
+//
+// 126 rather than 120: the words wanted to sit six pixels higher, and this is
+// the block they are laid out in. The strip is pinned to the foot of the
+// panel and its lines are packed from its top, so a taller strip is a higher
+// top edge with the foot where it was -- the field still reaches the bottom,
+// with nothing to show through under it -- and the title, the artist and the
+// clock come up together with the gaps between them untouched. The cost is
+// six pixels of the framed sleeve above (which is sized from this height, see
+// FRAME_MARGIN_VERT) and six of the artwork's own box under the same rule.
+#define DEFAULT_STRIP_H bp_pick(126, 220)
 
 // How much of the sleeve still shows through that field, per palette. Amber's
 // cream and amber type is bright enough to read through half; Tokyo Night's
@@ -92,9 +101,10 @@ static int strip_h;
 // either side, and above and below itself inside the area over the strip; its
 // side is the largest square both allow. That is worked out once, from the
 // panel and the strip's default height, so it is the same at every wake and
-// one decode serves every frame drawn from it: 160 px on the V1, with 40 px
-// either side and 14 above and below -- the size the player draws its own
-// sleeve at, near enough -- and 400 px on the 480-wide panels.
+// one decode serves every frame drawn from it: 166 px on the V1, 37 px
+// either side and 14 above and below -- a little larger than the 156 px sleeve
+// the player draws its own at, which is near enough -- and 400 px on the
+// 480-wide panels.
 #define FRAME_MARGIN_SIDE bp_pick(16, 40)
 #define FRAME_MARGIN_VERT bp_pick(14, 32)
 // The player's own sleeve radius: framed, the artwork is recognisably the

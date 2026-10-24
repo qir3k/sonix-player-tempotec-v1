@@ -48,6 +48,15 @@
 // installs it should be able to turn streaming on without building a firmware.
 // Copy one file to the card and restart.
 //
+// A private build does not have to hand-write the Qobuz pair at all: it sits
+// as plain strings inside the stock hiby_player, and
+// tools/extract_streamkeys.py (wired into the packer on
+// SONIX_EMBED_STOCK_KEYS=1) pulls it out of the official firmware while that
+// binary is unpacked and writes the file above. That keeps the credentials out
+// of git while giving a personal image the same out-of-the-box Qobuz login the
+// stock firmware has. See docs/qobuz-stock-firmware.md; such an image is not
+// for redistribution.
+//
 // Without any of them, or without a section, the matching service disables
 // itself and its menu entry says so instead of failing halfway through a login.
 //

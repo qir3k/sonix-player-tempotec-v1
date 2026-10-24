@@ -79,6 +79,21 @@ names, bar, clocks, transport -- from the line heights of the fonts in force
 never lifted into the queue-position row above it. The full panel stays the
 swipe and lyrics-gesture hit target.
 
+Album Art Max's measuring was reaching the deck. `aam_strip_fit()` shares the
+strip's row between the two names and the queue position, and it is called
+from every track change and every change of place in the queue, whatever
+arrangement is up. The deck's first row is not the strip: on the V1 that
+column is a hundred and twenty-three pixels wide once the star and the format
+line have theirs, and the strip's room is a hundred and seventy-nine. Written
+onto the deck's labels the shares became a cap, and a long pair was held to
+ninety-nine and eighty of the hundred and twenty-three it had -- "For Detroit
+(14KT Remix)" cut at seventeen letters and "Conway The Machine" at fourteen,
+neither of them at the panel's edge but well short of it. The function now
+returns unless Album Art Max is the arrangement in force, which is the only
+one whose labels it is measuring for, and the deck's names keep the whole
+column the layout gave them. `aam_take_back()` still hands the widths back on
+the way out.
+
 The fourth arrangement, **Immersive**, is the sleeve at the bezel: the cover
 panel, the clipped frame and the picture all take the size of the screen, the
 corners square off, and the deck is emptied of its own fill so what stands
@@ -434,6 +449,23 @@ for the V1, and `headphone_jack_state_raw()` on such a model treats `1` as no
 plug and any other value as a 3.5 mm headset (never balanced: that route has
 not been exercised on this board), logging the raw value to stderr whenever it
 changes so the 4.4 mm socket's encoding can be read off a real plug later.
+
+Which is also why pulling the cable out does not stop the music, and cannot be
+made to. `player_output_unplugged()` -- the pause the page performs when the
+output it was playing to disappears -- is wired to the two things that can
+report a disappearance: the USB-C DAC, watched by the status bar's poll, and
+the Bluetooth headphones, whose link the radio layer sees drop. The two sockets
+cannot join them: the node above reads `1` with both sockets empty *and* with a
+plug in either of them (measured on the board), so the change that poll waits
+for never arrives -- and `lineout_check_jack()` has the same hole and says so in
+as many words. It is the socket wiring, not a missing check: there is no signal
+to read, and polling harder does not find one. **Auto power-off** is not the
+answer either, by design, since it only acts when nothing is playing -- the one
+case that is not draining the battery. What a forgotten player is answered by is
+the **sleep timer** (`Music > Sleep timer`, and its own under audiobooks and
+podcasts): it pauses when its stretch is up, counts only while something is
+playing, and keeps its setting between sessions.
+
 ### The white flash on wake, and what it actually was
 
 The panel is an SLCD: its glass shows the contents of its own memory, and a
