@@ -13,6 +13,7 @@ make -C sonix-player/tests tagdate
 make -C sonix-player/tests mostplayed
 make -C sonix-player/tests aamlayout
 make -C sonix-player/tests podcastplayed
+make -C sonix-player/tests extractkeys
 ```
 
 These require only a C compiler, Make and Python 3 (plus standard pthread/dl/math libraries). They **do not require LVGL, ALSA, a MIPS toolchain, a music server, a real account, or downloaded audio**.

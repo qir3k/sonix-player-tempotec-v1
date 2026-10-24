@@ -65,3 +65,6 @@ jobs:
 
       - name: Run Subsonic and stream-bridge tests
         run: make -C sonix-player/tests test
+
+      - name: Run stock-firmware credential extractor tests
+        run: make -C sonix-player/tests extractkeys

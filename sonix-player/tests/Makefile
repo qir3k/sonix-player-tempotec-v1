@@ -19,10 +19,15 @@ CORE = $(ROOT)/src/system/streaming/subsonic.c \
        $(ROOT)/src/system/core/json.c $(ROOT)/src/system/core/md5.c \
        $(ROOT)/src/system/core/config.c $(ROOT)/src/system/playback/playlist.c
 
-.PHONY: test sanitize clean
+.PHONY: test sanitize clean extractkeys
 
 test: $(BUILD)/test_subsonic
 	python3 run_subsonic_tests.py $(BUILD)/test_subsonic
+
+# The stock-firmware credential extractor and its ini/seal round-trips. Plain
+# Python, no compiler: the fixtures reproduce hiby_player's string layout.
+extractkeys:
+	python3 test_extract_streamkeys.py
 
 $(BUILD)/test_subsonic: test_subsonic.c support.c $(CORE) $(shell find $(ROOT)/src/system -name '*.h')
 	@mkdir -p $(BUILD)

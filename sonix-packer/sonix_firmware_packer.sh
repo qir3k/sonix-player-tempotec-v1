@@ -25,6 +25,12 @@
 # and init files stay as the vendor shipped them.
 #
 # No questions asked: run it and it does the lot.
+#
+# One opt-in: SONIX_EMBED_STOCK_KEYS=1 pulls the Qobuz application credentials
+# out of the stock hiby_player while it is still unpacked, and ships them so
+# Qobuz works without a streaming-keys.ini on the card. It is off by default:
+# those are HiBy's credentials, not this project's, and an image built with it
+# must not be redistributed. See docs/qobuz-stock-firmware.md.
 
 set -euo pipefail
 export COLUMNS=1
@@ -270,6 +276,64 @@ build_one() {
 	say ""
 
 	# ==========================================================================
+	# 1b. The stock player's own Qobuz credentials (opt in)
+	# ==========================================================================
+	#
+	# Qobuz issues no application credentials for personal or open-source
+	# clients, and the pair this device uses is HiBy's: plain C strings inside
+	# usr/bin/hiby_player. They are not in git and a published image must not
+	# carry them, so this only runs on SONIX_EMBED_STOCK_KEYS=1. The extractor
+	# reads the binary while it is still unpacked -- step 2 removes it -- and
+	# the result lands where the player looks at startup, which makes a private
+	# image behave like the stock firmware: sign in with a Qobuz account and
+	# nothing to copy to the card. Values are masked in the output.
+	#
+	# A sealing key (streaming-keys.key, from a player build) gives a sealed
+	# streaming-keys.bin; without one a plain streaming-keys.ini is shipped,
+	# which a keyless build reads anyway. Either way an image made here carries
+	# a third party's API credentials and must not be redistributed.
+	EMBEDDED_PLAIN_KEYS=0
+	if [ "${SONIX_EMBED_STOCK_KEYS:-}" = "1" ]; then
+		step "[$MODEL_NAME] extracting the stock Qobuz credentials"
+		command -v python3 >/dev/null 2>&1 || die "SONIX_EMBED_STOCK_KEYS=1 needs python3."
+		EXTRACT_TOOL="$SCRIPT_DIR/../sonix-player/tools/extract_streamkeys.py"
+		[ -f "$EXTRACT_TOOL" ] || die "cannot find $EXTRACT_TOOL"
+		[ -f "$SQUASH_DIR/$STOCK_PLAYER" ] ||
+			die "no $STOCK_PLAYER in the stock rootfs: nothing to extract from."
+
+		EXTRACTED_INI="$WORK_DIR/streaming-keys.ini"
+		COMPONENTS_DIR="$SQUASH_DIR/usr/resource/sonix/components"
+		SEAL_KEY=""
+		for candidate in "${STREAMKEYS_KEY:-}" "$SCRIPT_DIR/streaming-keys.key" \
+		                 "$SCRIPT_DIR/../sonix-player/streaming-keys.key"; do
+			if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+				SEAL_KEY="$candidate"
+				break
+			fi
+		done
+
+		if [ -n "$SEAL_KEY" ]; then
+			if python3 "$EXTRACT_TOOL" "$SQUASH_DIR/$STOCK_PLAYER" -o "$EXTRACTED_INI" \
+				--seal --key "$SEAL_KEY" \
+				--bin-out "$COMPONENTS_DIR/streaming-keys.bin"; then
+				say "    streaming-keys.bin sealed from the stock binary"
+			else
+				warn "the stock credentials could not be extracted: Qobuz stays off"
+				warn "run the extractor with --list-candidates, or use a card-side streaming-keys.ini"
+			fi
+		elif python3 "$EXTRACT_TOOL" "$SQUASH_DIR/$STOCK_PLAYER" -o "$EXTRACTED_INI"; then
+			cp -f "$EXTRACTED_INI" "$COMPONENTS_DIR/streaming-keys.ini"
+			EMBEDDED_PLAIN_KEYS=1
+			warn "no streaming-keys.key found: Qobuz credentials ship in the clear as streaming-keys.ini"
+			warn "this image now carries HiBy's API credentials -- do not redistribute it"
+		else
+			warn "the stock credentials could not be extracted: Qobuz stays off"
+			warn "run the extractor with --list-candidates, or use a card-side streaming-keys.ini"
+		fi
+		say ""
+	fi
+
+	# ==========================================================================
 	# 2. The binary
 	# ==========================================================================
 	step "[$MODEL_NAME] installing sonix_player"
@@ -327,13 +391,21 @@ build_one() {
 
 	# The streaming keys go in sealed, as streaming-keys.bin. One left in the
 	# clear in the assets is not shipped: an image is unpacked by anyone who
-	# downloads it. See tools/seal_streamkeys.py in sonix-player.
+	# downloads it. See tools/seal_streamkeys.py in sonix-player. The one
+	# exception is the ini step 1b generates locally from the stock binary on
+	# SONIX_EMBED_STOCK_KEYS=1: it never comes from the assets tree and the
+	# builder already got the redistribution warning.
 	PLAIN_KEYS="usr/resource/sonix/components/streaming-keys.ini"
 	if [ -f "$SQUASH_DIR/$PLAIN_KEYS" ]; then
-		rm -f "$SQUASH_DIR/$PLAIN_KEYS"
-		warn "$MODEL_DIR/$PLAIN_KEYS is in the clear and was left out; seal it with tools/seal_streamkeys.py"
+		if [ "$EMBEDDED_PLAIN_KEYS" = "1" ]; then
+			warn "$PLAIN_KEYS was generated from the stock firmware and is intentionally in the clear"
+		else
+			rm -f "$SQUASH_DIR/$PLAIN_KEYS"
+			warn "$MODEL_DIR/$PLAIN_KEYS is in the clear and was left out; seal it with tools/seal_streamkeys.py"
+		fi
 	fi
-	if [ ! -f "$SQUASH_DIR/usr/resource/sonix/components/streaming-keys.bin" ]; then
+	if [ ! -f "$SQUASH_DIR/usr/resource/sonix/components/streaming-keys.bin" ] &&
+	   [ "$EMBEDDED_PLAIN_KEYS" != "1" ]; then
 		warn "no streaming-keys.bin in $MODEL_DIR: Tidal, Qobuz, podcasts and Last.fm stay off"
 		warn "whoever installs it can still turn them on: streaming-keys.ini at the card's root is read at boot"
 	fi
