@@ -3434,6 +3434,25 @@ static void aam_strip_fit(void) {
 	if (!aam_strip) {
 		return;
 	}
+	// Only while the strip is the row those names are in.
+	//
+	// This is reached from every track change and from every change of place
+	// in the queue, whatever arrangement is up -- and the shares it works out
+	// are measured for Album Art Max's own row, which is the full width of the
+	// panel. Written onto the deck's two labels they are a cap, not a share:
+	// on the V1 the deck's column is a hundred and twenty-three pixels and the
+	// strip's room is a hundred and seventy-nine, so "For Detroit (14KT Remix)"
+	// and "Conway The Machine" were held to ninety-nine and eighty of the
+	// hundred and twenty-three they had -- the artist losing a third of its
+	// width to an arrangement nobody was looking at. With only the strip's own
+	// labels being written, the deck's names keep the column the layout gave
+	// them, and their scrolling starts where the panel really ends.
+	//
+	// aam_take_back() hands the widths back on the way out, so nothing of the
+	// strip's measuring is left behind for the next arrangement either.
+	if (!layout_aam_now) {
+		return;
+	}
 	int screen_w = (int)lv_obj_get_width(aam_strip);
 	if (screen_w <= 0 && player_screen) {
 		screen_w = (int)lv_obj_get_width(player_screen);
