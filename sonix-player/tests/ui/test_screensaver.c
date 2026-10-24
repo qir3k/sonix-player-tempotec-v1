@@ -308,7 +308,7 @@ void coverloader_release_screensaver(void) {}
 
 static int screen_w, screen_h;
 static int strip_h;	   // DEFAULT_STRIP_H
-static int frame_side; // what the margins leave: 160 on the V1
+static int frame_side; // what the margins leave: 166 on the V1
 static int radius;	   // the player's sleeve radius
 
 static lv_obj_t *saver_obj(void) {
@@ -735,15 +735,15 @@ int main(int argc, char **argv) {
 
 	screen_w = bp_screen_w();
 	screen_h = bp_screen_h();
-	strip_h = bp_pick(120, 220);
+	strip_h = bp_pick(126, 220);
 	radius = bp_pick(14, 18);
 	int side_w = screen_w - 2 * bp_pick(16, 40);
 	int side_h = screen_h - strip_h - 2 * bp_pick(14, 32);
 	frame_side = (side_w < side_h ? side_w : side_h) & ~1;
 	if (bp_is_tempotec_v1()) {
-		// The V1: about the size the player draws its own sleeve, with 40 px
+		// The V1: about the size the player draws its own sleeve, with 37 px
 		// either side and 14 above and below.
-		assert(screen_w == 240 && screen_h == 320 && frame_side == 172);
+		assert(screen_w == 240 && screen_h == 320 && frame_side == 166);
 	} else {
 		assert(frame_side == 400);
 	}
@@ -830,11 +830,11 @@ int main(int argc, char **argv) {
 	check_one_to_one(held);
 	check_page();
 	if (bp_is_tempotec_v1()) {
-		// The numbers the panel actually shows: 40 px either side, 14 above
-		// and below, the strip's 132 px under it.
+		// The numbers the panel actually shows: 37 px either side, 14 above
+		// and below, the strip's 126 px under it.
 		lv_area_t f;
 		lv_obj_get_coords(frame(), &f);
-		assert(f.x1 == 34 && f.y1 == 14 && f.x2 == 205 && f.y2 == 185);
+		assert(f.x1 == 37 && f.y1 == 14 && f.x2 == 202 && f.y2 == 179);
 	}
 
 	// Every theme: same frame, same pixels, the page each one asks for -- and
