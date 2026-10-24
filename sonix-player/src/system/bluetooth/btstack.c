@@ -826,7 +826,15 @@ void btstack_set_change_cb(void (*cb)(void)) {
 // properties
 // ---------------------------------------------------------------------------
 
-static bool set_bool_property(const char *path, const char *interface, const char *name, bool value) {
+// A property on the adapter is not answered when bluez takes the request but
+// when the mgmt command behind it completes, and the kernel runs those one at a
+// time: a bonding attempt in progress holds the queue for up to two minutes.
+// The full call deadline would spend all eight seconds waiting for an answer
+// that is not coming yet, so the writes that are worth retrying use this one.
+#define PROPERTY_SET_MS 3000
+
+static bool set_bool_property_ms(const char *path, const char *interface, const char *name, bool value, int timeout_ms,
+								 bool complain) {
 	pthread_mutex_lock(&lock);
 	dbus_conn_t *c = conn;
 	pthread_mutex_unlock(&lock);
@@ -838,15 +846,29 @@ static bool set_bool_property(const char *path, const char *interface, const cha
 	dbus_w_string(w, name);
 	dbus_w_variant_bool(w, value);
 	char err[DBUS_NAME_MAX];
-	bool ok = dbus_call_send(c, CALL_MS, err, sizeof(err));
-	if (!ok) {
+	bool ok = dbus_call_send(c, timeout_ms, err, sizeof(err));
+	if (!ok && complain) {
 		fprintf(stderr, "btstack: %s = %s refused: %s\n", name, value ? "true" : "false",
 				err[0] ? err : "no reply");
 	}
 	return ok;
 }
 
-static bool set_u32_property(const char *path, const char *interface, const char *name, uint32_t value) {
+static bool set_bool_property(const char *path, const char *interface, const char *name, bool value) {
+	return set_bool_property_ms(path, interface, name, value, CALL_MS, true);
+}
+
+// Whether there is a connection to ask anything on. Only used to word a
+// failure: "no reply" from a call nobody sent would be a lie.
+static bool have_conn(void) {
+	pthread_mutex_lock(&lock);
+	bool open = conn != NULL;
+	pthread_mutex_unlock(&lock);
+	return open;
+}
+
+static bool set_u32_property_ms(const char *path, const char *interface, const char *name, uint32_t value, int timeout_ms,
+								bool complain) {
 	pthread_mutex_lock(&lock);
 	dbus_conn_t *c = conn;
 	pthread_mutex_unlock(&lock);
@@ -858,11 +880,15 @@ static bool set_u32_property(const char *path, const char *interface, const char
 	dbus_w_string(w, name);
 	dbus_w_variant_u32(w, value);
 	char err[DBUS_NAME_MAX];
-	bool ok = dbus_call_send(c, CALL_MS, err, sizeof(err));
-	if (!ok) {
+	bool ok = dbus_call_send(c, timeout_ms, err, sizeof(err));
+	if (!ok && complain) {
 		fprintf(stderr, "btstack: %s = %u refused: %s\n", name, value, err[0] ? err : "no reply");
 	}
 	return ok;
+}
+
+static bool set_u32_property(const char *path, const char *interface, const char *name, uint32_t value) {
+	return set_u32_property_ms(path, interface, name, value, CALL_MS, true);
 }
 
 static bool get_bool_property(const char *path, const char *interface, const char *name, bool *out) {
@@ -914,15 +940,45 @@ bool btstack_get_powered(bool *out) {
 	return get_bool_property(BLUEZ_ADAPTER_PATH, BLUEZ_ADAPTER_IFACE, "Powered", out);
 }
 
+// Visibility is the one property with a deadline of its own. It is set when the
+// Bluetooth list opens and cleared when it closes, and either can land while
+// bluez is busy pairing -- the log has "Discoverable = false refused: no reply"
+// eight seconds after the request, on an adapter left visible. Two short tries
+// cost less than one long one and survive that: the first can time out with the
+// request still queued, and the second goes out after it has been answered.
 bool btstack_set_discoverable(bool on) {
-	return set_bool_property(BLUEZ_ADAPTER_PATH, BLUEZ_ADAPTER_IFACE, "Discoverable", on);
+	if (set_bool_property_ms(BLUEZ_ADAPTER_PATH, BLUEZ_ADAPTER_IFACE, "Discoverable", on, PROPERTY_SET_MS, false)) {
+		return true;
+	}
+	sleep_ms(200);
+	if (set_bool_property_ms(BLUEZ_ADAPTER_PATH, BLUEZ_ADAPTER_IFACE, "Discoverable", on, PROPERTY_SET_MS, false)) {
+		return true;
+	}
+	if (have_conn()) {
+		fprintf(stderr, "btstack: Discoverable = %s refused: no reply, twice\n", on ? "true" : "false");
+	}
+	return false;
 }
 
 // Seconds, and 0 means "until told otherwise". bluez defaults to 180 and turns
 // visibility off by itself when they run out, which from the outside looks like
 // the player disappearing in the middle of a search.
 bool btstack_set_discoverable_timeout(unsigned seconds) {
-	return set_u32_property(BLUEZ_ADAPTER_PATH, BLUEZ_ADAPTER_IFACE, "DiscoverableTimeout", seconds);
+	// The same queue as Discoverable, in the same bring-up: retried once for
+	// the same reason. A timeout left at bluez's default 180 turns the player
+	// invisible three minutes into a search, which reads as the player
+	// vanishing rather than as a write that did not land.
+	if (set_u32_property_ms(BLUEZ_ADAPTER_PATH, BLUEZ_ADAPTER_IFACE, "DiscoverableTimeout", seconds, PROPERTY_SET_MS,
+							false)) {
+		return true;
+	}
+	sleep_ms(200);
+	bool ok = set_u32_property_ms(BLUEZ_ADAPTER_PATH, BLUEZ_ADAPTER_IFACE, "DiscoverableTimeout", seconds, PROPERTY_SET_MS,
+								  false);
+	if (!ok && have_conn()) {
+		fprintf(stderr, "btstack: DiscoverableTimeout = %u refused: no reply, twice\n", seconds);
+	}
+	return ok;
 }
 
 bool btstack_set_pairable(bool on) {
@@ -959,8 +1015,14 @@ bool btstack_discovery(bool on) {
 	// Already discovering, or already stopped. Both mean the caller has what it
 	// asked for, and treating them as failures is how a scan button that works
 	// reports an error.
-	if (strstr(err, "InProgress") || strstr(err, "NotAuthorized") || strstr(err, "Failed")) {
-		fprintf(stderr, "btstack: discovery %s: %s (already in the wanted state)\n", on ? "on" : "off", err);
+	// NotReady counts for stopping only: stopping a discovery on an adapter
+	// that is already down is what was asked for, while starting one on an
+	// adapter that is not up yet is exactly the failure the caller has to retry.
+	if (strstr(err, "InProgress") || strstr(err, "NotAuthorized") || strstr(err, "Failed") ||
+		(!on && strstr(err, "NotReady"))) {
+		// Not an error, and not worth the alarming channel: the log had this
+		// line at every scan stop on a healthy device.
+		printf("btstack: discovery %s: %s (already in the wanted state)\n", on ? "on" : "off", err);
 		return true;
 	}
 	fprintf(stderr, "btstack: discovery %s -> %s\n", on ? "on" : "off", err[0] ? err : "no reply");
@@ -1074,6 +1136,44 @@ bool btstack_device_connected(const char *address, bool *out) {
 
 bool btstack_pair(const char *address, int timeout_ms) { return device_call(address, "Pair", timeout_ms); }
 
+// The same, with bluez's answer when there is one. An empty `err_out` after a
+// failure means no answer came at all -- the call deadline ran out with the
+// pairing still going on, which is the case that has to be cancelled.
+bool btstack_pair_why(const char *address, int timeout_ms, char *err_out, size_t err_size) {
+	return device_call_why(address, "Pair", timeout_ms, err_out, err_size);
+}
+
+// Device1.CancelPairing. Pair answers when the bonding has finished, and bluez
+// gives its own attempt two minutes; abandoning the call at forty seconds leaves
+// that attempt running, and the adapter answers nothing that needs a mgmt
+// command until it is over. The log shows exactly that: "Pair -> no reply" at
+// 23:02:46, "Discoverable = false refused: no reply" at 23:03:04, and bluez's
+// own "bonding_attempt_complete ... status 0x10" only at 23:04:06.
+bool btstack_cancel_pairing(const char *address) {
+	char path[OBJECT_PATH_MAX];
+	if (!device_path(address, path, sizeof(path))) {
+		return false;
+	}
+	pthread_mutex_lock(&lock);
+	dbus_conn_t *c = conn;
+	pthread_mutex_unlock(&lock);
+	if (!c) {
+		return false;
+	}
+	// Silent on failure, unlike device_call(): "there is nothing to cancel" is
+	// the state this is asking for, and bluez says so with an error.
+	dbus_call_begin(c, BLUEZ_SERVICE, path, BLUEZ_DEVICE_IFACE, "CancelPairing", "");
+	char err[DBUS_NAME_MAX];
+	if (dbus_call_send(c, CALL_MS, err, sizeof(err))) {
+		return true;
+	}
+	if (strstr(err, "DoesNotExist") == NULL && strstr(err, "Failed") == NULL &&
+		strstr(err, "InProgress") == NULL) {
+		fprintf(stderr, "btstack: CancelPairing on %s -> %s\n", address, err[0] ? err : "no reply");
+	}
+	return false;
+}
+
 bool btstack_connect(const char *address, int timeout_ms, char *err_out, size_t err_size) {
 	return device_call_why(address, "Connect", timeout_ms, err_out, err_size);
 }
@@ -1101,7 +1201,10 @@ bool btstack_connect_a2dp(const char *address, int timeout_ms) {
 	return ok;
 }
 
-bool btstack_connect_a2dp_source(const char *address, int timeout_ms) {
+bool btstack_connect_a2dp_source_why(const char *address, int timeout_ms, char *err_out, size_t err_size) {
+	if (err_out && err_size) {
+		err_out[0] = '\0';
+	}
 	char path[OBJECT_PATH_MAX];
 	if (!device_path(address, path, sizeof(path))) {
 		return false;
@@ -1118,8 +1221,15 @@ bool btstack_connect_a2dp_source(const char *address, int timeout_ms) {
 	bool ok = dbus_call_send(c, timeout_ms, err, sizeof(err));
 	if (!ok) {
 		fprintf(stderr, "btstack: ConnectProfile(A2DP source) on %s -> %s\n", address, err[0] ? err : "no reply");
+		if (err_out && err_size) {
+			snprintf(err_out, err_size, "%s", err);
+		}
 	}
 	return ok;
+}
+
+bool btstack_connect_a2dp_source(const char *address, int timeout_ms) {
+	return btstack_connect_a2dp_source_why(address, timeout_ms, NULL, 0);
 }
 
 bool btstack_trust(const char *address, bool on) {
@@ -1213,6 +1323,23 @@ void btstack_refresh_audio(void) {
 	pthread_mutex_unlock(&lock);
 }
 
+// Whether bluealsa has published a PCM object for this device in this
+// direction. The path below is built from the address, so it is well formed for
+// a device that has no stream at all -- and bluealsa then answers "No such
+// interface org.bluealsa.PCM1", which the log carried as a GetCodecs error for
+// a phone that had simply stopped sending.
+static bool pcm_published(const char *address, bool receiving) {
+	bool found = false;
+	pthread_mutex_lock(&lock);
+	int count = receiving ? rx_count : pcm_count;
+	const char (*list)[BT_ADDR_MAX] = receiving ? rx_addr : pcm_addr;
+	for (int i = 0; i < count && !found; i++) {
+		found = strcasecmp(list[i], address) == 0;
+	}
+	pthread_mutex_unlock(&lock);
+	return found;
+}
+
 int btstack_codecs_dir(const char *address, bool receiving, char out[][BT_CODEC_NAME_MAX], int max, char *selected,
 					   size_t selected_size) {
 	if (selected && selected_size) {
@@ -1225,6 +1352,17 @@ int btstack_codecs_dir(const char *address, bool receiving, char out[][BT_CODEC_
 	char path[OBJECT_PATH_MAX];
 	if (!c || !pcm_path_dir(address, receiving, path, sizeof(path))) {
 		return 0;
+	}
+
+	// Nothing to ask: the answer would be "no such object" every time. The
+	// cache is refreshed first, in case this is a stream that has just come up.
+	if (!pcm_published(address, receiving)) {
+		btstack_refresh_audio();
+		if (!pcm_published(address, receiving)) {
+			printf("btstack: no %s PCM for %s yet; nothing to ask about its codecs\n", receiving ? "receiving" : "sending",
+				   address);
+			return 0;
+		}
 	}
 
 	// What it is playing with now is a property; what it could play with is a
@@ -1251,7 +1389,9 @@ int btstack_codecs_dir(const char *address, bool receiving, char out[][BT_CODEC_
 	dbus_call_begin(c, BALSA_SERVICE, path, BALSA_PCM_IFACE, "GetCodecs", "");
 	char err[DBUS_NAME_MAX];
 	if (!dbus_call_send(c, CALL_MS, err, sizeof(err))) {
-		fprintf(stderr, "btstack: GetCodecs on %s -> %s\n", address, err[0] ? err : "no reply");
+		// The PCM was in the list a moment ago and is gone now: the stream
+		// ended between the two calls, which is ordinary, not a fault.
+		printf("btstack: GetCodecs on %s -> %s\n", address, err[0] ? err : "no reply");
 		return 0;
 	}
 

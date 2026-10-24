@@ -5,11 +5,15 @@
 
 // The sleep timers: the player stops by itself after a while.
 //
-// Three of them, one per kind of listening, because the answer is not the same
-// for all three. Half an hour is a reasonable way to fall asleep to music and a
-// poor way to fall asleep to a book, and somebody who sets one for podcasts at
+// Four of them, one per kind of listening, because the answer is not the same
+// for all of them. Half an hour is a reasonable way to fall asleep to music and
+// a poor way to fall asleep to a book, and somebody who sets one for podcasts at
 // bedtime does not want it counting down over an album the next morning. Each
 // keeps its own switch and its own length, in its own corner of the config.
+//
+// Radio is the fourth. It has no pause -- stopping a station is a disconnection
+// -- so the timer stops it rather than pausing it, which is what somebody
+// falling asleep to a station wants anyway.
 //
 // One rule decides when any of them counts. The countdown starts fresh at every
 // transition into playing and runs only while something of that kind is
@@ -20,9 +24,9 @@
 // timer that had stopped doing its job.
 //
 // Which kind is playing is not this file's business to work out: the player
-// knows, and tells it. Radio, the Game Boy and the Bluetooth receiver are none
-// of the three -- there is no pause to give them -- so the player simply never
-// names them.
+// knows, and tells it. The Game Boy and the Bluetooth receiver are neither of
+// the four -- there is no pause to give them -- so the player simply never names
+// them.
 //
 // Each counts down against the monotonic clock rather than by adding up ticks,
 // so a slow tick with the screen dark loses nothing: the tick only asks what
@@ -31,6 +35,7 @@ typedef enum {
 	SLEEPTIMER_MUSIC = 0, // the card, Tidal and Qobuz: one transport, one timer
 	SLEEPTIMER_AUDIOBOOK,
 	SLEEPTIMER_PODCAST,
+	SLEEPTIMER_RADIO,
 	SLEEPTIMER_COUNT,
 } sleeptimer_kind_t;
 

@@ -1464,3 +1464,112 @@ accepted -- the directory serves many icons over https, and those stations never
 got artwork at all. The icon is now one file per address in
 `<card>/.local/radio-art`, written aside and renamed, with `/tmp` left as the
 fallback for a card that will not take it.
+## Eight languages
+
+The image carries eight language files instead of eleven: English, Italiano,
+Deutsch, Español, Français, Nederlands, Polski and Português BR. `Chinese.ini`,
+`Japanese.ini` and `Russian.ini` are out of
+`sonix-packer/assets/V1/usr/resource/sonix/language/` (4131 lines of text), and
+nothing anywhere kept a second list of them.
+
+That is the whole of what the picker needed. It has always been the folder:
+`lang_list()` scans it for `*.ini` and reads each file's own `[Language: …]`
+header for the name it shows, so a language that is not there is not offered,
+and a ninth dropped in beside them would be. The first-boot panel sizes itself
+from the same call.
+
+What did need changing is the other end of a choice. A device updated from a
+build that had one of the three selected keeps that name in `[ui] language`,
+with no file behind it. `lang_init()` used to fall back to Italiano on any
+unreadable file; it now tries English -- the first-boot language -- and then
+Italiano, and writes the name it settled on back to the settings, so the
+choice is corrected once instead of on every boot and the settings page stops
+offering a row that cannot be honoured. The fallback to tags is kept for what
+it was for: a folder with no language files at all is a broken install, not a
+dropped language, and bare tags are the honest sign of it.
+
+The Japanese faces follow. `japanese.otf` was chained in front of the main
+face only while the interface was in Japanese, gated on
+`lang_current() == "Japanese"`; with no Japanese file that chain could never be
+built, so the face, the CJK letter test it turned on and the glyph callbacks
+around it are gone from `src/gui/fonts/fonts.c`, and MiSans answers kana and
+kanji again as it does for every other language. The two files stay in the
+image for one reason: the ebook reader sets a book whose `dc:language` is `ja`
+in them, because Bookerly has no kana or kanji at all and the reader's faces
+carry no fallback chain. Removing them is a 5.4 MB saving and a Japanese book
+set in MiSans -- a change to make deliberately, not as a side effect of this
+one.
+
+The rest is the collateral that was keyed off the three names:
+
+* the Ko-fi/Boosty choice in the easter egg, which read
+  `lang_current() == "Russian"`. One code now, and
+  `usr/resource/sonix/gui/boosty-qr-code.png` (85 KB) is gone with it;
+* the ten greetings the first-boot panel cycles through, trimmed to the eight
+  that are still languages here;
+* the interface-language to ISO-code table the podcast directory is asked in,
+  which had `ja`, `ru` and `zh` rows nothing can reach;
+* `fonts_set_language()`, whose only job was rebuilding the chain when the
+  interface became Japanese, and its two calls in the language page.
+
+The three UI tests that walk the language folder asserted eleven files, which
+was a tripwire rather than an accident: they now assert eight, and a ninth
+language is meant to fail them until its texts are checked the same way.
+
+Left alone on purpose: the Russian keyboard layout (a way to type Cyrillic in
+the search box, unrelated to the interface language), the sort collation for
+kana and CJK titles, the metadata reader's Chinese code pages, and the
+`ru`/`ja`/`zh` regional tags a podcast feed may still declare.
+
+## The gestures, as a choice rather than a replacement
+
+The two sheets this interface pulls from the edge of the screen are the control
+centre and Cover Flow. The fork has always put the control centre under the
+status bar — pull down to open it — and Cover Flow at the foot of the main menu,
+pulled up from the bottom band. The original TempoTec firmware has them the
+other way round: Cover Flow comes down from the top edge of any page, and the
+control centre rises from the bottom.
+
+That arrangement was built, and it is the one the stock firmware has, but it
+does not get to be the default. A player that has been updated should keep the
+gesture it already knows; moving both sheets to the opposite edges in a software
+update is how a device goes back to its box. So both arrangements are in the
+build and **Settings → Appearance → Stock gestures** picks between them, off by
+default, which is the fork's own.
+
+`src/gui/shell/gestures.c` is the whole of the setting: `gestures_stock()` and
+`gestures_set_stock()`, over `[ui] stock_gestures` in the device config, read
+once and kept because the answer is asked for on every press that lands on the
+status bar or the bottom edge of the screen. Nothing is rebuilt when it changes.
+Both sheets ask it as they open, place their grip and their cards for the answer
+and park a screen away from that edge, so the next pull uses the new edges and
+the one after that would use them back again:
+
+* the control centre parks below the bottom edge in the stock arrangement and
+  above the top edge in the classic one, keeps its grabber under the status bar
+  in the first and at the foot of the sheet in the second, and gives the drag the
+  one free direction it has — the extra button rows are stretched out by a drag
+  in the classic arrangement, where downwards is free, and by a tap on the handle
+  under the brightness slider in the stock one, where downwards is the way out;
+* Cover Flow parks above the top edge in the stock arrangement and below the
+  bottom edge in the classic one, with its grip at the foot of the sheet in the
+  first and under the status bar in the second, and the row is laid out around
+  the viewport that moves with it.
+
+The pull that starts each one moves with the sheet. In the classic arrangement
+the status bar pulls the control centre down and the bottom band of the main menu
+pulls Cover Flow up; the band is the grid and the visible mini-player rather than
+a strip of their own, because a strip pinned over the last pixels of the home
+cards would eat their taps, and the flag `coverflow_drag_active()` is what keeps
+the tap that ends that pull from opening the card underneath. In the stock
+arrangement the status bar pulls Cover Flow down and the bottom edge of the
+screen pulls the control centre up, watched at the input device so that the same
+last pixels still take their taps.
+
+The pages that hide the status bar keep the top pull they have always had where
+it belongs to them. The now-playing page hides it so the artwork can run to the
+top edge, and a strip of that artwork where the bar would be pulls whichever
+sheet the arrangement puts at the top — the control centre in the classic one,
+Cover Flow in the stock one — because hiding the bar must not take the gesture
+away with it. The reader and the two games hide it behind a full-screen picture
+instead, and they keep their own presses.

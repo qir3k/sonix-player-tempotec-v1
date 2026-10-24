@@ -91,22 +91,21 @@ static enum { EXPORT_NONE, EXPORT_OWN_GADGET, EXPORT_ADB_COMPOSITE } export_mode
 #define USB_ID_PRODUCT "0x0101"
 #define USB_MANUFACTURER "HiBy"
 
-// The product string: the model's name without the maker's, "R3 Pro II" or
-// "R1", which is what the stock firmware of each writes.
+// The product string: the model's name without a maker's prefix, which on this
+// board is "TempoTec V1" as written in system-info.json.
 const char *usb_product(void) {
 	const sysinfo_model_t *model = sysinfo_model();
 	if (!model) {
-		return "R3 Pro II";
+		return "TempoTec V1";
 	}
 	const char *name = model->name;
 	return strncasecmp(name, "HiBy ", 5) == 0 ? name + 5 : name;
 }
 
 // What the LUN answers to a SCSI INQUIRY: vendor (8), product (16), revision
-// (4), "HiBy    R3 Pro II U-DISK0100" on the R3. Without it the mass-storage
-// function reports "Linux / File-Stor Gadget", which is what a bare gadget
-// looks like; the stock writes its own, and some hosts -- Android among them --
-// are fussier about a card reader than a PC is.
+// (4). Without it the mass-storage function reports "Linux / File-Stor Gadget",
+// which is what a bare gadget looks like; the stock writes its own, and some
+// hosts -- Android among them -- are fussier about a card reader than a PC is.
 static void usb_inquiry_string(char *out, size_t out_size) {
 	char product[40];
 	snprintf(product, sizeof(product), "%s U-DISK", usb_product());

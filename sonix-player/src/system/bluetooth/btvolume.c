@@ -455,9 +455,15 @@ static void *btvolume_worker(void *unused) {
 						// No notification in time. What the stream declares is not
 						// the headphones' level: it is bluealsa's starting value,
 						// which is the maximum. The player's level wins instead.
-						printf("btvolume: the headphones did not say their level (the stream is at %d/127); "
-							   "keeping the player's\n",
-							   adopt_seen);
+						//
+						// Ordinary, not a fault: a speaker with no AVRCP absolute
+						// volume never sends one, and 127/127 here is bluealsa's
+						// default rather than anything the device said. Said in
+						// those words so a log full of them does not read as
+						// something broken.
+						printf("btvolume: %s sets no absolute volume (bluealsa's default %d/127); "
+							   "keeping the player's level\n",
+							   have_path, adopt_seen);
 						state = BTV_READY;
 						local = get_volume_percent();
 					} else {

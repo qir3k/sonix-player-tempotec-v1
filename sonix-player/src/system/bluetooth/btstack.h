@@ -122,6 +122,13 @@ bool btstack_device_connected(const char *address, bool *out);
 // confirmation, so this returns when the pairing has finished one way or the
 // other and not when a prompt appeared.
 bool btstack_pair(const char *address, int timeout_ms);
+// The same, with bluez's error name and text when it answered one. An empty
+// `err_out` after a false return means the call timed out with no answer.
+bool btstack_pair_why(const char *address, int timeout_ms, char *err_out, size_t err_size);
+// Device1.CancelPairing(): stops an attempt bluez still has in flight. Called
+// when Pair ran out of time, since bluez keeps bonding for two minutes of its
+// own and the adapter answers nothing else while it does.
+bool btstack_cancel_pairing(const char *address);
 
 // Device1.Connect(): every profile the device offers. Returns when the ACL link
 // is up, which is NOT the same as the audio being ready -- see
@@ -135,6 +142,9 @@ bool btstack_connect_a2dp(const char *address, int timeout_ms);
 // The other direction: request a phone or computer's A2DP source profile so it
 // can stream to this device. BlueZ establishes the link if it is not up yet.
 bool btstack_connect_a2dp_source(const char *address, int timeout_ms);
+// The same, with bluez's error name and text when it answered one, so a caller
+// can tell "this side is not ready" from "that device is not there".
+bool btstack_connect_a2dp_source_why(const char *address, int timeout_ms, char *err_out, size_t err_size);
 
 bool btstack_disconnect(const char *address);
 bool btstack_trust(const char *address, bool on);

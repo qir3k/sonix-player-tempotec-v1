@@ -702,7 +702,7 @@ void back_btn_cb(lv_event_t *e) {
 
 void switch_screen_cb(lv_event_t *e) {
 	// A swipe that started on this button is a swipe, not a tap.
-	if (player_sheet_drag_active() || switcher_back_drag_active()) {
+	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
 		return;
 	}
 

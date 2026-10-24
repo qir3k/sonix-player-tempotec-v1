@@ -44,15 +44,19 @@
 #define LANG_DIR SONIX_RESOURCE_DIR "/language"
 
 // The language used on first boot, until someone chooses: the welcome screen,
-// the language list and the date and time come out in it. The matching file
-// must exist in the directory above; without it the interface stays on the
-// source's Italian.
+// the language list and the date and time come out in it. It is also the first
+// fallback when the language in the settings is not in the directory any more.
+// Without its file the next fallback is Italiano.
 #define LANG_FIRST_BOOT "English"
 
-// Reads the language named in the settings (or Italiano) out of `dir`. A
-// missing directory or file is not an error: every tr() then returns its
-// argument and the interface is in Italian, exactly as if this module did not
-// exist.
+// Reads the language named in the settings out of `dir`, and, when that file
+// is not there -- the language was dropped from a later firmware, or the
+// folder is the wrong one -- English, then Italiano. The name it settles on is
+// written back to the settings.
+//
+// With none of them readable either, it is not an error: every tr() then
+// returns its argument, which since the move to tags shows the tags
+// themselves.
 void lang_init(const char *dir);
 
 // The translation of `text`, or `text` itself when there is none. The returned

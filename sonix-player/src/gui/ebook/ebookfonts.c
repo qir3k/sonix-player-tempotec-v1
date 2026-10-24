@@ -9,7 +9,10 @@
 
 // The firmware's own copy, then the card's.
 #define EBOOK_FONT_DIR SONIX_RESOURCE_DIR "/fonts/ebook"
-// The interface's Japanese faces, which a Japanese book is set in.
+// The Japanese faces, which a Japanese book is set in. The interface does not
+// use them -- it has no Japanese language any more -- but a book that says
+// dc:language: ja still needs kana and kanji with Japanese shapes, which
+// Bookerly has none of.
 #define JAPANESE_FONT_DIR SONIX_RESOURCE_DIR "/fonts"
 
 // The four files, in the order ebookfonts_face() falls back through.

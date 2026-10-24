@@ -5,15 +5,18 @@
 
 #include "lvgl/lvgl.h"
 
-// The control centre: a swipe up from the bottom edge of the screen slides in a
-// sheet with the wifi and bluetooth buttons (tap to toggle, long press to open
-// the page), the transport controls and the brightness slider. A swipe down
-// carries it back out, and a tap outside puts it away the short way.
+// The control centre: a sheet with the wifi and bluetooth buttons (tap to
+// toggle, long press to open the page), the transport controls and the
+// brightness slider. A swipe back towards the edge carries it out again, and a
+// tap outside puts it away the short way.
 //
-// It comes up from the foot of the screen because that is where the stock
-// firmware puts it. The swipe is watched at the input device rather than owned
-// by a strip of the interface along the bottom, so the last pixels of every page
-// still take their taps -- see the note in quickpanel.c.
+// Which edge is the setting in gestures.h. By default it comes down from the
+// status bar, which is what this fork has always done; with the stock
+// arrangement chosen it rises from the foot of the screen instead, as the
+// TempoTec firmware has it. In the stock arrangement the pull is watched at the
+// input device rather than owned by a strip of the interface along the bottom,
+// so the last pixels of every page still take their taps -- see the note in
+// quickpanel.c.
 void quickpanel_init(gui_config_t *cfg);
 void quickpanel_open(void);
 
@@ -26,10 +29,10 @@ bool quickpanel_is_open(void);
 // Interactive open/close: the sheet follows the finger instead of jumping the
 // moment a drag starts. The bottom edge drives the upward gesture (through the
 // input device), the panel itself the downward one; both call the same three.
-//   begin  -- take the sheet wherever it currently is (open or parked below the
-//             bottom edge)
-//   update -- dy is the finger's travel since the press: upwards brings the
-//             sheet in, downwards puts it away
+//   begin  -- take the sheet wherever it currently is (open, or parked a screen
+//             away from the edge it comes from)
+//   update -- dy is the finger's travel since the press, in the direction that
+//             is right for the arrangement in force
 //   end    -- animate to whichever end the release is closest to
 void quickpanel_drag_begin(void);
 void quickpanel_drag_update(int dy);

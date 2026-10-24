@@ -78,13 +78,6 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t thread;
 static bool running;
 
-// How many capture threads are alive, not whether one is. Leaving the mode
-// tells the thread to stop but does not wait for it -- the wait would be a read
-// long, on the interface thread -- so entering again a moment later finds the
-// previous one still winding down. It is allowed to: the new session takes a
-// number of its own, and the old thread finds its number is no longer the
-// current one and leaves without touching anything.
-static int threads_alive;
 static unsigned session_id;
 static btreceiver_state_t state;
 static unsigned serial;
@@ -633,7 +626,6 @@ static void *capture_worker(void *arg) {
 
 done:
 	pthread_mutex_lock(&lock);
-	threads_alive--;
 	// Only the thread that is still the current session speaks for the mode. An
 	// older one finishing must not take down the session that replaced it.
 	if (session == session_id) {
@@ -674,7 +666,6 @@ bool btreceiver_start(void) {
 	state.active = true;
 	running = true;
 	unsigned mine = ++session_id;
-	threads_alive++;
 	touch();
 	pthread_mutex_unlock(&lock);
 
@@ -682,7 +673,6 @@ bool btreceiver_start(void) {
 		pthread_mutex_lock(&lock);
 		state.active = false;
 		running = false;
-		threads_alive--;
 		snprintf(state.error, sizeof(state.error), "%s", tr("btreceiver_not_enough_memory"));
 		touch();
 		pthread_mutex_unlock(&lock);
@@ -694,7 +684,12 @@ bool btreceiver_start(void) {
 
 void btreceiver_stop(void) {
 	pthread_mutex_lock(&lock);
-	bool was = state.active || threads_alive > 0;
+	// Whether a session was actually live, and not merely a thread still
+	// winding down: leaving the page stops the mode twice -- once from the
+	// confirmation's own handler, once from the page unloading a turn later --
+	// and the second call used to send the sender another Pause and print
+	// another "receiver mode off" a millisecond after the first.
+	bool was = state.active;
 	running = false;
 	state.active = false;
 	// Nothing of the sender survives the mode: what is left here is read by the

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "src/system/core/config.h"
@@ -142,16 +143,20 @@ static const struct {
 	{"L", "\xc5\x81"},																   // Ł
 	{"n", "\xc3\xb1\xc5\x84"},														   // ñ ń
 	{"N", "\xc3\x91\xc5\x83"},														   // Ñ Ń
-	{"o", "\xc3\xb2\xc3\xb3\xc3\xb4\xc3\xb6\xc3\xb5\xc3\xb8\xc5\x8d\xc5\x93"},		   // ò ó ô ö õ ø ō œ
-	{"O", "\xc3\x92\xc3\x93\xc3\x94\xc3\x96\xc3\x95\xc3\x98\xc5\x8c\xc5\x92"},		   // Ò Ó Ô Ö Õ Ø Ō Œ
+	// ó first, not third: this is a Polish player, and a held O that offers an
+	// oe-ligature before the accent Poles type every day is the wrong default.
+	{"o", "\xc3\xb3\xc3\xb2\xc3\xb4\xc3\xb6\xc3\xb5\xc3\xb8\xc5\x8d\xc5\x93"},		   // ó ò ô ö õ ø ō œ
+	{"O", "\xc3\x93\xc3\x92\xc3\x94\xc3\x96\xc3\x95\xc3\x98\xc5\x8c\xc5\x92"},		   // Ó Ò Ô Ö Õ Ø Ō Œ
 	{"s", "\xc3\x9f\xc5\x9b\xc5\xa1"},												   // ß ś š
 	{"S", "\xc5\x9a\xc5\xa0"},														   // Ś Š
 	{"u", "\xc3\xb9\xc3\xba\xc3\xbb\xc3\xbc\xc5\xab"},								   // ù ú û ü ū
 	{"U", "\xc3\x99\xc3\x9a\xc3\x9b\xc3\x9c\xc5\xaa"},								   // Ù Ú Û Ü Ū
 	{"y", "\xc3\xbf\xc3\xbd"},														   // ÿ ý
 	{"Y", "\xc5\xb8\xc3\x9d"},														   // Ÿ Ý
-	{"z", "\xc5\xbe\xc5\xba\xc5\xbc"},												   // ž ź ż
-	{"Z", "\xc5\xbd\xc5\xb9\xc5\xbb"},												   // Ž Ź Ż
+	// ż first: it is the one a Polish keyboard exists to type, and ź used to
+	// come before it.
+	{"z", "\xc5\xbc\xc5\xbe\xc5\xba"},												   // ż ž ź
+	{"Z", "\xc5\xbb\xc5\xbd\xc5\xb9"},												   // Ż Ž Ź
 	{"\xd0\xb5", "\xd1\x91"},														   // е: ё
 	{"\xd0\x95", "\xd0\x81"},														   // Е: Ё
 };
@@ -281,27 +286,67 @@ int kblayout_variant_count(const char *key) {
 	return n;
 }
 
-// Polish letters go first on a Polish keyboard. Everything else keeps the
-// layout's original order and remains available on the same long-press strip.
-static const char *const ACCENTS_POLISH = "\xc4\x85\xc4\x87\xc4\x99\xc5\x82\xc5\x84\xc3\xb3\xc5\x9b\xc5\xba\xc5\xbc";
+// ---------------------------------------------------------------------------
+// which accent a held key offers first
+//
+// The strip is a fixed list per key, and on a phone its order is the one of the
+// language you type in: holding E in Polish offers ę before é, in English é
+// before ę. All of them are still there, in every language -- the keyboard stays
+// universal -- only the order changes, so the one that is wanted is the first
+// cell under the finger.
+//
+// The language is the swipe one: it is the setting that names the language
+// being typed in, and it is on the same page as the switch for it. With no
+// preference (both, or a layout whose letters have no list here) the table's own
+// order stands, which is the one this keyboard has always had.
+// ---------------------------------------------------------------------------
 
+// The letters whose accents belong to Polish.
+// ż before ź, as on a Polish keyboard's own strip: holding Z in Polish has to
+// offer ż first, which is the letter, and ź second, which is the rare one.
+static const char *const ACCENTS_POLISH = "\xc4\x85\xc4\x87\xc4\x99\xc5\x82\xc5\x84\xc3\xb3\xc5\x9b\xc5\xbc\xc5\xba"; // ą ć ę ł ń ó ś ż ź
+// And the ones the western European languages use, which English reads as the
+// accents on borrowed names.
+static const char *const ACCENTS_ENGLISH =
+	"\xc3\xa1\xc3\xa0\xc3\xa9\xc3\xa8\xc3\xaa\xc3\xab\xc3\xad\xc3\xac\xc3\xb3\xc3\xb2\xc3\xb6\xc3\xa4\xc3\xbc\xc3\xa7\xc3\xb1";
+
+static int accent_preference(char *out, size_t size) {
+	out[0] = '\0';
+	if (kblayout_default() == KB_LAYOUT_POLISH || config_get_int("keyboard", "swipe_lang", 0) == 1) {
+		snprintf(out, size, "%s", ACCENTS_POLISH);
+	} else if (config_get_int("keyboard", "swipe_lang", 0) == 0) {
+		snprintf(out, size, "%s", ACCENTS_ENGLISH);
+	} else {
+		return 0; // both: no language is "the" one, so the table's order stands
+	}
+	return 1;
+}
+
+// The variants of `key`, the preferred language's first. Returns how many are
+// in `out` (each at most 4 bytes plus its NUL); the caller indexes into it.
 static int variants_ordered(const char *key, char out[][8], int max) {
 	const char *p = variants_of(key);
+	char preference[64];
+	bool prefer = accent_preference(preference, sizeof(preference)) != 0;
 	int n = 0;
-	if (kblayout_default() == KB_LAYOUT_POLISH) {
-		for (const char *want = ACCENTS_POLISH; *want && n < max; want += utf8_len(want)) {
-			const char *q = p;
-			while (*q) {
-				int len = utf8_len(q);
-				if (len == utf8_len(want) && memcmp(q, want, (size_t)len) == 0) {
-					memcpy(out[n], q, (size_t)len);
-					out[n++][len] = '\0';
-					break;
-				}
-				q += len;
+
+	// First pass: the ones this language actually uses, in the language's order.
+	for (const char *want = preference; prefer && *want; want += utf8_len(want)) {
+		const char *q = p;
+		while (*q) {
+			int len = utf8_len(q);
+			if (len == utf8_len(want) && memcmp(q, want, (size_t)len) == 0 && n < max) {
+				memcpy(out[n], q, (size_t)len);
+				out[n][len] = '\0';
+				n++;
+				break;
 			}
+			q += len;
 		}
 	}
+
+	// Second: everything else, in the table's order, and skipping what is
+	// already in hand.
 	while (*p && n < max) {
 		int len = utf8_len(p);
 		bool already = false;
@@ -310,7 +355,8 @@ static int variants_ordered(const char *key, char out[][8], int max) {
 		}
 		if (!already) {
 			memcpy(out[n], p, (size_t)len);
-			out[n++][len] = '\0';
+			out[n][len] = '\0';
+			n++;
 		}
 		p += len;
 	}
@@ -318,19 +364,21 @@ static int variants_ordered(const char *key, char out[][8], int max) {
 }
 
 const char *kblayout_variant(const char *key, int index) {
+	static char ordered[KB_LAYOUT_MAX_VARIANTS][8];
 	static char slots[4][8];
 	static int at;
 
-	char ordered[KB_LAYOUT_MAX_VARIANTS][8];
+	if (index < 0 || index >= KB_LAYOUT_MAX_VARIANTS) {
+		return "";
+	}
 	int count = variants_ordered(key, ordered, KB_LAYOUT_MAX_VARIANTS);
-	if (index < 0 || index >= count) {
+	if (index >= count) {
 		return "";
 	}
 
-	int len = (int)strlen(ordered[index]);
 	char *out = slots[at];
 	at = (at + 1) % 4;
-	memcpy(out, ordered[index], (size_t)len + 1);
+	snprintf(out, 8, "%s", ordered[index]);
 	return out;
 }
 

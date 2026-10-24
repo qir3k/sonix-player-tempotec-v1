@@ -134,6 +134,13 @@ void player_sheet_attach_drag(lv_obj_t *obj, bool opening) {
 }
 bool player_sheet_drag_active(void) { return false; }
 
+/* The carousel's own hooks. The pages here never open it: what they are checked
+ * for is that they leave the pull alone (see the tap guards in gridpage.c). */
+void coverflow_attach_edge(lv_obj_t *obj, gui_config_t *cfg) { (void)obj; (void)cfg; }
+bool coverflow_drag_active(void) { return false; }
+bool coverflow_is_open(void) { return false; }
+
+
 bool cover_load_image_file(const char *path, int box_w, int box_h, cover_fit_t fit, cover_image_t *out) {
 	(void)fit;
 	if (!path || !out || box_w <= 0 || box_h <= 0) {
@@ -371,7 +378,9 @@ static void check_strings(const char *language_dir) {
 		languages++;
 	}
 	closedir(dir);
-	assert(languages == 11);
+	// The eight this firmware ships. A ninth added to the folder is meant to
+	// make this fail, so its texts get checked the same way.
+	assert(languages == 8);
 	assert(lang_set("English"));
 }
 

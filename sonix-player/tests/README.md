@@ -154,7 +154,7 @@ sizes, all five themes, exact icon sizes and centering, glow-free icon-only
 tiles, unchanged secondary-menu tiles, restoration of the labeled layout and
 its decorative glows, real switch callbacks and config save/reload,
 theme/accent/tint/font changes, hidden-label translation, and the six tile
-destinations. Both language asset trees are used. Icon-only images must have
+destinations. The V1 language tree is used. Icon-only images must have
 native-size sources and no scaling transform, including after font-metric
 reflows. Actual LVGL snapshots verify pixel-for-pixel alpha edges, theme tints
 and opaque pixels in ARGB8888 and the panel's RGB565 format; geometry alone
@@ -181,13 +181,13 @@ and configuration store. The player that lends the artwork, the cover loader
 and the device services are substituted. The test drives the loader by hand,
 so it decides when a decode lands, what size it is, or that it found nothing.
 
-It checks the **Album art: Fill / Framed** choice on both panel sizes, default
+It checks the **Album art: Fill / Framed** choice, default
 and saved:
 
 - Fill is unchanged: the sleeve still covers its whole area, and it never
   asks for a decode. On the V1 that always means enlarging it.
 - Framed asks for one copy of the artwork at exactly the frame's size (160 px
-  on the V1, 400 px on the 480-wide panels), from the path the player read
+  on the V1), from the path the player read
   the artwork from. It asks as the panel goes dark, once the player has the
   artwork, and never again after a theme change or a failed decode.
 - Until that copy lands, the player's sleeve stands in, never enlarged; a
@@ -211,8 +211,8 @@ the captioned pill row is checked to relabel on a language switch.
 
 The same test checks the size limit the screensaver hands the Screensaver
 folder. It reads the size the empty-folder note promises from every language
-file, requires them all to agree, and requires the limit to match: 480x800 on
-the V1, which ships the R1's texts, and the panel's own size elsewhere.
+file, requires them all to agree, and requires the limit to match: 480x800, the
+size the V1's inherited texts promise, larger than its 240x320 panel.
 
 Set `SONIX_SCREENSAVER_SNAPSHOTS` to an output prefix to keep the rendered
 screens as ignored `.ppm` files, for example:
@@ -284,7 +284,7 @@ showed its "nothing to show" note whatever was counted.
 ## Headless calculator and notes page tests
 
 The `ui` target also builds `test_tools_pages`, which lays the two new pages
-out on the real renderer at both panel sizes, with the Game Boy core compiled
+out on the real renderer at the V1 panel size, with the Game Boy core compiled
 in as the firmware does, so the More menu is laid out with the seven entries
 the device has.
 

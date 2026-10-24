@@ -496,6 +496,7 @@ static lv_obj_t *make_card(lv_obj_t *parent, const char *name, lv_obj_t **value_
 		*value_out = lv_label_create(card);
 		lv_obj_add_style(*value_out, &theme_style_text_dim, 0);
 		lv_obj_set_style_text_font(*value_out, &font_ui_24, 0);
+		lv_obj_set_style_text_align(*value_out, LV_TEXT_ALIGN_RIGHT, 0);
 		lv_obj_align(*value_out, LV_ALIGN_TOP_RIGHT, 0, 0);
 	}
 
@@ -929,6 +930,12 @@ lv_obj_t *settingsrow_add(lv_obj_t *parent, const char *name, lv_obj_t **value_o
 		*value_out = lv_label_create(row);
 		lv_obj_add_style(*value_out, &theme_style_text_dim, 0);
 		lv_obj_set_style_text_font(*value_out, &font_ui_24, 0);
+		// fit_row() caps a value that does not fit and leaves the box at that
+		// width; a short value chosen afterwards ("Polski" after "Interface
+		// language") would then sit at the left of an invisible box. Aligning
+		// the text itself right keeps every value against the row's edge, at
+		// whatever width the box has been given.
+		lv_obj_set_style_text_align(*value_out, LV_TEXT_ALIGN_RIGHT, 0);
 		lv_obj_align(*value_out, LV_ALIGN_RIGHT_MID, 0, 0);
 		lv_obj_add_event_cb(*value_out, row_value_resized_cb, LV_EVENT_SIZE_CHANGED, row);
 	} else {

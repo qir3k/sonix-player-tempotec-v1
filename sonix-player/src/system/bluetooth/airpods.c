@@ -111,7 +111,16 @@ static bool stopping;
 static char want_mac[MAC_LEN]; // the device to talk to, "" for none
 static char want_name[NAME_LEN];
 static char have_mac[MAC_LEN];
-static int failures;					   // consecutive connect failures for have_mac
+static int failures; // consecutive connect failures for have_mac
+
+// A device that has refused the Apple Accessory Protocol three times is not an
+// Apple one, and asking it again at every connection is a socket every four
+// seconds for the whole time a pair of ordinary headphones is in use -- the log
+// has "does not answer on AAP" seven times, once per reconnection, because the
+// count started over every time the device came back. Remembered by address for
+// as long as the player runs, which is the only way the answer could change
+// underneath.
+static char not_apple_mac[MAC_LEN];
 static airpods_noise_t pending_noise;	   // a mode asked for, waiting for the session
 static int pending_cycle = -1;			   // a long-press set asked for, -1 for none
 static airpods_state_t g_state; // what the last packets said
@@ -864,7 +873,7 @@ static void *airpods_worker(void *unused) {
 			break;
 		}
 
-		if (mac[0] && tried < CONNECT_ATTEMPTS) {
+		if (mac[0] && tried < CONNECT_ATTEMPTS && strcasecmp(mac, not_apple_mac) != 0) {
 			int fd = aap_connect(mac);
 			if (fd >= 0) {
 				pthread_mutex_lock(&lock);
@@ -901,10 +910,12 @@ static void *airpods_worker(void *unused) {
 				pthread_mutex_unlock(&lock);
 				if (count == CONNECT_ATTEMPTS) {
 					// Not Apple, or not willing. Said once and then left alone
-					// until something else connects: retrying for ever would
-					// be a socket every four seconds for the whole time a pair
-					// of ordinary headphones is in use.
+					// for good: retrying for ever would be a socket every four
+					// seconds for the whole time a pair of ordinary headphones
+					// is in use, and every reconnection started the count over.
 					printf("airpods: %s does not answer on AAP, not an Apple device\n", mac);
+					// Written and read on this thread only.
+					snprintf(not_apple_mac, sizeof(not_apple_mac), "%s", mac);
 				}
 			}
 		}

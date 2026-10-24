@@ -22,6 +22,7 @@
 #include "src/gui/settings/musicsettings.h"
 #include "src/gui/settings/settings.h"
 #include "src/gui/shell/corners.h"
+#include "src/gui/shell/gestures.h"
 #include "src/gui/shell/gridpage.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/main_menu.h"
@@ -466,11 +467,19 @@ int main(int argc, char **argv) {
 	menu_toggle = child_of_type(lv_obj_get_parent(toggle_label), &lv_switch_class);
 	assert(lv_obj_has_state(menu_toggle, LV_STATE_CHECKED) == saved_icons_only);
 
+	// Which edge each sheet is pulled from is a choice, and the old arrangement is
+	// the default: nothing moves under anyone's thumb because of an update.
+	assert(!gestures_stock());
+	lv_obj_t *gesture_label = find_label(appearance_screen, tr("appearance_stock_gestures"));
+	assert(gesture_label);
+	lv_obj_t *gesture_toggle = child_of_type(lv_obj_get_parent(gesture_label), &lv_switch_class);
+	assert(gesture_toggle && !lv_obj_has_state(gesture_toggle, LV_STATE_CHECKED));
+
 	assert(find_label(lv_obj_get_child(grid, 3), tr("audiobooks")));
-	assert(find_label(appearance_screen, tr("main_menu")));
+	assert(find_label(appearance_screen, tr("menu_reorder")));
+	assert(find_label(menuarrange_screen, tr("menu_section_home")));
 	assert(!find_label(appearance_screen, tr("appearance_home_books")));
 	assert(!find_label(appearance_screen, tr("appearance_home_browse")));
-
 	/* Reorder and hide Home entries through the shared Home/More editor. */
 	lv_screen_load(menuarrange_screen);
 	lv_obj_t *layout = lv_obj_get_child(menuarrange_screen, 1);
