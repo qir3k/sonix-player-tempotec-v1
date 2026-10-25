@@ -865,7 +865,7 @@ static void kb_variants_cb(lv_event_t *e) {
 		return;
 	}
 	if (code == LV_EVENT_RELEASED && kb->field) {
-		kb_type(kb, kblayout_variant(kb->variant_key, kb->variant_sel));
+		kb_type(kb, kblayout_variant(kb->layout, kb->variant_key, kb->variant_sel));
 	}
 	kb_variants_close(kb); // RELEASED or PRESS_LOST
 }
