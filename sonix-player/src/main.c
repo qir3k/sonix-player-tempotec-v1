@@ -2307,9 +2307,9 @@ int main(int argc, char **argv) {
 
 	qobuzcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	tidalcache_clear_card_cache(card_root);
-	// Tidal playback is a temporary cache, not a download destination. Keep it
-	// in the device's volatile storage; explicit downloads are copied to Music/Tidal.
-	tidalcache_set_root("/tmp");
+	// Tidal playback uses internal temporary storage, not tmpfs or the card.
+	tidalcache_set_root(TIDALCACHE_TEMP_ROOT);
+	tidalcache_clear(); // remove leftovers from a crash or power loss
 	podcastcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	podcastsubs_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	podcastplayed_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);

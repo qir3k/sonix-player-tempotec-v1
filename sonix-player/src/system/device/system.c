@@ -851,8 +851,8 @@ static void card_databases_attach(const char *root) {
 	mseb_presets_set_dir(root);
 	qobuzcache_set_root(root);
 	tidalcache_clear_card_cache(root);
-	// Tidal playback files are volatile; only explicit downloads belong on card.
-	tidalcache_set_root("/tmp");
+	// Keep Tidal's temporary playback files on internal storage across card changes.
+	tidalcache_set_root(TIDALCACHE_TEMP_ROOT);
 	podcastcache_set_root(root);
 	podcastsubs_set_root(root);
 	podcastplayed_set_root(root);
