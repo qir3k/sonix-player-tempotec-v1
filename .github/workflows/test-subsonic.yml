@@ -8,7 +8,7 @@ on:
       - sonix-player/src/system/**
       - sonix-player/src/gui/streaming/subsonicpage.*
       - sonix-player/tests/**
-  # Pushes to main, dev and personal build the firmware image instead
+  # Pushes to main and personal build the firmware image instead
   # (build-tempotec-v1.yml): the image is what is flashed, and these suites
   # are the fast check on a working branch rather than on a whole tree.
   push:
