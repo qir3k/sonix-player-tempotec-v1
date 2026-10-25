@@ -5,9 +5,10 @@
 
 #include "lvgl/lvgl.h"
 
-// Internet radio: the hub (Language / Country / Genre, with the starred
-// stations, the recently played and the search on the corner buttons), the
-// list page all of those open, and the search page.
+// Internet radio: the hub (the starred stations, Recently played, Recommended,
+// Language / Country / Genre and My stations), the list page all of those
+// open, and the search page. Search and this page's own settings live on the
+// corner buttons.
 //
 // The Wi-Fi rule is the transfer page's, minus the part about staying open:
 // nothing can be browsed or played without a connection, and the page says so

@@ -74,7 +74,15 @@ bool tidalcache_find(long track_id, char *out, size_t size);
 // starting. 0 when unknown.
 //
 // `stream` is copied: the caller can free its own as soon as this returns.
-bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_secs, char *out, size_t size);
+//
+// `foreground` says the user is waiting for this track -- they tapped it and
+// the player is holding a "downloading" notice -- rather than the prefetcher
+// getting the next one ready while the current one plays. The slow-connection
+// notice is only for a foreground start: a background prefetch that takes a
+// while is not something the listener is waiting through, and warning about it
+// was most of what made the notice look broken.
+bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_secs, bool foreground, char *out,
+					  size_t size);
 
 // The extension this stream's file will have, without the dot. Gives the name
 // before the download begins.
@@ -100,6 +108,12 @@ void tidalcache_abandon_all(void);
 
 // The id of the track downloading right now, 0 if none.
 long tidalcache_downloading_id(void);
+
+// Where the track downloading right now is being written. The queue's path is
+// the container it guessed from the chosen quality; a DASH manifest can choose
+// another, and the file then grows under that name while the queued one does
+// not exist. False when nothing is downloading, or not for this id.
+bool tidalcache_downloading_path(long track_id, char *out, size_t out_size);
 
 // "Tidal needs the network", even when nothing is downloading at this instant.
 // Needed by the Wi-Fi parking logic (power.c): see the long comment on

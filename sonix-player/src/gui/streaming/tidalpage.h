@@ -25,6 +25,6 @@ extern lv_obj_t *tidal_list_screen;
 // "Can this file be played right now?", for the queue. tidalpage_init()
 // registers it itself with device_state_add_prepare_cb(); it is declared here
 // because it is defined elsewhere in the file than where it is registered.
-bool tidalpage_prepare_track(const char *path);
+bool tidalpage_prepare_track(char *path, size_t path_size);
 
 #endif /* TIDALPAGE_H */

@@ -530,11 +530,24 @@ static void load_and_play_at(const char *filepath, double position) {
 	// whole album and playback can reach a track before its download does. The
 	// registered callback takes over and restarts this once the file is ready;
 	// stop here rather than hand the decoder a path to nothing.
+	//
+	// The callbacks may also correct the name: Tidal queues a guessed container
+	// and the manifest can deliver another, so the file on the card is
+	// sometimes not called what the queue said. Everything above was read from
+	// the guess, so when the name comes back changed it is read again.
+	char prepared_path[sizeof(current_metadata_file)];
+	snprintf(prepared_path, sizeof(prepared_path), "%s", current_metadata_file);
 	for (int i = 0; i < prepare_cb_count; i++) {
-		if (!prepare_cbs[i](current_metadata_file)) {
+		if (!prepare_cbs[i](current_metadata_file, sizeof(current_metadata_file))) {
 			queue_persist();
 			return;
 		}
+	}
+	if (strcmp(prepared_path, current_metadata_file) != 0) {
+		metadata_read(current_metadata_file, &current_metadata);
+		audiobook_track_changed(current_metadata_file);
+		replaygain_load(&current_metadata);
+		apply_track_speed();
 	}
 
 	if (position > 0) {

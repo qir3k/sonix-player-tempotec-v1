@@ -14,6 +14,7 @@
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/scrolltext.h"
 #include "src/gui/shell/theme.h"
+#include "src/system/bluetooth/btreceiver.h"
 #include "src/system/device/clock.h"
 #include "src/system/core/config.h"
 #include "src/system/playback/device_state.h"
@@ -30,7 +31,8 @@
 static lv_obj_t *saver;		 // the whole thing, full screen on the top layer
 static lv_obj_t *cover_img;	 // the artwork: above the strip, or the whole panel under a field
 static lv_obj_t *cover_placeholder; // the note, for a track that has none
-static lv_obj_t *info_strip; // metadata over blur, or a translucent panel in the V1 palettes
+static lv_obj_t *info_strip; // metadata field: its ink, and the blurred band behind it
+static lv_obj_t *strip_blur; // the bottom band of the player's blur, under the words in the V1 palettes
 static lv_obj_t *cover_box;	 // the artwork's area: everything above the strip, or the screen
 static lv_obj_t *frame_box;	 // what cover_img sits in: all of cover_box, or the Framed sleeve
 static lv_obj_t *title_label;
@@ -59,10 +61,6 @@ static int strip_h;
 // FRAME_MARGIN_VERT) and six of the artwork's own box under the same rule.
 #define DEFAULT_STRIP_H bp_pick(126, 220)
 
-// How much of the sleeve still shows through that field. Amber's cream and
-// amber type is bright enough to read through half.
-#define AMBER_STRIP_OPA LV_OPA_50
-
 // How far the clock is lifted out of its line in the strip. It is the strip's
 // last line and the swipe-up sign hangs over the strip's foot, and the room
 // between the two is whatever descent the face leaves under the digits -- a
@@ -74,27 +72,22 @@ static int strip_h;
 // artist keep the places they were tuned for, and the clock gains its air
 // under every face.
 //
-// As small as the sign allows, and no smaller. The lift is not a design
-// choice -- it is the clearance the sign needs -- and every pixel of it is a
-// pixel of air between the clock and the sign nobody asked for, which is what
-// the last round of this was about: at ten the figures stood fourteen rows
-// clear of the sign. Four leaves them eight, and the two gaps between the
-// three lines are put back by the shifts below rather than by flying the
-// clock up (test_screensaver.c measures both, on the rendered rows).
-// Clock lift removed: instead of lifting the clock we move the title
-// and artist down to create balanced gaps between all three lines.
-// This keeps the clock at its natural position and shifts the text lines
-// down by the same total amount the clock would have moved up.
-#define CLOCK_LIFT 0
+// A few pixels, and no more: the lift is the clearance the sign needs and the
+// air the last round asked for between the figures and the sign. It is not a
+// design choice to fly the clock up the strip -- at ten the figures stood
+// fourteen rows clear, which is what an earlier version did. It also lands the
+// two gaps between the three lines even: with the clock at its foot they read
+// three pixels apart, and four of lift takes the lower one down to within a
+// pixel of the upper (test_screensaver.c measures both, on the rendered rows).
+#define CLOCK_LIFT bp_pick(4, 5)
 
-// How far the title is shifted DOWN out of its line.
-// With the clock no longer lifted (CLOCK_LIFT=0), the title shifts down
-// by 4-5px so the gap above the clock and the gap below remain similar.
+// How far the title is shifted DOWN out of its line, so the words do not slide
+// down the strip now that the clock no longer sits at its foot.
 #define TITLE_SHIFT bp_pick(4, 5)
 
-// How far the artist is shifted DOWN out of its line.
-// Previously bp_pick(3,4): now shifted down more so the lower gap
-// (artist-clock) stays balanced with the upper gap (title-artist).
+// How far the artist is shifted DOWN out of its line. Left exactly where the
+// last round tuned it: the clock's lift alone closes the three-pixel gap the
+// two lines had, so the title and the artist do not need to move again.
 #define ARTIST_SHIFT bp_pick(5, 6)
 
 // The Framed style's sleeve. It keeps at least this much of the panel free on
@@ -217,13 +210,18 @@ static bool metadata_over_art(void) {
 static bool framed_now(void) { return source == SCREENSAVER_SOURCE_ALBUM && style == SCREENSAVER_STYLE_FRAMED; }
 
 static void set_strip_height(int height) {
-	if (height <= 0 || height >= screen_h) {
-		return;
-	}
-	if (height != strip_h) {
+	if (height > 0 && height < screen_h && height != strip_h) {
 		strip_h = height;
 		lv_obj_set_height(info_strip, strip_h);
 		lv_obj_align(info_strip, LV_ALIGN_BOTTOM_MID, 0, 0);
+	}
+	// The blurred band behind the words is the sleeve's own bottom edge, so it
+	// has to follow the strip and the panel's foot even when only the cover
+	// box changed between Framed and Fill -- and on the path above that keeps
+	// the strip's height, where the size is already right.
+	if (strip_blur) {
+		lv_obj_set_size(strip_blur, screen_w, strip_h);
+		lv_obj_align(strip_blur, LV_ALIGN_BOTTOM_MID, 0, 0);
 	}
 	bool over_art = !framed_now() && (source == SCREENSAVER_SOURCE_IMAGES || metadata_over_art());
 	int want = over_art ? screen_h : screen_h - strip_h;
@@ -501,19 +499,30 @@ static void promote_next(void) {
 	next_file[0] = '\0';
 }
 
-// The V1 palettes replace the artwork-derived blur beneath their metadata with
-// a fixed translucent black field, which keeps the palette's ink legible over
-// every sleeve while still letting the cover show through behind it. The other
-// themes keep the blurred copy, or plain black when there is no artwork to
-// blur.
+// The words sit on a blurred band of the sleeve, not on a translucent scrim:
+// the V1 palettes used to lay a flat half-black field over the foot of the
+// cover, which washed the picture out and read as a grey rectangle rather than
+// as part of the sleeve. They now borrow the player's own blurred copy -- the
+// one it makes for the controls, screen-sized on this board -- and show its
+// bottom band behind the words (strip_blur, a child of the artwork's box, so
+// the band continues the picture directly above it). Nothing is decoded here:
+// the player already holds that blur, and the band is a crop of it.
 //
-// The field is the flat translucent rectangle it has always been: one weight of
-// the palette's own colour over the foot of the sleeve, with the words on it.
-// A band melting its top edge into the picture was tried and is gone again --
-// over a photograph a square with a straight top is what the reference screens
-// show, and a gradient across the record reads as a smudge rather than as a
-// field.
+// A folder picture brings its own band from the loader (image_strip, cut from
+// the foot of the same photograph), so it is drawn the same way. With no
+// sleeve to blur -- a track without artwork -- the strip is plain black, the
+// page's own colour, rather than a translucent rectangle showing nothing.
+//
+// The band is not melted into the picture: over a photograph a square with a
+// straight top is what the reference screens show, and a gradient across the
+// record reads as a smudge rather than as a field.
 static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
+	// Nothing borrowed from the player survives a rebuild unless it is put
+	// back below: the caller may be the release hook, with the old buffer
+	// about to be freed.
+	lv_image_set_src(strip_blur, NULL);
+	lv_obj_set_hidden(strip_blur, true);
+
 	if (framed_now()) {
 		// Framed keeps the words off the artwork altogether, so there is
 		// nothing for a field or a strip to do: they are read on the page
@@ -524,9 +533,28 @@ static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
 	}
 
 	if (theme_is_monochrome()) {
+		bool screen_sized = backdrop && (int)backdrop->header.w == screen_w &&
+							(int)backdrop->header.h == screen_h;
+		if (screen_sized) {
+			// The player's screen-sized blur: its foot is the sleeve's own
+			// foot, so cropping from the bottom keeps the band in line with
+			// the picture above it.
+			lv_image_set_src(strip_blur, backdrop);
+			lv_obj_set_hidden(strip_blur, false);
+			lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
+			lv_obj_set_style_bg_opa(info_strip, LV_OPA_TRANSP, 0);
+			return;
+		}
+		if (backdrop && (int)backdrop->header.h == strip_h) {
+			// A band made to the strip's own height (the folder's picture,
+			// cut from the foot of the same image): draw it directly.
+			lv_obj_set_style_bg_image_src(info_strip, backdrop, 0);
+			lv_obj_set_style_bg_opa(info_strip, LV_OPA_TRANSP, 0);
+			return;
+		}
 		lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
 		lv_obj_set_style_bg_color(info_strip, lv_color_black(), 0);
-		lv_obj_set_style_bg_opa(info_strip, AMBER_STRIP_OPA, 0);
+		lv_obj_set_style_bg_opa(info_strip, LV_OPA_COVER, 0);
 		return;
 	}
 
@@ -857,6 +885,8 @@ static void finish_hide(void) {
 	// here goes too -- about a megabyte, and the device is in use again, which
 	// is exactly when that megabyte is worth having back.
 	lv_image_set_src(cover_img, NULL);
+	lv_image_set_src(strip_blur, NULL);
+	lv_obj_set_hidden(strip_blur, true);
 	lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
 	set_page_backdrop(NULL);
 	drop_image();
@@ -904,6 +934,18 @@ static void slide_to(int y) {
 
 bool screensaver_prepare(void) {
 	if (!saver || !enabled) {
+		return false;
+	}
+	// In receiver mode the DAC is fed by a phone, not by this player: the saver
+	// would show the last local track's title and sleeve for a stream it knows
+	// nothing about, and drawing it is a full-screen render on the one core
+	// decoding that stream at exactly the moment the power button is pressed.
+	// The receiver page owns the wake instead -- it is the screen that says what
+	// is really playing -- and the saver comes back when the mode ends.
+	if (btreceiver_is_active()) {
+		if (screensaver_is_visible()) {
+			finish_hide();
+		}
 		return false;
 	}
 	// Called once as the panel goes dark and again as it lights up, and the two
@@ -1110,9 +1152,23 @@ void screensaver_init(gui_config_t *cfg) {
 	lv_obj_center(cover_img);
 	lv_image_set_inner_align(cover_img, LV_IMAGE_ALIGN_CENTER);
 
-	// Metadata field: the player's blurred artwork in Dark and Light, a
-	// translucent fill of the palette's own colour in the two V1 palettes (see
-	// set_info_strip_backdrop).
+	// The blurred band behind the words in the two V1 palettes. It is the
+	// bottom slice of the player's screen-sized blur, cropped by the image
+	// object's own size and an inner alignment at its foot, so the frost
+	// continues the picture directly above it instead of showing the middle of
+	// the sleeve. A child of the artwork's box, drawn over the sleeve and
+	// under the words (see set_info_strip_backdrop); hidden in every other
+	// theme and in Framed, which have their own backdrop.
+	strip_blur = lv_image_create(cover_box);
+	lv_obj_set_size(strip_blur, screen_w, strip_h);
+	lv_obj_align(strip_blur, LV_ALIGN_BOTTOM_MID, 0, 0);
+	lv_image_set_inner_align(strip_blur, LV_IMAGE_ALIGN_BOTTOM_MID);
+	lv_obj_set_clickable(strip_blur, false);
+	lv_obj_set_event_bubble(strip_blur, true);
+	lv_obj_set_hidden(strip_blur, true);
+
+	// Metadata field: the player's blurred artwork in Dark and Light, and the
+	// bottom band of it in the two V1 palettes (see set_info_strip_backdrop).
 	info_strip = lv_obj_create(saver);
 	lv_obj_set_size(info_strip, screen_w, strip_h);
 	lv_obj_align(info_strip, LV_ALIGN_BOTTOM_MID, 0, 0);

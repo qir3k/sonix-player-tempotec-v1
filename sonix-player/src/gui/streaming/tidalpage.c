@@ -1710,7 +1710,7 @@ static void downloading_note_async(void *user) {
 	gui_notify_popup("downloading");
 }
 
-bool tidalpage_prepare_track(const char *path) {
+bool tidalpage_prepare_track(char *path, size_t path_size) {
 	if (!tidalcache_owns(path)) {
 		waiting_for_track = false;
 		return true; // not a Tidal file
@@ -1720,6 +1720,29 @@ bool tidalpage_prepare_track(const char *path) {
 	// cleared in queue_watch_cb, which runs every second regardless; a flag
 	// raised here and never lowered keeps the Wi-Fi awake forever.
 	if (track_is_playable(path)) {
+		// The queue names the container it guessed from the chosen quality. A
+		// DASH manifest can deliver another one, and the download then lives
+		// under that name while the queued path names nothing: audio_play()
+		// opens a file that is not there, the decoder fails, and the player
+		// stops on every press of play. Resolve to the file that is actually
+		// there -- or being written -- before it reaches the decoder.
+		char real[512] = "";
+		long id = tidalcache_track_id(path);
+		if (id != 0 && !tidalcache_find(id, real, sizeof(real))) {
+			tidalcache_downloading_path(id, real, sizeof(real));
+		}
+		if (real[0] && strcmp(real, path) != 0) {
+			if (strlen(real) >= path_size) {
+				// The queue's buffer cannot hold the real name. Handing over a
+				// truncated path would open something else, so stop here and let
+				// the caller take its "not ready" path rather than play a file
+				// that is not there.
+				fprintf(stderr, "tidal: the real name '%s' does not fit the queue buffer\n", real);
+				return false;
+			}
+			fprintf(stderr, "tidal: the queue calls it '%s', the card holds '%s'\n", path, real);
+			snprintf(path, path_size, "%s", real);
+		}
 		waiting_for_track = false;
 		return true;
 	}
@@ -1896,7 +1919,7 @@ static bool prepare_track(const tidal_track_t *track, char *path, size_t size) {
 		return false;
 	}
 
-	if (!tidalcache_start(track->id, stream, track->duration, path, size)) {
+	if (!tidalcache_start(track->id, stream, track->duration, false, path, size)) {
 		free(stream);
 		return false;
 	}
@@ -1916,8 +1939,10 @@ static bool prepare_track(const tidal_track_t *track, char *path, size_t size) {
 	// beside the file here (the rest is still downloading), so the by-id
 	// variant would look for ".m4a" -- the container in the manifest -- and
 	// write the tags where nothing reads them.
-	tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
-								track->track_number, track->cover);
+	if (track->title[0]) {
+		tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
+										track->track_number, track->cover);
+	}
 	free(stream);
 
 	// Prefetched tracks count too: they occupy the card, which is what the
@@ -1960,7 +1985,7 @@ static void do_play(int index) {
 	}
 
 	char path[512];
-	if (!tidalcache_start(track->id, stream, track->duration, path, sizeof(path))) {
+	if (!tidalcache_start(track->id, stream, track->duration, true, path, sizeof(path))) {
 		// The cache says what went wrong: no card, no network, card full. The
 		// generic "download failed" is only for when even it does not know.
 		const char *why = tidalcache_last_error();
@@ -2181,21 +2206,22 @@ static void *prefetch_main(void *arg) {
 			}
 		}
 
-		if (index < 0) {
-			// Not in the queue being played: wait for the watchdog to
-			// recompute rather than download for the previous queue.
-			fprintf(stderr, "tidal: %ld is not in the list we know, not downloading it\n", id);
-			prefetch_failed_id = id;
-			prefetch_failed_ms = lv_tick_get();
-			pthread_mutex_lock(&prefetch_lock);
-			if (prefetch_want_id == id) {
-				prefetch_want_id = 0;
-			}
-			pthread_mutex_unlock(&prefetch_lock);
-			continue;
+		// The list `queued_tracks` is filled by do_play(). A queue restored at
+		// boot, or extended from the player, has paths but no entries here --
+		// and an id is all the download itself needs. Falling back to a bare
+		// track (empty metadata) downloads it rather than refusing it every
+		// second for ever; the sidecars are then skipped, so an existing one is
+		// not overwritten with blanks, and the file name stands in as the title
+		// until a later session that knows the track writes the tags.
+		tidal_track_t restored = {0};
+		tidal_track_t track;
+		if (index >= 0) {
+			track = queued_tracks[index];
+		} else {
+			fprintf(stderr, "tidal: %ld has no metadata on this queue; downloading it by id\n", id);
+			restored.id = id;
+			track = restored;
 		}
-
-		tidal_track_t track = queued_tracks[index];
 		tidalcache_wait_idle();
 
 		// The request may have changed while waiting for a turn: prev is
@@ -4348,6 +4374,14 @@ void tidalpage_init(gui_config_t *cfg) {
 	// sits alongside without either overriding the other. A path that is not
 	// a Tidal one returns true immediately.
 	device_state_add_prepare_cb(tidalpage_prepare_track);
+
+	// The prefetch thread starts here, not only from do_play(). do_play() is
+	// what builds a queue from this page, but a queue can also come back from
+	// the saved state at boot, or be extended from the player: nothing called
+	// do_play() then, so nothing created the thread, and the first track the
+	// queue reached without a file had nobody to download it. It waits on its
+	// condition until the watchdog names a track.
+	prefetch_submit(0);
 
 	// The queue watchdog: tells the prefetch thread how far the ready tracks
 	// reach. One second is enough -- these are tracks, not frames.

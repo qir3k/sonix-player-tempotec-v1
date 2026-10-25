@@ -859,8 +859,12 @@ static uint32_t g_bt_idle_since;
 
 static void park_radios_if_idle(uint32_t now) {
 	// Held at now for as long as there is a reason to keep them, so `since`
-	// below is "how long has nobody wanted this".
-	if (g_screen_on || bluetooth_in_use()) {
+	// below is "how long has nobody wanted this". Receiver mode counts on its
+	// own as well as through bluetooth_in_use(): a codec change tears the A2DP
+	// link down and builds it again, and for that instant the connected flag
+	// is false while the phone is still feeding the DAC -- a park landing in
+	// that gap would take the receiver with it.
+	if (g_screen_on || bluetooth_in_use() || btreceiver_is_active()) {
 		g_bt_idle_since = now;
 	}
 	if (g_screen_on || wifi_wanted()) {
@@ -1629,8 +1633,22 @@ void power_screen_off(void) {
 	// nothing is listening for the gesture.
 	power_set_double_tap_wake(g_double_tap_wake);
 
+	// A phone feeding the DAC makes this transition audio-critical. The fade
+	// and the screensaver pre-draw below are both on the UI thread, and the
+	// capture ring is only 80 ms deep: on the one core that decodes the
+	// incoming stream they come out of the music as a gap of a second or
+	// more. Neither is needed here. The panel is going dark, and the next wake
+	// paints its own first frame over a held-back backlight (power_screen_on's
+	// wake hook and wake_repaint), so the screen goes down at once and the
+	// pre-draw waits for a wake that will not be feeding a phone.
+	bool receiver = btreceiver_is_active();
+
 	set_indevs_enabled(false); // no touch events into LVGL while the panel is down
-	fade_to(BRIGHTNESS_MIN);   // smooth dim down
+	if (receiver) {
+		backlight_write(BRIGHTNESS_MIN);
+	} else {
+		fade_to(BRIGHTNESS_MIN); // smooth dim down
+	}
 	screen_power(false);
 
 	// And left at the hold level rather than at the fade's floor: the
@@ -1648,7 +1666,12 @@ void power_screen_off(void) {
 	// page underneath flashes up before the screensaver however early the wake
 	// hook runs. Done here it costs one invisible frame and the wake shows the
 	// right thing from its very first scan-out.
-	if (g_wake_hook && g_wake_hook()) {
+	//
+	// Not in receiver mode: the pre-draw is a full-screen render on the core
+	// decoding the phone's stream (see `receiver` above), and the wake hook
+	// and wake_repaint draw the same frame over the blank panel at the next
+	// wake anyway.
+	if (!receiver && g_wake_hook && g_wake_hook()) {
 		lv_obj_invalidate(lv_layer_top());
 		lv_obj_t *scr = lv_screen_active();
 		if (scr) {

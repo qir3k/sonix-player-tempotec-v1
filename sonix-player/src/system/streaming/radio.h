@@ -172,6 +172,13 @@ bool radio_fav_contains(const char *uuid);
 void radio_fav_add(const radio_station_t *station);
 void radio_fav_remove(const char *uuid);
 
+// The cached icon of a station, when one has been downloaded (see
+// radio_station_t.favicon and fetch_favicon() in radio.c). No network and no
+// decoding: the answer is the file's path, or false when this station has never
+// played here yet. The lists draw the picture themselves; this only says where
+// it is.
+bool radio_station_art_path(const char *favicon, char *out, size_t out_size);
+
 // Why a station cannot be played here, or NULL when it can. The text is meant
 // to be shown to the user as it is.
 const char *radio_station_problem(const radio_station_t *station);
