@@ -1,4 +1,4 @@
-![Sonix Player for the TempoTec Variations V1]
+!Sonix Player for the TempoTec Variations V1
 
 **Sonix Player for the TempoTec Variations V1** follows a clear lineage: **[Jepl4r's Sonix Player](https://github.com/Jepl4r/sonix-player)**, then **[MrFox's V1 fork](https://github.com/mr-f0xx/sonix-player-tempotec-v1)**, which ported the player to the TempoTec Variations V1, and then this fork. The V1 target and firmware packaging build on MrFox's work; the additions below are maintained here. Credit for inherited player, packer and porting work remains with their original authors.
 
