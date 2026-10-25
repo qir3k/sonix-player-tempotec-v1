@@ -781,7 +781,7 @@ static void kb_variants_open(keyboard_t *kb, lv_obj_t *key, const char *cap) {
 	kb->variant_count = count;
 	for (int i = 0; i < KB_LAYOUT_MAX_VARIANTS; i++) {
 		if (i < count) {
-			lv_label_set_text(kb->variant_label[i], kblayout_variant(cap, i));
+			lv_label_set_text(kb->variant_label[i], kblayout_variant(kb->layout, cap, i));
 			lv_obj_set_hidden(kb->variant_cell[i], false);
 		} else {
 			lv_obj_set_hidden(kb->variant_cell[i], true);

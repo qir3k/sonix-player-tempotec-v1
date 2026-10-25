@@ -310,9 +310,10 @@ static const char *const ACCENTS_POLISH = "\xc4\x85\xc4\x87\xc4\x99\xc5\x82\xc5\
 static const char *const ACCENTS_ENGLISH =
 	"\xc3\xa1\xc3\xa0\xc3\xa9\xc3\xa8\xc3\xaa\xc3\xab\xc3\xad\xc3\xac\xc3\xb3\xc3\xb2\xc3\xb6\xc3\xa4\xc3\xbc\xc3\xa7\xc3\xb1";
 
-static int accent_preference(char *out, size_t size) {
+static int accent_preference(kblayout_t layout, char *out, size_t size) {
 	out[0] = '\0';
-	if (kblayout_default() == KB_LAYOUT_POLISH || config_get_int("keyboard", "swipe_lang", 0) == 1) {
+	if (layout == KB_LAYOUT_POLISH || kblayout_default() == KB_LAYOUT_POLISH ||
+		config_get_int("keyboard", "swipe_lang", 0) == 1) {
 		snprintf(out, size, "%s", ACCENTS_POLISH);
 	} else if (config_get_int("keyboard", "swipe_lang", 0) == 0) {
 		snprintf(out, size, "%s", ACCENTS_ENGLISH);
@@ -324,10 +325,10 @@ static int accent_preference(char *out, size_t size) {
 
 // The variants of `key`, the preferred language's first. Returns how many are
 // in `out` (each at most 4 bytes plus its NUL); the caller indexes into it.
-static int variants_ordered(const char *key, char out[][8], int max) {
+static int variants_ordered(kblayout_t layout, const char *key, char out[][8], int max) {
 	const char *p = variants_of(key);
 	char preference[64];
-	bool prefer = accent_preference(preference, sizeof(preference)) != 0;
+	bool prefer = accent_preference(layout, preference, sizeof(preference)) != 0;
 	int n = 0;
 
 	// First pass: the ones this language actually uses, in the language's order.
@@ -363,7 +364,7 @@ static int variants_ordered(const char *key, char out[][8], int max) {
 	return n;
 }
 
-const char *kblayout_variant(const char *key, int index) {
+const char *kblayout_variant(kblayout_t layout, const char *key, int index) {
 	static char ordered[KB_LAYOUT_MAX_VARIANTS][8];
 	static char slots[4][8];
 	static int at;
@@ -371,7 +372,7 @@ const char *kblayout_variant(const char *key, int index) {
 	if (index < 0 || index >= KB_LAYOUT_MAX_VARIANTS) {
 		return "";
 	}
-	int count = variants_ordered(key, ordered, KB_LAYOUT_MAX_VARIANTS);
+	int count = variants_ordered(layout, key, ordered, KB_LAYOUT_MAX_VARIANTS);
 	if (index >= count) {
 		return "";
 	}
