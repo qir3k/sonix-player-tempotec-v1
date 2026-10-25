@@ -850,7 +850,9 @@ static void card_databases_attach(const char *root) {
 	peq_presets_set_dir(root);
 	mseb_presets_set_dir(root);
 	qobuzcache_set_root(root);
-	tidalcache_set_root(root);
+	tidalcache_clear_card_cache(root);
+	// Tidal playback files are volatile; only explicit downloads belong on card.
+	tidalcache_set_root("/tmp");
 	podcastcache_set_root(root);
 	podcastsubs_set_root(root);
 	podcastplayed_set_root(root);

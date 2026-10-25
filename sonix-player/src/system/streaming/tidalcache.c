@@ -54,13 +54,46 @@ static void register_abandon_once(void) {
 	}
 }
 
-void tidalcache_set_root(const char *sd_root) {
+void tidalcache_set_root(const char *root) {
 	register_abandon_once();
-	if (!sd_root || !*sd_root) {
+	if (!root || !*root) {
 		cache_dir[0] = '\0';
 		return;
 	}
-	snprintf(cache_dir, sizeof(cache_dir), "%s/%s", sd_root, TIDALCACHE_DIR);
+	snprintf(cache_dir, sizeof(cache_dir), "%s/%s", root, TIDALCACHE_DIR);
+}
+
+void tidalcache_clear_card_cache(const char *sd_root) {
+	if (!sd_root || !sd_root[0]) {
+		return;
+	}
+	char old_dir[768];
+	if (snprintf(old_dir, sizeof(old_dir), "%s/%s", sd_root, TIDALCACHE_DIR) >= (int)sizeof(old_dir)) {
+		return;
+	}
+	DIR *dir = opendir(old_dir);
+	if (!dir) {
+		return;
+	}
+	int removed = 0;
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		if (entry->d_name[0] == '.') {
+			continue;
+		}
+		char path[900];
+		if (snprintf(path, sizeof(path), "%s/%s", old_dir, entry->d_name) >= (int)sizeof(path)) {
+			continue;
+		}
+		struct stat st;
+		if (lstat(path, &st) == 0 && S_ISREG(st.st_mode) && remove(path) == 0) {
+			removed++;
+		}
+	}
+	closedir(dir);
+	if (rmdir(old_dir) == 0 && removed > 0) {
+		printf("tidalcache: removed %d legacy on-card cache files\n", removed);
+	}
 }
 
 bool tidalcache_ready(void) { return cache_dir[0] != '\0'; }
