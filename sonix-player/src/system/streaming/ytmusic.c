@@ -766,10 +766,42 @@ static bool read_track(const json_doc_t *doc, int item, ytmusic_track_t *track) 
 	return track->title[0] != '\0';
 }
 
+static bool ad_result_context(const json_doc_t *doc, int renderer) {
+	for (int token = renderer; token >= 0; token = doc->toks[token].parent) {
+		if (doc->toks[token].type != JSON_STRING) {
+			continue;
+		}
+
+		char key[128];
+		if (!json_str(doc, token, key, sizeof(key))) {
+			continue;
+		}
+		if (strcasestr(key, "adSlot") || strcasestr(key, "adPlacement") ||
+			strcasestr(key, "displayAd") || strcasestr(key, "promoted") ||
+			strcasestr(key, "sponsored")) {
+			return true;
+		}
+
+		int object = doc->toks[token].parent;
+		if (object < 0 || doc->toks[object].type != JSON_OBJECT) {
+			continue;
+		}
+		if (json_obj_bool(doc, object, "isAd", false) ||
+			json_obj_bool(doc, object, "isSponsored", false) ||
+			json_obj_bool(doc, object, "isPromoted", false) ||
+			json_obj_bool(doc, object, "sponsored", false) ||
+			json_obj_bool(doc, object, "promoted", false)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static int collect_track_rows(const json_doc_t *doc, ytmusic_track_t *tracks, int limit) {
 	int count = 0;
 	for (int i = 0; i < doc->count && count < limit; i++) {
 		if (doc->toks[i].type != JSON_OBJECT || json_get(doc, i, "musicResponsiveListItemRenderer") < 0) continue;
+		if (ad_result_context(doc, i)) continue;
 		ytmusic_track_t candidate;
 		if (!read_track(doc, i, &candidate)) continue;
 		bool duplicate = false;
@@ -782,6 +814,25 @@ static int collect_track_rows(const json_doc_t *doc, ytmusic_track_t *tracks, in
 		if (!duplicate) tracks[count++] = candidate;
 	}
 	return count;
+}
+
+static bool playable_track_response(const json_doc_t *doc, int root, const char *video_id,
+									char *error, size_t error_size) {
+	char response_id[YTMUSIC_ID_MAX] = "";
+	char status[32] = "";
+	if (!json_obj_str(doc, json_get(doc, root, "videoDetails"), "videoId",
+					  response_id, sizeof(response_id)) ||
+		strcmp(response_id, video_id) != 0) {
+		set_error(error, error_size, "ytmusic_unexpected_video");
+		return false;
+	}
+	if (!json_obj_str(doc, json_get(doc, root, "playabilityStatus"), "status",
+					  status, sizeof(status)) ||
+		strcmp(status, "OK") != 0) {
+		set_error(error, error_size, "ytmusic_track_unavailable");
+		return false;
+	}
+	return true;
 }
 
 int ytmusic_search_tracks(const char *query, ytmusic_track_t *tracks, int limit,
@@ -869,6 +920,11 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 		return false;
 	}
 	int root = json_root(&doc);
+	if (!playable_track_response(&doc, root, video_id, error, error_size)) {
+		json_free(&doc);
+		free(body);
+		return false;
+	}
 	int details = json_get(&doc, root, "videoDetails");
 	if (duration) *duration = (int)json_obj_long(&doc, details, "lengthSeconds", 0);
 	if (title && title_size) json_obj_str(&doc, details, "title", title, title_size);
@@ -901,6 +957,11 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 		return false;
 	}
 	root = json_root(&doc);
+	if (!playable_track_response(&doc, root, video_id, error, error_size)) {
+		json_free(&doc);
+		free(body);
+		return false;
+	}
 	details = json_get(&doc, root, "videoDetails");
 	if (duration && !*duration) *duration = (int)json_obj_long(&doc, details, "lengthSeconds", 0);
 	if (title && title_size && !title[0]) json_obj_str(&doc, details, "title", title, title_size);

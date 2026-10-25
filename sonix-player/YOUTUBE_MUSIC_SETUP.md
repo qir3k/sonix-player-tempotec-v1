@@ -42,4 +42,9 @@ Search and the Top Songs chart browse are available in the YouTube Music page.
 Selecting a result resolves an audio-only AAC stream, caches it temporarily,
 and hands that audio file to the player's existing decoder. The chart and
 playback requests use YouTube Music's unofficial InnerTube interface, which
-Google can change without notice.
+Google can change without notice. Search and chart results inside explicitly
+marked ad, sponsored, or promoted renderers are skipped. Before playback, the
+player also checks that YouTube returned the requested video and marked it
+playable; only its audio formats are used, never ad-placement media. This is a
+narrow audio-playback safeguard, not a network-wide ad blocker, and it does
+not include SponsorBlock.
