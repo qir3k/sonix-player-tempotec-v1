@@ -777,6 +777,7 @@ static const char *bulk_action_label(bulk_kind_t kind) {
 	}
 }
 
+static void start_worker(void);
 static void bulk_begin(bulk_kind_t kind);
 
 static void bulk_sheet_action(void *user) {
@@ -3245,7 +3246,6 @@ static void search_loaded_cb(lv_event_t *e) {
 static void build_search_page(gui_config_t *cfg) {
 	const bool compact = cfg->screen_width < 320;
 	const int field_h = compact ? 44 : 62;
-	const int gap = compact ? 6 : 10;
 	const int pill_h = compact ? 30 : 52;
 	const int clear_side = compact ? 40 : 56;
 
