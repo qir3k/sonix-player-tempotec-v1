@@ -144,14 +144,9 @@ static void refresh(void) {
 		lv_label_set_text(title_label, track.title);
 		lv_obj_set_hidden(title_label, false);
 
-		// Artist and album on one line, with whichever of them there is.
-		char line[sizeof(track.artist) + sizeof(track.album) + 8];
-		if (track.artist[0] && track.album[0]) {
-			snprintf(line, sizeof(line), "%s  --  %s", track.artist, track.album);
-		} else {
-			snprintf(line, sizeof(line), "%s", track.artist[0] ? track.artist : track.album);
-		}
-		lv_label_set_text(status_label, line);
+		// Keep receiver metadata compact: show the artist below the title and
+		// never append the album name.
+		lv_label_set_text(status_label, track.artist[0] ? track.artist : tr("btreceiver_playing"));
 		return;
 	}
 

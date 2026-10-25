@@ -185,6 +185,11 @@ static long g_wake_hold_level = WAKE_HOLD_LEVEL_DEFAULT; // what a wake holds th
 static lv_timer_t *g_power_timer;
 static bool g_screen_on = true;
 static uint32_t g_screen_off_at; // lv_tick when the panel last went dark
+// In receiver mode a backlight-only blank preserves panel scan-out, so waking
+// the screen does not reset the panel or force a full-screen render on the
+// core carrying Bluetooth audio.
+static bool g_receiver_light_only;
+static bool g_resume_after_suspend;
 
 // Whether the panel is blanked, which is not the same question as whether the
 // screen is on: a wake turns the screen on first and unblanks the panel a few
@@ -1285,6 +1290,7 @@ static void suspend_to_ram(void) {
 	fputs("mem", f);
 	int rc = fclose(f);
 	int write_errno = errno;
+	g_resume_after_suspend = true;
 	// Back on before the settle window starts: whatever the module reports as
 	// it comes up falls inside the window and is ignored.
 	headset_suspend_finish();
@@ -1642,23 +1648,26 @@ void power_screen_off(void) {
 	// wake hook and wake_repaint), so the screen goes down at once and the
 	// pre-draw waits for a wake that will not be feeding a phone.
 	bool receiver = btreceiver_is_active();
+	bool light_only = receiver && g_cfg.brightness_path;
 
 	set_indevs_enabled(false); // no touch events into LVGL while the panel is down
-	if (receiver) {
-		backlight_write(BRIGHTNESS_MIN);
+	if (light_only) {
+		// Leave the framebuffer scanning its existing image. Blanking the panel
+		// resets it, and redrawing the whole interface on wake can starve the
+		// receiver's short audio buffers on this single-core device.
+		backlight_hold();
+		g_receiver_light_only = true;
 	} else {
-		fade_to(BRIGHTNESS_MIN); // smooth dim down
+		if (receiver) {
+			backlight_write(BRIGHTNESS_MIN);
+		} else {
+			fade_to(BRIGHTNESS_MIN); // smooth dim down
+		}
+		screen_power(false);
+		backlight_hold();
 	}
-	screen_power(false);
-
-	// And left at the hold level rather than at the fade's floor: the
-	// backlight driver restores the level it held before the blank when the
-	// panel is next unblanked, and the floor is a level the panel is *looked
-	// at through*. Left at a true zero the panel comes back invisible whatever
-	// the driver restores, which is half of what keeps the wake free of the
-	// white reset frame (see WAKE_HOLD_LEVEL_DEFAULT). The user's level is not
-	// lost: the wake's fade ends at g_cfg.brightness.
-	backlight_hold();
+	// For a powered-down panel this hold protects against the white reset frame
+	// on wake. The light-only receiver path already wrote the same hold above.
 
 	// With the panel dark, draw what the next wake should open on straight
 	// into the framebuffer. Unblanking presents whatever the framebuffer
@@ -1737,6 +1746,7 @@ void power_screen_on(void) {
 	}
 	g_screen_on = true;
 	uint32_t wake_started = monotonic_ms();
+	bool fast_receiver_wake = g_receiver_light_only && !g_resume_after_suspend && btreceiver_is_active();
 
 	// And disarms the automatic-shutdown RTC alarm: there is a user. The
 	// shutdown timer goes back to zero here and stays there until the screen is
@@ -1757,10 +1767,33 @@ void power_screen_on(void) {
 	// lose the core or the card (see restore_radios_if_due). Marked and left to
 	// the tick, which brings them back once the picture is up and the music has
 	// a quiet moment.
-	if (g_wifi_parked || g_bt_parked) {
+	if (!fast_receiver_wake && (g_wifi_parked || g_bt_parked)) {
 		g_radio_restore_pending = true;
 		g_radio_restore_at = monotonic_ms() + WAKE_RADIO_RESTORE_MS;
 	}
+	if (fast_receiver_wake) {
+		// The panel never stopped scanning, so this is only a backlight and input
+		// wake. No Bluetooth calls, panel reset, screensaver work or synchronous
+		// full-screen repaint belongs on the receiver's audio path.
+		backlight_write(g_cfg.brightness);
+		standby_timers_set_paused(false);
+		if (g_refr_timer) {
+			lv_timer_resume(g_refr_timer);
+		}
+		lv_timer_t *anim_timer = lv_anim_get_timer();
+		if (anim_timer) {
+			lv_timer_resume(anim_timer);
+		}
+		set_indevs_enabled(true);
+		indev_timers_set_paused(false);
+		g_receiver_light_only = false;
+		led_set_standby(false);
+		lv_display_trigger_activity(g_disp);
+		fprintf(stderr, "power: receiver screen on (backlight only, wake %ums)\n",
+				(unsigned)(monotonic_ms() - wake_started));
+		return;
+	}
+	g_receiver_light_only = false;
 
 	// The level the screen comes back at is the one the user chose, however dim.
 	// No too-dim floor is applied here: that guess belongs at init, where the
@@ -1844,6 +1877,7 @@ void power_screen_on(void) {
 	lv_display_trigger_activity(g_disp);
 
 	led_set_standby(false);
+	g_resume_after_suspend = false;
 
 	fprintf(stderr, "power: screen on (brightness=%ld, wake %ums)\n", g_cfg.brightness,
 			(unsigned)(monotonic_ms() - wake_started));
