@@ -927,9 +927,6 @@ static void *usb_thread(void *arg) {
 	// for. Cleared when VBUS finally drops.
 	bool await_unplug = false;
 
-	// Said once, not once a second.
-	bool said_adb = false;
-
 	// The gadget is unbound from the controller while the device sits in
 	// standby with no cable (see below).
 	bool parked = false;
@@ -970,7 +967,6 @@ static void *usb_thread(void *arg) {
 		if (owner != seen_owner) {
 			seen_owner = owner;
 			await_unplug = false;
-			said_adb = false;
 		}
 		if (exported && !storage_active) {
 			exported = false;
@@ -1061,19 +1057,8 @@ static void *usb_thread(void *arg) {
 			continue;
 		}
 
-		// ADB is on: the cable is here to carry a shell, not to be a card
-		// reader. Exporting the card now unmounts it from under that shell --
-		// which is why /mnt/sd_0 came back "Read-only file system" over ADB --
-		// and the stock firmware does not do it either. Leave the card where
-		// it is.
-		if (adb_is_running()) {
-			if (!said_adb) {
-				fprintf(stderr, "usb: ADB is running; the card stays mounted (no mass storage)\n");
-				said_adb = true;
-			}
-			continue;
-		}
-		said_adb = false;
+		// ADB's gadget can export storage alongside the shell; locked_export()
+		// adds the mass-storage function to that gadget when it owns the port.
 
 		// VBUS alone is not a PC -- a wall charger raises it too, and taking
 		// the card away (stopping the music with it) for a power brick was

@@ -146,7 +146,9 @@ static void align_title_ink(lv_obj_t *label, int center_y) {
 	int ink_center = (ink_top + ink_bottom) / 2;
 	int y = center_y - ink_center - lv_obj_get_style_pad_top(label, LV_PART_MAIN) -
 		lv_obj_get_style_border_width(label, LV_PART_MAIN);
-	lv_obj_align(label, LV_ALIGN_TOP_LEFT, lv_obj_get_x(label), y);
+	// Only move vertically. Re-aligning with lv_obj_get_x() feeds a computed
+	// coordinate back as an alignment offset and can change X on padded parents.
+	lv_obj_set_y(label, y);
 }
 
 static title_entry_t *title_entry(lv_obj_t *label) {
