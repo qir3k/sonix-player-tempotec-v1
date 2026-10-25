@@ -456,6 +456,18 @@ static void wireless_screen_loaded_cb(lv_event_t *e) {
 	}
 }
 
+static void wireless_screen_unloaded_cb(lv_event_t *e) {
+	(void)e;
+	// Tokyo's live service panel and the six-tile page for the other themes
+	// each have their own scroll position. Reset both when leaving the tab.
+	if (tokyo_wireless_panel) {
+		lv_obj_scroll_to_y(tokyo_wireless_panel, 0, LV_ANIM_OFF);
+	}
+	if (wireless_grid) {
+		lv_obj_scroll_to_y(wireless_grid, 0, LV_ANIM_OFF);
+	}
+}
+
 static void wireless_timer_cb(lv_timer_t *timer) {
 	(void)timer;
 	if (lv_screen_active() == wireless_screen) {
@@ -482,5 +494,6 @@ void wireless_init(gui_config_t *cfg) {
 	wireless_refresh_theme();
 	theme_register_refresh(wireless_refresh_theme);
 	lv_obj_add_event_cb(wireless_screen, wireless_screen_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(wireless_screen, wireless_screen_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 	wireless_timer = lv_timer_create(wireless_timer_cb, 1000, NULL);
 }

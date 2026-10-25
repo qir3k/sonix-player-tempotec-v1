@@ -133,13 +133,16 @@ static grid_entry_t entry_for_tile(music_tile_id_t id) {
 static int music_build_entries(grid_entry_t *entries, int max) {
 	music_tile_id_t active[MUSIC_TILE_COUNT];
 	int count = musicsettings_main_tiles(active, MUSIC_TILE_COUNT);
-	if (count > max) {
-		count = max;
+	int built = 0;
+	for (int i = 0; i < count && built < max; i++) {
+		// Search stays in the header on the full-size layout. It is part of the
+		// saved order for Tokyo's tile grid, where it is an ordinary tile.
+		if (active[i] == MUSIC_TILE_SEARCH) {
+			continue;
+		}
+		entries[built++] = entry_for_tile(active[i]);
 	}
-	for (int i = 0; i < count; i++) {
-		entries[i] = entry_for_tile(active[i]);
-	}
-	return count;
+	return built;
 }
 
 static void playlists_cb(lv_event_t *e) {
@@ -312,6 +315,8 @@ static tokyo_tile_spec_t tokyo_spec_for_tile(music_tile_id_t id) {
 	case MUSIC_TILE_MOST_PLAYED:
 		return (tokyo_tile_spec_t){"music_most_played", &icon_most_played, THEME_SEMANTIC_PURPLE, false,
 								   shortcut_most_played_cb};
+	case MUSIC_TILE_SEARCH:
+		return (tokyo_tile_spec_t){"search", &icon_search, THEME_SEMANTIC_AMBER, false, browse_search_cb};
 	case MUSIC_TILE_BROWSE:
 	default:
 		return (tokyo_tile_spec_t){"music_browse", &icon_folder, THEME_SEMANTIC_GREEN, false, browse_music_cb};
@@ -393,15 +398,13 @@ static void tokyo_music_populate(void) {
 
 	music_tile_id_t active[MUSIC_TILE_COUNT];
 	int count = musicsettings_main_tiles(active, MUSIC_TILE_COUNT);
-	int browse_n = count < 3 ? count : 3;
+	int browse_n = count < TOKYO_BROWSE_COUNT ? count : TOKYO_BROWSE_COUNT;
 
 	for (int i = 0; i < browse_n; i++) {
 		tokyo_tile_spec_t spec = tokyo_spec_for_tile(active[i]);
 		bool two_lines = strchr(tr(spec.label), ' ') != NULL;
 		make_browse_button(tokyo_browse_grid, spec.label, spec.icon, spec.tone, two_lines, spec.callback, i);
 	}
-	make_browse_button(tokyo_browse_grid, "search", &icon_search, THEME_SEMANTIC_AMBER, false, browse_search_cb,
-					   browse_n);
 
 	int row_idx = 0;
 	for (int i = browse_n; i < count; i++) {
@@ -731,6 +734,18 @@ static void screen_loaded_cb(lv_event_t *e) {
 	music_recent_refresh();
 }
 
+static void screen_unloaded_cb(lv_event_t *e) {
+	(void)e;
+	// Both layouts can scroll: Tokyo's stacked page uses its own panel, while
+	// the other themes use the grid. Leave either at the top before hiding it.
+	if (tokyo_music_panel) {
+		lv_obj_scroll_to_y(tokyo_music_panel, 0, LV_ANIM_OFF);
+	}
+	if (tile_grid) {
+		lv_obj_scroll_to_y(tile_grid, 0, LV_ANIM_OFF);
+	}
+}
+
 static void recent_timer_cb(lv_timer_t *timer) {
 	(void)timer;
 	if (lv_screen_active() != music_screen) {
@@ -792,6 +807,7 @@ void music_init(gui_config_t *cfg) {
 
 	empty_panel = gridpage_empty_panel(music_screen, cfg, &icon_music_note, "music_no_database", scan_cb);
 	lv_obj_add_event_cb(music_screen, screen_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(music_screen, screen_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 	tokyo_music_build(cfg);
 
 	music_refresh_layout();

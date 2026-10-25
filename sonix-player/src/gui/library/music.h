@@ -15,12 +15,13 @@ typedef enum {
 	MUSIC_TILE_PLAYLISTS,
 	MUSIC_TILE_MOST_PLAYED,
 	MUSIC_TILE_BROWSE,
+	MUSIC_TILE_SEARCH,
 	MUSIC_TILE_COUNT,
 } music_tile_id_t;
 
 // The Music page: the library's index tiles (all tracks, albums, artists,
 // album artists, genres, years, playlists, most played) plus the file browser,
-// with library settings, playlists, favourites and search on the corner buttons.
+// with library settings, playlists and favourites; Search is reorderable too.
 extern lv_obj_t *music_screen;
 
 void music_init(gui_config_t *cfg);

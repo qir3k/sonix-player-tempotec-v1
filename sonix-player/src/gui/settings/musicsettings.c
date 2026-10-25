@@ -1707,6 +1707,7 @@ static const struct {
 	[MUSIC_TILE_PLAYLISTS] = {"playlists", "playlists", &icon_list_music},
 	[MUSIC_TILE_MOST_PLAYED] = {"most_played", "music_most_played", &icon_most_played},
 	[MUSIC_TILE_BROWSE] = {"browse", "music_browse", &icon_folder},
+	[MUSIC_TILE_SEARCH] = {"search", "search", &icon_search},
 };
 
 const char *musicsettings_tile_label(music_tile_id_t id) {
@@ -1770,9 +1771,20 @@ static void load_tile_arrangement(music_tile_id_t *active, int *active_count, mu
 	int hid_n = parse_tile_list(hidden_csv, hidden, MUSIC_TILE_COUNT, seen);
 
 	for (int i = 0; i < MUSIC_TILE_COUNT; i++) {
+		// Search used to be fixed in Tokyo's fourth browse-grid slot. Keep that
+		// position while upgrading older saved arrangements that do not list it.
+		if (i == MUSIC_TILE_SEARCH) {
+			continue;
+		}
 		if (!seen[i] && act_n < MUSIC_TILE_COUNT) {
 			active[act_n++] = (music_tile_id_t)i;
 		}
+	}
+	if (!seen[MUSIC_TILE_SEARCH] && act_n < MUSIC_TILE_COUNT) {
+		int insert = act_n < 3 ? act_n : 3;
+		memmove(&active[insert + 1], &active[insert], (size_t)(act_n - insert) * sizeof(active[0]));
+		active[insert] = MUSIC_TILE_SEARCH;
+		act_n++;
 	}
 	if (act_n == 0 && hid_n > 0) {
 		active[act_n++] = hidden[0];
@@ -2268,7 +2280,7 @@ static void build_rearrange_page(gui_config_t *cfg) {
 	lv_obj_set_style_text_font(rearrange_in_use_count, bp_is_tempotec_v1() ? &font_ui_14 : &font_ui_20, 0);
 	lv_obj_align(rearrange_in_use_count, LV_ALIGN_TOP_RIGHT, 0, 4);
 
-	rearrange_others_heading = make_rearrange_heading(rearrange_body, "not_in_use", 0);
+	rearrange_others_heading = make_rearrange_heading(rearrange_body, "controlcentre_not_in_use", 0);
 
 	for (int i = 0; i < MUSIC_TILE_COUNT; i++) {
 		build_rearrange_row(i);
