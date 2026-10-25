@@ -987,12 +987,12 @@ int main(int argc, char **argv) {
 	config_set("keyboard", "layouts", "polish,english");
 	lang_init(argv[1]);
 	assert(kblayout_default() == KB_LAYOUT_POLISH);
-	assert(strcmp(kblayout_variant("e", 0), "\xc4\x99") == 0);
+	assert(strcmp(kblayout_variant(KB_LAYOUT_POLISH, "e", 0), "\xc4\x99") == 0);
 	int e_variants = kblayout_variant_count("e");
 	assert(e_variants == 7);
 	bool found_circumflex_e = false;
 	for (int i = 1; i < e_variants; i++) {
-		found_circumflex_e = found_circumflex_e || strcmp(kblayout_variant("e", i), "\xc3\xaa") == 0;
+		found_circumflex_e = found_circumflex_e || strcmp(kblayout_variant(KB_LAYOUT_POLISH, "e", i), "\xc3\xaa") == 0;
 	}
 	assert(found_circumflex_e);
 	check_strings(argv[1]);
