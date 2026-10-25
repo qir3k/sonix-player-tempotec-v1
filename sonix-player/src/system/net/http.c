@@ -726,7 +726,10 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 				 body_len);
 	}
 
-	char request[4096];
+	// Authenticated account cookies can be several kilobytes. Keep the
+	// assembled request larger than the response header buffer so callers can
+	// send a full session header without silent truncation.
+	char request[HTTP_HEADER_BUFFER + 1024];
 	int n = snprintf(request, sizeof(request),
 					 "%s %s HTTP/1.0\r\n"
 					 "Host: %s\r\n"

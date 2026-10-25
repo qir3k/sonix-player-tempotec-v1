@@ -246,6 +246,7 @@ static const char *const KEEP[] = {
 	"ebook_config.ini",
 	"ebook_config.ini.tmp",
 	"tidal_session.ini",
+	"ytmusic_session.ini",
 	"lastfm.session",
 };
 

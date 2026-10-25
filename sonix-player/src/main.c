@@ -2290,17 +2290,15 @@ int main(int argc, char **argv) {
 	// cache and the code that cleans it must agree on one root.
 	const char *card_root = storage_sd_root();
 
-	// The streaming keys may be on the card instead of in the image. Every
-	// published firmware is built without them -- an image anyone can download
-	// cannot carry a service's application keys -- so this is how streaming is
-	// turned on afterwards, with no rebuild and no reflash: copy
-	// streaming-keys.ini to the card's root and restart. The card is mounted
-	// only now, which is why the look at startup could not see it.
+	// The streaming keys may be on the card instead of in the image. Published
+	// builds can ship without service credentials, while personal builds may
+	// already carry some. Card values fill missing providers without replacing
+	// keys in the image. The card is mounted only now, which is why the look at
+	// startup could not see it.
 	//
-	// The three services read the keys once, at their own startup, and that has
-	// already happened: they are told again only when the card changed the
-	// answer. Both are still before gui_init(), and the pages are built after
-	// it, so the Qobuz page is drawn the one way or the other on first sight.
+	// Qobuz, Tidal and Last.fm already initialized; hand them newly found keys
+	// before gui_init(). YouTube Music initializes as the Streaming page is
+	// built, after this card merge has completed.
 	if (streamkeys_load_card(card_root)) {
 		qobuz_init();
 		tidal_init();

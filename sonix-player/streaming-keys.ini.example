@@ -6,6 +6,11 @@ app_secret =
 client_id = 
 client_secret = 
 
+# Google Cloud OAuth client (TVs and Limited Input devices); enable YouTube Data API.
+[ytmusic]
+client_id = YOUR_CLIENT_ID.apps.googleusercontent.com
+client_secret = YOUR_CLIENT_SECRET
+
 [podcast]
 api_key = 
 api_secret = 

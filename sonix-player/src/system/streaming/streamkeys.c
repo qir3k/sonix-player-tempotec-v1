@@ -21,12 +21,16 @@ static char qobuz_app_id[64];
 static char qobuz_app_secret[128];
 static char tidal_client_id[64];
 static char tidal_client_secret[128];
+static char ytmusic_client_id[256];
+static char ytmusic_client_secret[256];
 static char podcast_key[64];
 static char podcast_secret[128];
 static char lastfm_key[64];
 static char lastfm_secret[64];
 static char source_path[256];
 static bool loaded_any;
+static bool merge_missing_keys;
+static bool load_added_keys;
 
 // Not a plain memset: one on a buffer about to be freed may be dropped by the
 // compiler.
@@ -121,11 +125,20 @@ static void parse_line(char *line, char section[32]) {
 			dest = tidal_client_secret;
 			dest_size = sizeof(tidal_client_secret);
 		}
+	} else if (strcmp(section, "ytmusic") == 0) {
+		if (strcmp(key, "client_id") == 0) {
+			dest = ytmusic_client_id;
+			dest_size = sizeof(ytmusic_client_id);
+		} else if (strcmp(key, "client_secret") == 0) {
+			dest = ytmusic_client_secret;
+			dest_size = sizeof(ytmusic_client_secret);
+		}
 	}
 
-	if (dest) {
+	if (dest && (!merge_missing_keys || !dest[0])) {
 		snprintf(dest, dest_size, "%s", value);
 		loaded_any = true;
+		load_added_keys = true;
 	}
 }
 
@@ -221,6 +234,7 @@ static bool parse_sealed(const char *path, unsigned char *data, size_t len) {
 
 // Reads `path`, sealed or plain. False when it is not there.
 static bool load(const char *path) {
+	load_added_keys = false;
 	FILE *f = fopen(path, "rb");
 	if (!f) {
 		return false;
@@ -254,9 +268,10 @@ static bool load(const char *path) {
 static void report(const char *path) {
 	snprintf(source_path, sizeof(source_path), "%s", path);
 
-	printf("streamkeys: from %s -- Qobuz %s, Tidal %s, Podcast %s, Last.fm %s\n", path,
+	printf("streamkeys: from %s -- Qobuz %s, Tidal %s, YouTube Music %s, Podcast %s, Last.fm %s\n", path,
 		   qobuz_app_id[0] && qobuz_app_secret[0] ? "yes" : "no",
 		   tidal_client_id[0] && tidal_client_secret[0] ? "yes" : "no",
+		   ytmusic_client_id[0] && ytmusic_client_secret[0] ? "yes" : "no",
 		   podcast_key[0] && podcast_secret[0] ? "yes" : "no",
 		   lastfm_key[0] && lastfm_secret[0] ? "yes" : "no");
 }
@@ -282,32 +297,30 @@ void streamkeys_init(void) {
 }
 
 bool streamkeys_load_card(const char *card_root) {
-	// A firmware that carries its own keys keeps them. The card is a way in
-	// for the builds that ship none, not a way to replace what an image says.
-	if (loaded_any) {
-		return false;
-	}
 	if (!card_root || !card_root[0]) {
 		return false;
 	}
 
 	char path[512];
 	const char *const names[] = {STREAMKEYS_CARD_BIN, STREAMKEYS_CARD_INI};
+	bool previous_merge = merge_missing_keys;
+	merge_missing_keys = true;
+	bool added = false;
 	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
 		snprintf(path, sizeof(path), "%s/%s", card_root, names[i]);
 		if (load(path)) {
-			// A .bin sealed with another key reads as a file and yields
-			// nothing; the .ini beside it, if there is one, still gets its
-			// turn.
-			if (!loaded_any) {
+			// An unreadable sealed file or one that adds no new keys yields to
+			// the next card file. Card values only fill gaps; image values win.
+			if (!load_added_keys) {
 				continue;
 			}
-			printf("streamkeys: the microSD card has them\n");
+			added = true;
+			printf("streamkeys: the microSD card added missing keys\n");
 			report(path);
-			return true;
 		}
 	}
-	return false;
+	merge_missing_keys = previous_merge;
+	return added;
 }
 
 static const char *or_null(const char *s) { return s[0] ? s : NULL; }
@@ -316,6 +329,8 @@ const char *streamkeys_qobuz_app_id(void) { return or_null(qobuz_app_id); }
 const char *streamkeys_qobuz_app_secret(void) { return or_null(qobuz_app_secret); }
 const char *streamkeys_tidal_client_id(void) { return or_null(tidal_client_id); }
 const char *streamkeys_tidal_client_secret(void) { return or_null(tidal_client_secret); }
+const char *streamkeys_ytmusic_client_id(void) { return or_null(ytmusic_client_id); }
+const char *streamkeys_ytmusic_client_secret(void) { return or_null(ytmusic_client_secret); }
 
 const char *streamkeys_podcast_key(void) { return or_null(podcast_key); }
 const char *streamkeys_podcast_secret(void) { return or_null(podcast_secret); }
