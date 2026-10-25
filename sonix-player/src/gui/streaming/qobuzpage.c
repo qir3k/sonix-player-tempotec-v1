@@ -847,6 +847,7 @@ static void fill_list(int from) {
 	}
 
 	lv_label_set_text(list_title, result_title);
+	settingsrow_title_realign(list_title);
 }
 
 // ---------------------------------------------------------------------------

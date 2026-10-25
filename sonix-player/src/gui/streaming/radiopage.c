@@ -917,6 +917,7 @@ static void row_clicked_cb(lv_event_t *e) {
 		const char *value = terms[index].name;
 		snprintf(terms_title, sizeof(terms_title), "%s", lv_label_get_text(list_title));
 		lv_label_set_text(list_title, terms[index].label);
+		settingsrow_title_realign(list_title);
 		stations_from_terms = true;
 
 		list_mode = LIST_STATIONS;
@@ -1489,6 +1490,7 @@ static bool list_back_guard(void) {
 	page_loading = false;
 	page_append = false;
 	lv_label_set_text(list_title, terms_title);
+	settingsrow_title_realign(list_title);
 	sort_button_update();
 	list_rebuild();
 	set_message("loading");
@@ -1510,6 +1512,7 @@ static void open_browse(radio_browse_t kind, const char *title) {
 	page_append = false;
 
 	lv_label_set_text(list_title, tr(title));
+	settingsrow_title_realign(list_title);
 	sort_button_update();
 	list_rebuild();
 	set_message("loading");
@@ -1552,6 +1555,7 @@ static void open_recommended(void) {
 	page_append = false;
 
 	lv_label_set_text(list_title, tr("radio_recommended"));
+	settingsrow_title_realign(list_title);
 	sort_button_update();
 	list_rebuild();
 	set_message("loading");
@@ -1576,6 +1580,7 @@ static void open_stored(list_mode_t mode, const char *title) {
 	page_loading = false;
 	page_append = false;
 	lv_label_set_text(list_title, tr(title));
+	settingsrow_title_realign(list_title);
 	sort_button_update();
 	list_reload_stored();
 	list_rebuild();
@@ -2409,6 +2414,7 @@ static void run_search(void) {
 	snprintf(page_value, sizeof(page_value), "%s", text);
 
 	lv_label_set_text(list_title, text);
+	settingsrow_title_realign(list_title);
 	sort_button_update();
 	list_rebuild();
 	set_message("loading");

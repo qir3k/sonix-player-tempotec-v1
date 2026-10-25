@@ -79,13 +79,87 @@ static void fit_title(lv_obj_t *label, int width);
 // step each one settled on was chosen at the old size. Its width is the
 // label's own, which is what both callers of fit_title() pass.
 #define SETTINGSROW_MAX_TITLES 160
-static lv_obj_t *titles[SETTINGSROW_MAX_TITLES];
+typedef struct {
+	lv_obj_t *label;
+	int center_y;
+} title_entry_t;
+
+static title_entry_t titles[SETTINGSROW_MAX_TITLES];
 static int title_count;
+
+// UTF-8 codepoint reader for measuring the visible glyph bounds in a title.
+static uint32_t title_next_codepoint(const unsigned char **text) {
+	unsigned char a = *(*text)++;
+	if (a < 0x80) return a;
+	if ((a & 0xE0) == 0xC0 && (**text & 0xC0) == 0x80) {
+		uint32_t cp = ((uint32_t)(a & 0x1F) << 6) | (**text & 0x3F);
+		(*text)++;
+		return cp;
+	}
+	if ((a & 0xF0) == 0xE0 && (*text)[0] && (*text)[1] && ((*text)[0] & 0xC0) == 0x80 &&
+		((*text)[1] & 0xC0) == 0x80) {
+		uint32_t cp = ((uint32_t)(a & 0x0F) << 12) | ((uint32_t)((*text)[0] & 0x3F) << 6) | ((*text)[1] & 0x3F);
+		*text += 2;
+		return cp;
+	}
+	if ((a & 0xF8) == 0xF0 && (*text)[0] && (*text)[1] && (*text)[2] && ((*text)[0] & 0xC0) == 0x80 &&
+		((*text)[1] & 0xC0) == 0x80 && ((*text)[2] & 0xC0) == 0x80) {
+		uint32_t cp = ((uint32_t)(a & 0x07) << 18) | ((uint32_t)((*text)[0] & 0x3F) << 12) |
+				  ((uint32_t)((*text)[1] & 0x3F) << 6) | ((*text)[2] & 0x3F);
+		*text += 3;
+		return cp;
+	}
+	return 0xFFFD;
+}
+
+// Center the ink, not the font's full line box: a title made of short letters
+// and one made only of ascenders or descenders can have the same line height
+// while looking noticeably off against the back control.
+static void align_title_ink(lv_obj_t *label, int center_y) {
+	if (!label) return;
+	const lv_font_t *font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+	const char *text = lv_label_get_text(label);
+	int line_height = lv_font_get_line_height(font);
+	int ink_top = line_height;
+	int ink_bottom = 0;
+	bool has_ink = false;
+
+	if (text) {
+		const unsigned char *p = (const unsigned char *)text;
+		while (*p) {
+			uint32_t cp = title_next_codepoint(&p);
+			lv_font_glyph_dsc_t glyph;
+			if (lv_font_get_glyph_dsc(font, &glyph, cp, 0) && glyph.box_h > 0) {
+				int top = line_height - font->base_line - glyph.box_h - glyph.ofs_y;
+				int bottom = top + glyph.box_h;
+				if (!has_ink || top < ink_top) ink_top = top;
+				if (!has_ink || bottom > ink_bottom) ink_bottom = bottom;
+				has_ink = true;
+			}
+		}
+	}
+	if (!has_ink) {
+		ink_top = 0;
+		ink_bottom = line_height;
+	}
+
+	int ink_center = (ink_top + ink_bottom) / 2;
+	int y = center_y - ink_center - lv_obj_get_style_pad_top(label, LV_PART_MAIN) -
+		lv_obj_get_style_border_width(label, LV_PART_MAIN);
+	lv_obj_align(label, LV_ALIGN_TOP_LEFT, lv_obj_get_x(label), y);
+}
+
+static title_entry_t *title_entry(lv_obj_t *label) {
+	for (int i = 0; i < title_count; i++) {
+		if (titles[i].label == label) return &titles[i];
+	}
+	return NULL;
+}
 
 static void title_deleted_cb(lv_event_t *e) {
 	lv_obj_t *label = lv_event_get_target(e);
 	for (int i = 0; i < title_count; i++) {
-		if (titles[i] == label) {
+		if (titles[i].label == label) {
 			titles[i] = titles[--title_count];
 			return;
 		}
@@ -94,7 +168,9 @@ static void title_deleted_cb(lv_event_t *e) {
 
 static void refit_titles(void) {
 	for (int i = 0; i < title_count; i++) {
-		fit_title(titles[i], lv_obj_get_style_width(titles[i], LV_PART_MAIN));
+		lv_obj_t *label = titles[i].label;
+		fit_title(label, lv_obj_get_style_width(label, LV_PART_MAIN));
+		align_title_ink(label, titles[i].center_y);
 	}
 }
 
@@ -116,18 +192,17 @@ lv_obj_t *settingsrow_title(lv_obj_t *screen, gui_config_t *cfg, const char *tex
 	// instead.
 	lv_obj_set_height(label, lv_font_get_line_height(&font_ui_32));
 	fit_title(label, cfg->screen_width - left - cfg->padding - button - air);
-	// Four pixels higher than it used to sit: the title's line box carries more
-	// air above the capitals than the chevron does above its own, so aligning
-	// their tops put the words a few pixels low against the "<". The header is
-	// one row, and the words belong on the chevron's middle.
-	lv_obj_align(label, LV_ALIGN_TOP_LEFT, left,
-				 cfg->top_bar_height + cfg->padding + (cfg->screen_width < 320 ? 2 : 6));
+	// Match the visible text to the back control's center instead of using a
+	// fixed offset from the top of the page.
+	int center_y = cfg->top_bar_height + cfg->padding + button / 2;
+	lv_obj_align(label, LV_ALIGN_TOP_LEFT, left, 0);
+	align_title_ink(label, center_y);
 
 	if (title_count == 0) {
 		fonts_register_change(refit_titles);
 	}
 	if (title_count < SETTINGSROW_MAX_TITLES) {
-		titles[title_count++] = label;
+		titles[title_count++] = (title_entry_t){.label = label, .center_y = center_y};
 		lv_obj_add_event_cb(label, title_deleted_cb, LV_EVENT_DELETE, NULL);
 	}
 
@@ -452,6 +527,13 @@ void settingsrow_title_corner_slots(lv_obj_t *title, gui_config_t *cfg, int butt
 	}
 	lv_obj_set_width(title, width);
 	fit_title(title, width);
+	title_entry_t *entry = title_entry(title);
+	if (entry) align_title_ink(title, entry->center_y);
+}
+
+void settingsrow_title_realign(lv_obj_t *title) {
+	title_entry_t *entry = title_entry(title);
+	if (entry) align_title_ink(title, entry->center_y);
 }
 
 // Returns the heading settingsrow_page() created, for pages whose title is not

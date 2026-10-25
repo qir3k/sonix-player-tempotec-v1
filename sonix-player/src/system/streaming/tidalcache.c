@@ -754,7 +754,7 @@ typedef struct {
 	tidal_stream_t stream;
 
 	// FILE
-	http_stream_t http = {0};
+	http_stream_t http;
 	bool http_open;
 
 	// DASH

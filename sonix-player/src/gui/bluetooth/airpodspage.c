@@ -259,7 +259,9 @@ static void open_hold_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 
 static void redraw(const airpods_state_t *state) {
-	lv_label_set_text(settingsrow_page_title(airpodspage_screen), state->name[0] ? state->name : tr("airpods"));
+	lv_obj_t *title = settingsrow_page_title(airpodspage_screen);
+	lv_label_set_text(title, state->name[0] ? state->name : tr("airpods"));
+	settingsrow_title_realign(title);
 
 	redraw_tabbar(state);
 
