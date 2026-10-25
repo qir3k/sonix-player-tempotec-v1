@@ -3776,8 +3776,11 @@ static void pick_order_cb(lv_event_t *e) {
 // paddings -- which on a page of shared cards read as one card drawn by
 // somebody else. The shared pill passes its value as the event's user data,
 // which is what the old callback read.
+// The text is a translation key, so it has to go through settingsrow_pill(),
+// which translates it -- settingsrow_pill_text() is the variant for literal
+// labels ("MP3", "320", "feat.") and would leave the tags on screen.
 static lv_obj_t *make_order_pill(lv_obj_t *parent, const char *text, podcast_sort_t order) {
-	return settingsrow_pill_text(parent, text, (int)order, pick_order_cb);
+	return settingsrow_pill(parent, text, (int)order, pick_order_cb);
 }
 
 // The card the three pills sit in. The row wraps, unlike the skip amounts':
