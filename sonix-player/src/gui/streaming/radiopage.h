@@ -19,4 +19,9 @@ extern lv_obj_t *radiosearch_screen;
 
 void radiopage_init(gui_config_t *cfg);
 
+// The radio's own settings page, which holds the radio sleep timer's length:
+// the control centre's fourth sleep button opens it on a long press. Looked up
+// at the press rather than held, like the other three (see quickpanel.c).
+lv_obj_t *radiopage_settings_screen(void);
+
 #endif /* RADIOPAGE_H */

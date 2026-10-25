@@ -325,6 +325,7 @@ typedef enum {
 	JOB_TERMS,
 	JOB_STATIONS,
 	JOB_SEARCH,
+	JOB_RECOMMENDED,
 } job_kind_t;
 
 static pthread_mutex_t job_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -349,6 +350,123 @@ static int result_station_count;
 // page was full (and so whether to ask for another) and to work out the offset
 // of the next one.
 static int result_raw_count;
+
+// ---------------------------------------------------------------------------
+// The region and the quality bar
+//
+// Both are applied when a request is built AND again when the answer comes
+// back. The first is what makes the directory pages and pages of the right
+// stations; the second is what keeps a mirror that quietly ignores `country`
+// or `bitrateMin` -- and some of them do -- from putting back exactly what the
+// setting exists to take out.
+//
+// The bar is 320 kbps and not something like "high": the listener asked for
+// the good ones and said what good means. "Any" is one pill away in Radio
+// settings for a country where nothing that high exists.
+// ---------------------------------------------------------------------------
+#define RADIO_QUALITY_DEFAULT 320
+
+static char filter_region[64];	// the directory's name for the country, "" for all
+static int filter_min_kbps = RADIO_QUALITY_DEFAULT;
+static bool filters_loaded;
+
+static void load_filters(void) {
+	if (filters_loaded) {
+		return;
+	}
+	filters_loaded = true;
+	const char *saved = config_get("radio", "region", "");
+	snprintf(filter_region, sizeof(filter_region), "%s", saved ? saved : "");
+	long kbps = config_get_int("radio", "quality_min", RADIO_QUALITY_DEFAULT);
+	filter_min_kbps = kbps > 0 ? (int)kbps : 0;
+}
+
+const char *radio_region(void) {
+	load_filters();
+	return filter_region;
+}
+
+void radio_set_region(const char *name) {
+	load_filters();
+	snprintf(filter_region, sizeof(filter_region), "%s", name ? name : "");
+	config_set("radio", "region", filter_region);
+	config_save();
+}
+
+int radio_min_bitrate(void) {
+	load_filters();
+	return filter_min_kbps;
+}
+
+void radio_set_min_bitrate(int kbps) {
+	load_filters();
+	filter_min_kbps = kbps > 0 ? kbps : 0;
+	config_set_int("radio", "quality_min", filter_min_kbps);
+	config_save();
+}
+
+// The two cuts as query parameters, for a path that has none yet or ends in
+// one. `with_region` is false for the one list that must not be cut to the
+// region: a country's own stations, which the user asked for by name.
+static void filter_query(char *out, size_t size, bool with_region) {
+	load_filters();
+	out[0] = '\0';
+	size_t used = 0;
+	if (with_region && filter_region[0]) {
+		char encoded[128];
+		http_url_encode(filter_region, encoded, sizeof(encoded));
+		used += (size_t)snprintf(out + used, size > used ? size - used : 0, "&country=%s", encoded);
+	}
+	if (filter_min_kbps > 0 && used < size) {
+		snprintf(out + used, size - used, "&bitrateMin=%d", filter_min_kbps);
+	}
+}
+
+// Drops what the answer should not have contained, and the same station listed
+// twice. Two entries are the same station when they carry the same uuid, when
+// they point at the same stream, or when they have the same name in the same
+// country -- the directory never merged the duplicates people submitted, and
+// the same station arrives twice as "Radio Nowy Sacz" and "radio nowy sacz ".
+// The country is part of it: half the world has a station called "Radio 1".
+//
+// Not the same question as same_station() further down, which walks the list a
+// station was started from and must not lose a row: that one wants the tightest
+// possible answer, this one the loosest that is still safe.
+bool radio_station_same(const radio_station_t *a, const radio_station_t *b) {
+	if (a->uuid[0] && b->uuid[0] && strcasecmp(a->uuid, b->uuid) == 0) {
+		return true;
+	}
+	if (a->url[0] && strcasecmp(a->url, b->url) == 0) {
+		return true;
+	}
+	return a->name[0] && strcasecmp(a->name, b->name) == 0 && strcasecmp(a->country, b->country) == 0;
+}
+
+static int filter_stations(radio_station_t *list, int count) {
+	load_filters();
+	int kept = 0;
+	for (int i = 0; i < count; i++) {
+		radio_station_t *s = &list[i];
+		if (filter_min_kbps > 0 && s->bitrate < filter_min_kbps) {
+			continue;
+		}
+		bool duplicate = false;
+		for (int j = 0; j < kept; j++) {
+			if (radio_station_same(&list[j], s)) {
+				duplicate = true;
+				break;
+			}
+		}
+		if (duplicate) {
+			continue;
+		}
+		if (kept != i) {
+			list[kept] = *s;
+		}
+		kept++;
+	}
+	return kept;
+}
 
 // ---------------------------------------------------------------------------
 // Country names
@@ -576,13 +694,18 @@ static void run_terms_job(radio_browse_t kind) {
 	free(terms);
 }
 
-// Hands the parsed result over and wakes the page. Shared by the two jobs
-// that produce stations.
+// Hands the parsed result over and wakes the page. Shared by the jobs that
+// produce stations.
 static void publish_stations(char *body) {
 	radio_station_t *parsed = body ? calloc(RADIO_MAX_STATIONS, sizeof(*parsed)) : NULL;
 	int raw = 0;
 	int count = parsed ? parse_stations(body, parsed, RADIO_MAX_STATIONS, &raw) : 0;
 	free(body);
+	if (count > 0) {
+		// The same cuts the request asked the server for, applied again: see
+		// the note over filter_query().
+		count = filter_stations(parsed, count);
+	}
 
 	pthread_mutex_lock(&job_lock);
 	result_raw_count = raw;
@@ -602,6 +725,12 @@ static void run_search_job(const char *text, int offset) {
 	char encoded[512];
 	http_url_encode(text, encoded, sizeof(encoded));
 
+	// The region is not one of the cuts here: somebody typing a station's name
+	// is asking for that station, wherever it is (see radio.h). The quality bar
+	// is.
+	char filters[160];
+	filter_query(filters, sizeof(filters), false);
+
 	// `name` (not nameExact): the user is typing part of a station's name,
 	// which is exactly the case the loose form is for.
 	char path[1400];
@@ -610,8 +739,8 @@ static void run_search_job(const char *text, int offset) {
 	// failed, which is a large share of ones that play perfectly well.
 	snprintf(path, sizeof(path),
 			 "/json/stations/search?name=%s"
-			 "&order=clickcount&reverse=true&limit=%d&offset=%d",
-			 encoded, RADIO_PAGE_SIZE, offset);
+			 "&order=clickcount&reverse=true&limit=%d&offset=%d%s",
+			 encoded, RADIO_PAGE_SIZE, offset, filters);
 
 	char *body = api_get(path);
 	if (!body) {
@@ -621,6 +750,19 @@ static void run_search_job(const char *text, int offset) {
 		body = api_get(path);
 	}
 	publish_stations(body);
+}
+
+// What the listeners around here are playing: the same search endpoint with
+// nothing but the order, cut to the region and to the quality bar.
+static void run_recommended_job(int offset) {
+	char filters[160];
+	filter_query(filters, sizeof(filters), true);
+
+	char path[1400];
+	snprintf(path, sizeof(path),
+			 "/json/stations/search?order=clickcount&reverse=true&limit=%d&offset=%d%s",
+			 RADIO_PAGE_SIZE, offset, filters);
+	publish_stations(api_get(path));
 }
 
 static void run_stations_job(radio_browse_t browse, const char *value, int offset) {
@@ -636,6 +778,12 @@ static void run_stations_job(radio_browse_t browse, const char *value, int offse
 		field = "tag";
 	}
 
+	// The region, unless this is the country list itself: a country's stations
+	// were asked for by name, and cutting them to another country would answer
+	// nothing at all.
+	char filters[160];
+	filter_query(filters, sizeof(filters), browse != RADIO_BROWSE_COUNTRIES);
+
 	// Two parameters, not one. `<field>Exact` is a BOOLEAN saying how `<field>`
 	// is to be matched; it does not carry the value. The value goes in
 	// `<field>`, and the flag asks for an exact match rather than a substring
@@ -643,8 +791,8 @@ static void run_stations_job(radio_browse_t browse, const char *value, int offse
 	char path[1400];
 	snprintf(path, sizeof(path),
 			 "/json/stations/search?%s=%s&%sExact=true"
-			 "&order=clickcount&reverse=true&limit=%d&offset=%d",
-			 field, encoded, field, RADIO_PAGE_SIZE, offset);
+			 "&order=clickcount&reverse=true&limit=%d&offset=%d%s",
+			 field, encoded, field, RADIO_PAGE_SIZE, offset, filters);
 
 	char *body = api_get(path);
 
@@ -690,6 +838,8 @@ static void *worker_main(void *arg) {
 			run_terms_job(browse);
 		} else if (kind == JOB_SEARCH) {
 			run_search_job(value, offset);
+		} else if (kind == JOB_RECOMMENDED) {
+			run_recommended_job(offset);
 		} else {
 			run_stations_job(browse, value, offset);
 		}
@@ -717,6 +867,8 @@ void radio_request_stations(radio_browse_t kind, const char *value, int offset) 
 void radio_request_search(const char *text, int offset) {
 	queue_job(JOB_SEARCH, RADIO_BROWSE_LANGUAGES, text, offset);
 }
+
+void radio_request_recommended(int offset) { queue_job(JOB_RECOMMENDED, RADIO_BROWSE_LANGUAGES, NULL, offset); }
 
 radio_job_t radio_job_state(void) {
 	pthread_mutex_lock(&job_lock);

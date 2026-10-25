@@ -427,8 +427,6 @@ static const char *theme_tag(void) {
 	switch (theme_get_kind()) {
 	case THEME_KIND_LIGHT:
 		return "light";
-	case THEME_KIND_TOKYO_NIGHT:
-		return "tokyo";
 	case THEME_KIND_AMBER_ON_BLACK:
 		return "amber";
 	case THEME_KIND_OLED:
@@ -533,7 +531,7 @@ static lv_obj_t *morepage_shape(bool *tiles) {
 static void check_more_audiobooks_option(gui_config_t *cfg) {
 	// Both shapes: the tiles every board uses and the V1's function-glyph
 	// list, each rebuilt from the same entries.
-	const theme_kind_t shape_themes[] = {THEME_KIND_DARK, THEME_KIND_TOKYO_NIGHT};
+	const theme_kind_t shape_themes[] = {THEME_KIND_DARK, THEME_KIND_AMBER_ON_BLACK};
 	int shapes = bp_is_tempotec_v1() ? 2 : 1;
 
 	for (int shape = 0; shape < shapes; shape++) {

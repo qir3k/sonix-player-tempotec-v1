@@ -1161,7 +1161,6 @@ static void set_over_cover(bool on) {
 
 	// Amber on Black and OLED: the deck's own role colours, over artwork or not.
 	bool mono = theme_is_monochrome();
-	bool tokyo = theme_is_tokyo_night();
 	lv_obj_t *const text_objs[] = {song_title_label, elapsed_label, remaining_label};
 	lv_obj_t *const dim_objs[] = {song_artist_label, format_label, queue_position_label};
 	lv_obj_t *const icon_objs[] = {prev_icon, next_icon};
@@ -1173,10 +1172,6 @@ static void set_over_cover(bool on) {
 		if (mono) {
 			lv_obj_set_style_text_color(text_objs[i],
 									   theme_player_chrome_color(THEME_PLAYER_CHROME_PRIMARY), 0);
-		} else if (tokyo && text_objs[i] == song_title_label) {
-			// The track name keeps the deck's violet over artwork and over the
-			// plain page alike; the two clocks beside it stay light.
-			lv_obj_set_style_text_color(text_objs[i], theme_player_chrome_color(THEME_PLAYER_CHROME_PRIMARY), 0);
 		} else if (over) {
 			lv_obj_set_style_text_color(text_objs[i], lv_color_white(), 0);
 		} else {
@@ -1190,10 +1185,6 @@ static void set_over_cover(bool on) {
 		if (mono) {
 			lv_obj_set_style_text_color(dim_objs[i],
 									   theme_player_chrome_color(THEME_PLAYER_CHROME_SECONDARY), 0);
-		} else if (tokyo && dim_objs[i] == song_artist_label) {
-			lv_obj_set_style_text_color(dim_objs[i], theme_semantic_color(THEME_SEMANTIC_CYAN), 0);
-		} else if (tokyo && dim_objs[i] == format_label) {
-			lv_obj_set_style_text_color(dim_objs[i], theme_player_chrome_color(THEME_PLAYER_CHROME_SECONDARY), 0);
 		} else if (over) {
 			lv_obj_set_style_text_color(dim_objs[i], lv_color_make(200, 200, 200), 0);
 		} else {
@@ -1223,11 +1214,6 @@ static void set_over_cover(bool on) {
 		if (mono) {
 			lv_obj_set_style_image_recolor(icon_objs[i],
 									   theme_player_chrome_color(THEME_PLAYER_CHROME_PRIMARY), 0);
-			lv_obj_set_style_image_recolor_opa(icon_objs[i], LV_OPA_COVER, 0);
-		} else if (tokyo) {
-			// The skip glyphs are cyan on this deck whether or not artwork is
-			// behind them: the blurred backdrop is dark in either case.
-			lv_obj_set_style_image_recolor(icon_objs[i], theme_semantic_color(THEME_SEMANTIC_CYAN), 0);
 			lv_obj_set_style_image_recolor_opa(icon_objs[i], LV_OPA_COVER, 0);
 		} else if (over) {
 			lv_obj_set_style_image_recolor(icon_objs[i], lv_color_white(), 0);
@@ -1337,22 +1323,16 @@ static lv_color_t chrome_accent(void) {
 	if (theme_is_monochrome()) {
 		return theme_player_chrome_color(THEME_PLAYER_CHROME_PLAYBACK);
 	}
-	// Tokyo Night's play/pause glyph, and whatever else lights up with it,
-	// wears the deck's violet rather than the theme accent: the accent stays
-	// with the progress bar, which is what the palette preview promises.
-	if (theme_is_tokyo_night()) {
-		return theme_player_chrome_color(THEME_PLAYER_CHROME_PLAYBACK);
-	}
 	return layout_wave_now ? alt_mark() : theme()->accent;
 }
 
 // What the played stretch of the progress bar and the middle of its knob are
 // drawn in. Its own answer and not chrome_accent()'s: the two have never been
-// the same colour on every palette -- Tokyo Night's bar keeps the theme
-// accent while its play glyph wears the deck's violet -- so the cover tint
-// needs a way to take the bar over that leaves that alone. The knob's white
-// ring and the unplayed stretch are set when the page is built and when the
-// theme changes, and are no part of this either way.
+// the same colour on every palette -- a monochrome deck's bar and play glyph
+// wear the accent while its chrome is drawn in the deck's own roles -- so the
+// cover tint needs a way to take the bar over that leaves that alone. The
+// knob's white ring and the unplayed stretch are set when the page is built
+// and when the theme changes, and are no part of this either way.
 static lv_color_t progress_tint(void) {
 	// Album Art Max is the record's page and not the theme's: there the sleeve's
 	// colour is the design, whether or not the cover tint is switched on for the
@@ -1410,9 +1390,8 @@ static void paint_overflow_tint(void) {
 	lv_color_t color;
 	if (album_tone && (cover_tint || layout_wave_now)) {
 		color = chrome_accent();
-	} else if (theme_is_monochrome() || theme_is_tokyo_night()) {
-		// The deck's own muted role: grey-violet on Tokyo Night, the muted
-		// grey on Amber on Black and OLED.
+	} else if (theme_is_monochrome()) {
+		// The deck's own muted role: the muted grey on Amber on Black and OLED.
 		color = theme_player_chrome_color(THEME_PLAYER_CHROME_OVERFLOW);
 	} else {
 		color = lv_color_make(150, 150, 150);
@@ -4955,18 +4934,15 @@ static void update_fav_button(void) {
 	// function runs last on every track change, so anything that tints it
 	// elsewhere is overwritten.
 	//
-	// Tokyo Night matches the artist line's cyan in both states. Amber's marker
-	// stays in the subdued brown sampled from the reference, instead of
-	// competing with the cream title and playback accent; OLED's in its muted
-	// grey, for the same reason.
+	// Amber's marker stays in the subdued brown sampled from the reference,
+	// instead of competing with the cream title and playback accent; OLED's in
+	// its muted grey, for the same reason.
 	lv_color_t favorite_color;
 	if (layout_aam_now) {
 		// The sleeve's colour, as everything else on that page is: the star sits
 		// between two other marks drawn in it, and a grey one among them would
 		// read as the button being unavailable.
 		favorite_color = aam_accent();
-	} else if (theme_is_tokyo_night()) {
-		favorite_color = theme_semantic_color(THEME_SEMANTIC_CYAN);
 	} else if (theme_is_monochrome()) {
 		favorite_color = theme_player_chrome_color(THEME_PLAYER_CHROME_MUTED);
 	} else if (starred) {
@@ -5276,7 +5252,7 @@ static void update_repeat_button(void) {
 	// Active playback modes use the reference's dark orange. Shuffle/repeat
 	// when inactive has its own deep-brown role rather than the artist color.
 	lv_color_t active = chrome_accent();
-	lv_color_t inactive = (theme_is_monochrome() || theme_is_tokyo_night())
+	lv_color_t inactive = theme_is_monochrome()
 							  ? theme_player_chrome_color(THEME_PLAYER_CHROME_SHUFFLE_IDLE)
 							  : lv_color_make(100, 100, 100);
 

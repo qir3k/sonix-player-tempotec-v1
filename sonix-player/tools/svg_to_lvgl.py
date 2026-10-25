@@ -216,6 +216,9 @@ ICONS = [
     ("sleep-timer-music.svg", "sleep_music_quick", 46),
     ("sleep-timer-audiobook.svg", "sleep_audiobook_quick", 46),
     ("sleep-timer-podcast.svg", "sleep_podcast_quick", 46),
+    # The fourth timer: the same moon, with a station's waves beside it, so the
+    # radio's button can be told from the other three in the control centre.
+    ("sleep-timer-radio.svg", "sleep_radio_quick", 46),
     # Gapless: two drawings and not one recoloured, because what changes is
     # the gap itself -- the two halves apart while off, closed up while on.
     ("gapless-on-quick.svg", "gapless_on_quick", 46),

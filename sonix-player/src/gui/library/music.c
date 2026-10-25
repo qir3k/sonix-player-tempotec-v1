@@ -34,10 +34,20 @@ lv_obj_t *music_screen;
 #define TOKYO_RECENT_COUNT 2
 #define TOKYO_BROWSE_COUNT 4
 #define TOKYO_SHORTCUT_COUNT (MUSIC_TILE_COUNT + 1)
-// Rows of air kept between the fold and the Recently played band: the band
-// starts just under the fold rather than exactly on it, so the last row above
-// it (the Favourites heart) reads as the end of the first screen.
-#define RECENT_BELOW_FOLD 4
+
+// One space, and every space on this page is it.
+//
+// The page is four bands stacked in a column -- the 2x2 browse grid, the list
+// of the library's other indexes, the scan row (only while the library is
+// empty) and Recently played -- and the gap between one band and the next used
+// to be a different number in each: six of padding inside the browse card, four
+// between the bands, three between the tiles, three inside the shortcut card.
+// Four numbers that were each chosen for one band, side by side, read as
+// nothing in particular. There is one number here now, and it is used for the
+// space between the tiles, between the tiles and their card's edge, between one
+// shortcut row and the next, and between the bands themselves, so the page is
+// as even as it can be from the header down to the last recent row.
+#define MUSIC_GAP 5
 
 typedef struct {
 	lv_obj_t *button;
@@ -66,10 +76,6 @@ static lv_obj_t *tokyo_shortcut_card;
 static lv_obj_t *tokyo_recent_card;
 static lv_obj_t *tokyo_recent_empty;
 static lv_obj_t *recent_heading;
-// How far the Recently played band has been pushed to get it under the fold,
-// in px; see music_recent_below_fold(). Kept so the measurement can be done
-// from scratch every time instead of adding on top of the last answer.
-static int recent_fold_margin;
 static lv_obj_t *tokyo_scan_button;
 static int cached_queue_count = -1;
 static int cached_queue_current = -2;
@@ -162,7 +168,6 @@ static void scan_cb(lv_event_t *e) {
 
 static void music_recent_refresh(void);
 static void music_update_visibility(void);
-static void music_recent_below_fold(void);
 
 static bool recent_library_file_available(const recent_row_t *row) {
 	if (!row || !row->library_file || !row->path[0]) {
@@ -209,7 +214,9 @@ static lv_obj_t *make_browse_button(lv_obj_t *parent, const char *label_key, con
 									 theme_semantic_t tone, bool two_lines, lv_event_cb_t cb, int index) {
 	lv_obj_t *button = lv_btn_create(parent);
 	music_remove_edges(button);
-	int cell_width = (music_cfg->screen_width - 2 * music_cfg->padding - 14 - 4) / 2;
+	// The card's two sides and the gap between the two columns, all MUSIC_GAP:
+	// the tiles then sit as far from each other as from the card's edge.
+	int cell_width = (music_cfg->screen_width - 2 * music_cfg->padding - 3 * MUSIC_GAP) / 2;
 	lv_obj_set_size(button, cell_width, 36);
 	lv_obj_set_style_bg_color(button, theme_now_playing_fill(), 0);
 	lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
@@ -367,45 +374,12 @@ static lv_obj_t *music_shortcut_card(lv_obj_t *parent) {
 	lv_obj_set_style_radius(card, bp_tile_radius(), 0);
 	lv_obj_set_style_border_width(card, 0, 0);
 	lv_obj_set_style_shadow_width(card, 0, 0);
-	lv_obj_set_style_pad_all(card, 3, 0);
+	lv_obj_set_style_pad_all(card, MUSIC_GAP, 0);
+	lv_obj_set_style_pad_gap(card, MUSIC_GAP, 0);
 	lv_obj_set_scrollable(card, false);
 	lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 	return card;
-}
-
-// The first screen of the Music page ends with the Favourites row: Recently
-// played is the band that follows it, and it must start under the fold so that
-// it appears when the page is scrolled rather than on the first screen.
-//
-// How far under depends on how many browse tiles the row card holds (it is a
-// setting, and the rows come and go), so it is measured rather than guessed:
-// the band's place in the panel's content is compared with the panel's own
-// viewport, and the difference becomes the band's top margin. On a page whose
-// content already reaches past the fold the margin is nothing, and a page
-// short enough to show everything pushes it down to just below the fold.
-//
-// Recomputed from the un-margined place every time, so the number never
-// accumulates, and only written when it changes so a refresh that answers the
-// same does not relayout the panel.
-static void music_recent_below_fold(void) {
-	if (!tokyo_music_panel || !recent_heading) {
-		return;
-	}
-	lv_obj_update_layout(tokyo_music_panel);
-	int viewport = (int)lv_obj_get_content_height(tokyo_music_panel);
-	// The heading's place in the panel's content, whatever the page is
-	// scrolled to, minus the margin asked for last time: this measurement is
-	// of the layout as it would be without it.
-	int at = (int)lv_obj_get_y(recent_heading) + (int)lv_obj_get_scroll_y(tokyo_music_panel) - recent_fold_margin;
-	int want = viewport + RECENT_BELOW_FOLD - at;
-	if (want < 0) {
-		want = 0;
-	}
-	if (want != recent_fold_margin) {
-		recent_fold_margin = want;
-		lv_obj_set_style_margin_top(recent_heading, want, 0);
-	}
 }
 
 static void tokyo_music_populate(void) {
@@ -439,11 +413,6 @@ static void tokyo_music_populate(void) {
 	// control centre and the library.
 	add_shortcut_row(tokyo_shortcut_card, "favourites", &icon_heart_filled, THEME_SEMANTIC_RED, false,
 					 favourites_cb, row_idx++);
-	if (tokyo_music_panel) {
-		lv_obj_update_layout(tokyo_music_panel);
-		// The rows above the band changed height, so the fold does too.
-		music_recent_below_fold();
-	}
 }
 
 static void tokyo_music_build(gui_config_t *cfg) {
@@ -458,15 +427,12 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_style_bg_opa(tokyo_music_panel, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(tokyo_music_panel, 0, 0);
 	lv_obj_set_style_radius(tokyo_music_panel, 0, 0);
+	// The panel's own edge and the space between its bands are the same
+	// MUSIC_GAP as everything inside them, so the page reads down in even steps
+	// from the header to the last recent row.
 	lv_obj_set_style_pad_hor(tokyo_music_panel, cfg->padding, 0);
-	// Two and four, not three and five: the last shortcut row on the V1 -- the
-	// heart -- sat just under the fold, so the page opened with a scroll needed
-	// to see a section that is one tap away on every other theme. Every band
-	// here gives up a pixel or two instead, which is invisible on its own and
-	// adds up to the ~25 px that row needed; the rows themselves are a few
-	// pixels shorter for the same reason.
-	lv_obj_set_style_pad_ver(tokyo_music_panel, 2, 0);
-	lv_obj_set_style_pad_gap(tokyo_music_panel, 4, 0);
+	lv_obj_set_style_pad_ver(tokyo_music_panel, MUSIC_GAP, 0);
+	lv_obj_set_style_pad_gap(tokyo_music_panel, MUSIC_GAP, 0);
 	lv_obj_set_flex_flow(tokyo_music_panel, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(tokyo_music_panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
 	lv_obj_set_scroll_dir(tokyo_music_panel, LV_DIR_VER);
@@ -486,7 +452,7 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_style_radius(tokyo_recent_card, bp_tile_radius(), 0);
 	lv_obj_set_style_border_width(tokyo_recent_card, 0, 0);
 	lv_obj_set_style_shadow_width(tokyo_recent_card, 0, 0);
-	lv_obj_set_style_pad_all(tokyo_recent_card, 3, 0);
+	lv_obj_set_style_pad_all(tokyo_recent_card, MUSIC_GAP, 0);
 	lv_obj_set_style_pad_gap(tokyo_recent_card, 0, 0);
 	lv_obj_set_scrollable(tokyo_recent_card, false);
 	lv_obj_set_flex_flow(tokyo_recent_card, LV_FLEX_FLOW_COLUMN);
@@ -572,8 +538,11 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_style_radius(browse_card, bp_tile_radius(), 0);
 	lv_obj_set_style_border_width(browse_card, 0, 0);
 	lv_obj_set_style_shadow_width(browse_card, 0, 0);
-	lv_obj_set_style_pad_all(browse_card, 6, 0);
-	lv_obj_set_style_pad_gap(browse_card, 4, 0);
+	// The card's own padding and the space between its tiles are MUSIC_GAP too,
+	// so the card reads as another band of the same page rather than as a box
+	// with its own idea of air.
+	lv_obj_set_style_pad_all(browse_card, MUSIC_GAP, 0);
+	lv_obj_set_style_pad_gap(browse_card, MUSIC_GAP, 0);
 	lv_obj_set_scrollable(browse_card, false);
 	lv_obj_set_flex_flow(browse_card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(browse_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -589,7 +558,7 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_style_bg_opa(tokyo_browse_grid, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(tokyo_browse_grid, 0, 0);
 	lv_obj_set_style_pad_all(tokyo_browse_grid, 0, 0);
-	lv_obj_set_style_pad_gap(tokyo_browse_grid, 3, 0);
+	lv_obj_set_style_pad_gap(tokyo_browse_grid, MUSIC_GAP, 0);
 	lv_obj_set_scrollable(tokyo_browse_grid, false);
 	lv_obj_set_flex_flow(tokyo_browse_grid, LV_FLEX_FLOW_ROW_WRAP);
 	lv_obj_set_flex_align(tokyo_browse_grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -627,14 +596,17 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	lv_obj_set_style_text_font(scan_label, &font_ui_14, 0);
 
 	// Keep the browse destinations and scan action at the top. The queue-derived
-	// Recently played section belongs at the end of the scrollable Music page.
+	// Recently played section belongs at the end of the scrollable Music page,
+	// where the same MUSIC_GAP places it as any other band: it used to be pushed
+	// down by a margin measured against the fold, and that margin was rewritten
+	// whenever the page was scrolled or the queue changed -- so the band moved
+	// under the finger, and jumped back into place when the page settled.
 	lv_obj_move_to_index(browse_card, 0);
 	lv_obj_move_to_index(tokyo_shortcut_card, 1);
 	lv_obj_move_to_index(tokyo_scan_button, 2);
 	lv_obj_move_to_index(recent_heading, 3);
 	lv_obj_move_to_index(tokyo_recent_card, 4);
 	lv_obj_update_layout(tokyo_music_panel);
-	music_recent_below_fold();
 
 	player_sheet_attach_drag(tokyo_music_panel, true);
 	switcher_attach_back_gesture(tokyo_music_panel);
@@ -712,10 +684,6 @@ static void music_update_visibility(void) {
 		if (tokyo_scan_button) {
 			lv_obj_set_hidden(tokyo_scan_button, !empty_library);
 		}
-		// The scan row comes and goes above the band, so the band's place
-		// under the fold is re-measured whenever the page is shown or a
-		// refresh notices the queue.
-		music_recent_below_fold();
 	} else {
 		if (tokyo_music_panel) {
 			lv_obj_set_hidden(tokyo_music_panel, true);
