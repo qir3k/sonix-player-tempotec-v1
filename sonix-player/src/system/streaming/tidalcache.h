@@ -142,7 +142,8 @@ const char *tidalcache_dir(void);
 // MP4 does not carry. Without this sidecar the player would show
 // "12345678.flac" for every hi-res track.
 void tidalcache_write_sidecars(long track_id, const char *mime, const char *title, const char *artist,
-							   const char *album, const char *album_id, int track_number, const char *cover_url);
+							   const char *album, const char *album_id, int track_number, int duration_secs,
+							   const char *cover_url);
 
 // The same, for a caller that already holds the real local path.
 //
@@ -153,7 +154,7 @@ void tidalcache_write_sidecars(long track_id, const char *mime, const char *titl
 // write the tags beside a file that does not exist. The player then reads the
 // bare name back ("471624591.flac") for the whole first track.
 void tidalcache_write_sidecars_at(const char *path, const char *title, const char *artist, const char *album,
-								  const char *album_id, int track_number, const char *cover_url);
+								  const char *album_id, int track_number, int duration_secs, const char *cover_url);
 
 // The Tidal album id the track belongs to, read back from the sidecar. False if
 // the path is not from this cache or the sidecar does not say. Used by "Show

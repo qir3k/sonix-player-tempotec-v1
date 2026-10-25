@@ -4,6 +4,7 @@
 
 #include "lvgl/lvgl.h"
 
+#include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/settings/processespage.h"
 #include "src/gui/shell/settingsrow.h"
@@ -84,12 +85,32 @@ static void show_path(lv_obj_t *toggle, lv_obj_t *name_label, lv_obj_t *path_lab
 	}
 
 	if (path_label && name_label) {
+		lv_obj_t *card = lv_obj_get_parent(name_label);
+		bool compact = bp_is_tempotec_v1();
 		if (on) {
 			lv_label_set_text(path_label, path);
 			lv_obj_set_hidden(path_label, false);
-			lv_obj_align(name_label, LV_ALIGN_TOP_LEFT, 0, 0);
+			// These cards become two-line rows while active.  Keeping the title
+			// to one ellipsised line leaves a distinct subtitle lane below it;
+			// a wrapped title was painting through the log path on the V1.
+			if (card) {
+				lv_obj_set_height(card, compact ? 76 : 100);
+			}
+			lv_label_set_long_mode(name_label, LV_LABEL_LONG_DOT);
+			lv_obj_set_width(name_label, lv_pct(65));
+			lv_obj_set_style_pad_right(name_label, 0, 0);
+			lv_obj_set_height(name_label, lv_font_get_line_height(lv_obj_get_style_text_font(name_label, LV_PART_MAIN)));
+			lv_obj_align(name_label, LV_ALIGN_TOP_LEFT, 0, compact ? 6 : 12);
+			lv_obj_set_width(path_label, lv_pct(65));
+			lv_obj_align(path_label, LV_ALIGN_BOTTOM_LEFT, 0, compact ? -6 : -12);
 		} else {
 			lv_obj_set_hidden(path_label, true);
+			if (card) {
+				lv_obj_set_height(card, compact ? 56 : 100);
+			}
+			lv_label_set_long_mode(name_label, LV_LABEL_LONG_WRAP);
+			lv_obj_set_width(name_label, lv_pct(100));
+			lv_obj_set_style_pad_right(name_label, compact ? 60 : 84, 0);
 			lv_obj_align(name_label, LV_ALIGN_LEFT_MID, 0, 0);
 		}
 	}
@@ -110,7 +131,7 @@ static void update_bt_log_row(void) {
 static lv_obj_t *add_path_label(lv_obj_t *card) {
 	lv_obj_t *label = lv_label_create(card);
 	lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-	lv_obj_set_width(label, lv_pct(72));
+	lv_obj_set_width(label, lv_pct(65));
 	lv_obj_add_style(label, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(label, &font_ui_18, 0);
 	lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, 0, 0);

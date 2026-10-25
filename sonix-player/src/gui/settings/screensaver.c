@@ -84,9 +84,12 @@ static int strip_h;
 // down the strip now that the clock no longer sits at its foot.
 #define TITLE_SHIFT bp_pick(1, 2)
 
-// The artist follows the general line spacing, with a one-pixel upward nudge
-// so the title/artist pair stays a little tighter than the gaps below it.
-#define ARTIST_SHIFT bp_pick(3, 4)
+// The artist belongs visually halfway between the title and the clock.  It
+// used to be nudged down to tighten it to the title, but with a short artist
+// ("Paktofonika" makes the imbalance especially obvious) that left it reading
+// as a caption for the clock instead.  Lift only this line: the title, clock
+// and their clearance from the swipe mark stay where they are.
+#define ARTIST_SHIFT bp_pick(-1, 0)
 
 // The Framed style's sleeve. It keeps at least this much of the panel free on
 // either side, and above and below itself inside the area over the strip; its
