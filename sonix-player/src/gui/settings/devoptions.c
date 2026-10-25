@@ -26,8 +26,6 @@ static lv_obj_t *db_log_switch;
 static lv_obj_t *log_name_label; // rises to make room for the path when logging
 static lv_obj_t *log_path_label;
 static lv_obj_t *bt_log_switch;
-static lv_obj_t *bt_log_name_label;
-static lv_obj_t *bt_log_path_label;
 static lv_timer_t *adb_poll_timer;
 
 // Turning ADB on or off happens on its own thread and takes a second or two:
@@ -123,7 +121,11 @@ static void update_log_row(void) {
 
 static void update_bt_log_row(void) {
 	bool on = btlog_enabled();
-	show_path(bt_log_switch, bt_log_name_label, bt_log_path_label, on, on ? btlog_path() : "");
+	if (on) {
+		lv_obj_add_state(bt_log_switch, LV_STATE_CHECKED);
+	} else {
+		lv_obj_remove_state(bt_log_switch, LV_STATE_CHECKED);
+	}
 }
 
 // The path as the subtitle of a row: the first thing anybody needs to know
@@ -212,9 +214,7 @@ void devoptions_init(gui_config_t *cfg) {
 
 	// A file of its own, so it works with the log above off and is the one
 	// thing to send about a device that will not connect.
-	lv_obj_t *bt_card = settingsrow_toggle(container, "devoptions_bluetooth_log", &bt_log_switch, bt_log_toggled_cb);
-	bt_log_name_label = lv_obj_get_child(bt_card, 0);
-	bt_log_path_label = add_path_label(bt_card);
+	settingsrow_toggle(container, "devoptions_bluetooth_log", &bt_log_switch, bt_log_toggled_cb);
 	add_note(container, "devoptions_bluetooth_log_note");
 
 	// How far the boot script and the marker writer each got this boot. The
