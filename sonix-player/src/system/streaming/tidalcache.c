@@ -530,13 +530,17 @@ bool tidalcache_owns(const char *path) {
 }
 
 bool tidalcache_album_id(const char *path, char *out, size_t size) {
-	if (!tidalcache_owns(path)) {
+	return tidalcache_tag(path, "album_id", out, size);
+}
+
+bool tidalcache_tag(const char *path, const char *key, char *out, size_t size) {
+	if (!key || !tidalcache_owns(path)) {
 		if (out && size) {
 			out[0] = '\0';
 		}
 		return false;
 	}
-	return read_tag(path, "album_id", out, size);
+	return read_tag(path, key, out, size);
 }
 
 long tidalcache_track_id(const char *path) {
@@ -705,6 +709,18 @@ static pthread_mutex_t active_lock = PTHREAD_MUTEX_INITIALIZER;
 static http_stream_t *active_stream;
 static long active_track_id;
 static char active_path[512];
+static long active_done;
+static long active_total;
+static bool active_foreground;
+
+static void active_progress(long track_id, long done, long total) {
+	pthread_mutex_lock(&active_lock);
+	if (active_track_id == track_id) {
+		active_done = done;
+		active_total = total;
+	}
+	pthread_mutex_unlock(&active_lock);
+}
 
 long tidalcache_downloading_id(void) {
 	pthread_mutex_lock(&active_lock);
@@ -725,6 +741,17 @@ bool tidalcache_downloading_path(long track_id, char *out, size_t out_size) {
 	}
 	pthread_mutex_unlock(&active_lock);
 	return found;
+}
+
+void tidalcache_progress(long *done, long *total) {
+	pthread_mutex_lock(&active_lock);
+	if (done) {
+		*done = active_done;
+	}
+	if (total) {
+		*total = active_total;
+	}
+	pthread_mutex_unlock(&active_lock);
 }
 
 static volatile bool network_wanted;
@@ -752,6 +779,22 @@ void tidalcache_abandon_all(void) {
 	pthread_mutex_unlock(&active_lock);
 }
 
+bool tidalcache_cancel_background_download(long track_id) {
+	bool cancelled = false;
+	pthread_mutex_lock(&gen_lock);
+	pthread_mutex_lock(&active_lock);
+	if (active_track_id == track_id && active_track_id && !active_foreground) {
+		generation++;
+		if (active_stream) {
+			http_stream_wake(active_stream);
+		}
+		cancelled = true;
+	}
+	pthread_mutex_unlock(&active_lock);
+	pthread_mutex_unlock(&gen_lock);
+	return cancelled;
+}
+
 static unsigned current_generation(void) {
 	pthread_mutex_lock(&gen_lock);
 	unsigned value = generation;
@@ -768,6 +811,9 @@ static void download_end(download_t *d, bool ok) {
 	}
 	if (active_track_id == d->track_id) {
 		active_track_id = 0;
+		active_done = 0;
+		active_total = 0;
+		active_foreground = false;
 	}
 	if (active_path[0] && strcmp(active_path, d->path) == 0) {
 		active_path[0] = '\0';
@@ -851,6 +897,7 @@ static bool pump_file(download_t *d, long until, bool *finished) {
 		// stdio buffer.
 		fflush(d->f);
 		d->done += n;
+		active_progress(d->track_id, d->done, d->total);
 		growfile_progress(d->path, d->done);
 	}
 	return true;
@@ -907,6 +954,7 @@ static bool pump_dash(download_t *d, int count, bool *finished) {
 
 		fflush(d->f);
 		d->done = d->unwrap.written;
+		active_progress(d->track_id, d->done, 0);
 		growfile_progress(d->path, d->done);
 
 		d->next_segment++;
@@ -1055,6 +1103,7 @@ static bool start_file(download_t *d, bool *consumed, int duration_secs, char *o
 	}
 	d->http_open = true;
 	d->total = d->http.content_length;
+	active_progress(d->track_id, d->done, d->total);
 	prune(d->total > 0 ? d->total : 0);
 
 	if (!open_output(d)) {
@@ -1227,6 +1276,9 @@ bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_
 
 	pthread_mutex_lock(&active_lock);
 	active_track_id = track_id;
+	active_done = d->done;
+	active_total = 0;
+	active_foreground = foreground;
 	snprintf(active_path, sizeof(active_path), "%s", path);
 	pthread_mutex_unlock(&active_lock);
 
@@ -1252,6 +1304,9 @@ bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_
 		}
 		if (active_track_id == track_id) {
 			active_track_id = 0;
+			active_done = 0;
+			active_total = 0;
+			active_foreground = false;
 		}
 		// Only this attempt's name: never a newer download's, even though the
 		// turn makes that impossible today.

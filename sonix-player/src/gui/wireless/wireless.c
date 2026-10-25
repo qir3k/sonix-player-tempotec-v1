@@ -203,14 +203,14 @@ static lv_obj_t *wireless_card(lv_obj_t *parent, int height) {
 static lv_obj_t *radio_card(lv_obj_t *parent, const char *label, const lv_image_dsc_t *source,
 							theme_semantic_t tone, lv_obj_t *target, radio_row_t *row) {
 	lv_obj_t *card = wireless_card(parent, LV_SIZE_CONTENT);
-	lv_obj_set_style_pad_all(card, 5, 0);
-	lv_obj_set_style_pad_gap(card, 3, 0);
+	lv_obj_set_style_pad_all(card, 4, 0);
+	lv_obj_set_style_pad_gap(card, 1, 0);
 	lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
 	lv_obj_t *heading = lv_obj_create(card);
 	wireless_remove_edges(heading);
-	lv_obj_set_size(heading, lv_pct(100), 36);
+	lv_obj_set_size(heading, lv_pct(100), 34);
 	lv_obj_set_style_bg_opa(heading, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_pad_all(heading, 0, 0);
 	lv_obj_set_style_pad_column(heading, 8, 0);
@@ -221,7 +221,7 @@ static lv_obj_t *radio_card(lv_obj_t *parent, const char *label, const lv_image_
 
 	lv_obj_t *open = lv_btn_create(heading);
 	wireless_remove_edges(open);
-	lv_obj_set_size(open, wireless_cfg->screen_width - 2 * wireless_cfg->padding - 10 - 44 - 8, 36);
+	lv_obj_set_size(open, wireless_cfg->screen_width - 2 * wireless_cfg->padding - 10 - 44 - 8, 34);
 	lv_obj_set_style_bg_opa(open, LV_OPA_TRANSP, 0);
 	lv_obj_add_style(open, &theme_style_card_pressed, LV_STATE_PRESSED);
 	lv_obj_set_style_border_width(open, 0, 0);
@@ -283,7 +283,7 @@ static lv_obj_t *radio_card(lv_obj_t *parent, const char *label, const lv_image_
 
 	row->options = lv_btn_create(card);
 	wireless_remove_edges(row->options);
-	lv_obj_set_size(row->options, lv_pct(100), 30);
+	lv_obj_set_size(row->options, lv_pct(100), 26);
 	lv_obj_set_style_bg_opa(row->options, LV_OPA_TRANSP, 0);
 	lv_obj_add_style(row->options, &theme_style_card_pressed, LV_STATE_PRESSED);
 	lv_obj_set_style_border_width(row->options, 0, 0);
@@ -402,8 +402,8 @@ static void tokyo_panel_build(gui_config_t *cfg) {
 	lv_obj_set_style_pad_gap(tokyo_wireless_panel, 2, 0);
 	lv_obj_set_flex_flow(tokyo_wireless_panel, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(tokyo_wireless_panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-	lv_obj_set_scroll_dir(tokyo_wireless_panel, LV_DIR_VER);
-	lv_obj_set_scrollbar_mode(tokyo_wireless_panel, LV_SCROLLBAR_MODE_AUTO);
+	lv_obj_set_scrollable(tokyo_wireless_panel, false);
+	lv_obj_set_scrollbar_mode(tokyo_wireless_panel, LV_SCROLLBAR_MODE_OFF);
 	lv_obj_set_hidden(tokyo_wireless_panel, true);
 
 	radio_card(tokyo_wireless_panel, "wi_fi", &icon_wifi, THEME_SEMANTIC_BLUE, wifisettings_screen, &wifi_row);

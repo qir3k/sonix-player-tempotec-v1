@@ -82,11 +82,11 @@ static int strip_h;
 
 // How far the title is shifted DOWN out of its line, so the words do not slide
 // down the strip now that the clock no longer sits at its foot.
-#define TITLE_SHIFT bp_pick(4, 5)
+#define TITLE_SHIFT bp_pick(1, 2)
 
 // The artist follows the general line spacing, with a one-pixel upward nudge
 // so the title/artist pair stays a little tighter than the gaps below it.
-#define ARTIST_SHIFT bp_pick(5, 6)
+#define ARTIST_SHIFT bp_pick(3, 4)
 
 // The Framed style's sleeve. It keeps at least this much of the panel free on
 // either side, and above and below itself inside the area over the strip; its

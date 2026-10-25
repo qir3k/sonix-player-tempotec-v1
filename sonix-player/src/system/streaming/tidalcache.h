@@ -106,6 +106,10 @@ void tidalcache_set_slow_start_cb(void (*cb)(int seconds));
 // previous one is no longer needed and the bandwidth belongs to this one.
 void tidalcache_abandon_all(void);
 
+// Cancels the current non-foreground transfer (bulk download or prefetch),
+// without interrupting a track whose bytes are being used for playback.
+bool tidalcache_cancel_background_download(long track_id);
+
 // The id of the track downloading right now, 0 if none.
 long tidalcache_downloading_id(void);
 
@@ -114,6 +118,9 @@ long tidalcache_downloading_id(void);
 // another, and the file then grows under that name while the queued one does
 // not exist. False when nothing is downloading, or not for this id.
 bool tidalcache_downloading_path(long track_id, char *out, size_t out_size);
+
+// Bytes written by the active cache transfer, and the final size when known.
+void tidalcache_progress(long *done, long *total);
 
 // "Tidal needs the network", even when nothing is downloading at this instant.
 // Needed by the Wi-Fi parking logic (power.c): see the long comment on
@@ -152,6 +159,9 @@ void tidalcache_write_sidecars_at(const char *path, const char *title, const cha
 // the path is not from this cache or the sidecar does not say. Used by "Show
 // album" in the player.
 bool tidalcache_album_id(const char *path, char *out, size_t size);
+
+// A metadata field from the track's sidecar tags.
+bool tidalcache_tag(const char *path, const char *key, char *out, size_t size);
 
 // Why the last tidalcache_start() failed, as a sentence fit to display. Empty
 // on success. Per thread, like http_last_error().

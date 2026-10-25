@@ -55,7 +55,7 @@ const char *kblayout_letter(kblayout_t layout, int row, int index, bool upper);
 // string is valid until four more calls.
 #define KB_LAYOUT_MAX_VARIANTS 9
 int kblayout_variant_count(const char *key);
-const char *kblayout_variant(const char *key, int index);
+const char *kblayout_variant(kblayout_t layout, const char *key, int index);
 
 // The nine-key phone keypad, for the same alphabet. Key 0 is the punctuation
 // key; the rest carry the letters, four or five to a key.
