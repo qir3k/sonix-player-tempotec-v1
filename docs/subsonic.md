@@ -3,7 +3,7 @@
 ## Setup
 
 1. Connect the V1 to Wi-Fi.
-2. Open **Streaming → Subsonic → Server settings**. This destination is in both the regular grid and the compact Tokyo Night list.
+2. Open **Streaming → Subsonic → Server settings**. This destination is in both the regular grid and the compact V1 list.
 3. Enter the server base URL, username and password. For example, `https://music.example.com` or `http://192.168.1.20:4747`. A reverse-proxy prefix such as `/gonic` is supported; a pasted trailing `/rest/` is normalized. Use an IPv4 address or DNS name, not a literal IPv6 URL.
 4. Choose **Connect / save**. Saving an account stops existing Subsonic playback and invalidates its old browser/queue IDs; select a track again after reconnecting. A worker checks `ping.view`; the UI never waits in a socket call. No Qobuz/Tidal/Podcast application key is required.
 5. Browse **Music folders** or **Artists**, then select a track. Tracks from the **current page** become the queue (up to 200); use Previous/Next page for larger directories or albums.
