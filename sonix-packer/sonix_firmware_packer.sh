@@ -788,6 +788,18 @@ if [ \"\$boot_sel\" = \"logo:4\" ]; then boot_waited=0; while [ \$boot_waited -l
 	# Nothing this script writes belongs in the image.
 	find "$SQUASH_DIR" -name '*.packer.tmp' -type f -delete 2>/dev/null || true
 
+	# This fork's trimmed image: see personal_trim.sh next to this script. Only
+	# the personal branch carries that file, so main, dev and every other branch
+	# still build the complete asset tree -- the check costs one [ -f ].
+	#
+	# The hook lives on every branch on purpose, and the file does not: a hook
+	# carried by personal alone was deleted from it by the next merge of dev,
+	# and the release quietly grew by seven megabytes of fonts and languages.
+	if [ -f "$SCRIPT_DIR/personal_trim.sh" ]; then
+		step "[$MODEL_NAME] trimming the image for this fork's personal build"
+		"$SCRIPT_DIR/personal_trim.sh" "$SQUASH_DIR"
+	fi
+
 	ROOTFS_NEW="$OTA_DIR/rootfs.squashfs"
 
 	step "[$MODEL_NAME] building the filesystem"
