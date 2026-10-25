@@ -388,7 +388,7 @@ void btreceiverpage_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(title_label, &theme_style_text, 0);
 	lv_obj_set_style_text_font(title_label, compact ? &font_ui_18 : &font_ui_24, 0);
-	lv_obj_set_style_margin_top(title_label, compact ? 6 : 18, 0);
+	lv_obj_set_style_margin_top(title_label, compact ? 10 : 22, 0);
 	lv_label_set_text(title_label, "");
 	lv_obj_set_hidden(title_label, true);
 

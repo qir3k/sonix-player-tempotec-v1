@@ -1217,7 +1217,7 @@ void screensaver_init(gui_config_t *cfg) {
 	// where the drag gesture lives.
 	lv_obj_t *chevron_btn = lv_obj_create(saver);
 	lv_obj_set_size(chevron_btn, bp_pick(48, 80), bp_pick(30, 52));
-	lv_obj_align(chevron_btn, LV_ALIGN_BOTTOM_MID, 0, -8);
+	lv_obj_align(chevron_btn, LV_ALIGN_BOTTOM_MID, 0, -2);
 	lv_obj_set_style_bg_opa(chevron_btn, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(chevron_btn, 0, 0);
 	lv_obj_set_style_shadow_width(chevron_btn, 0, 0);
