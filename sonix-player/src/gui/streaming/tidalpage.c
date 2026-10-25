@@ -134,10 +134,39 @@ typedef struct {
 	char artist[TIDAL_NAME_MAX];
 	char album[TIDAL_TITLE_MAX];
 	char album_id[TIDAL_ID_MAX];
+	char cover_uuid[40];
 	int duration;
 	int track_number;
 	bool streamable;
 } tidal_download_track_t;
+
+// The API record stores a full, 1 KB artwork URL. The bulk queue keeps just
+// the 36-character image UUID and rebuilds the URL when that track is saved.
+static void tidal_cover_uuid_from_url(const char *url, char out[40]) {
+	out[0] = '\0';
+	const char *p = url ? strstr(url, "/images/") : NULL;
+	if (!p) {
+		return;
+	}
+	p += sizeof("/images/") - 1;
+	const char *end = strrchr(p, '/');
+	if (!end || end <= p) {
+		return;
+	}
+	size_t n = 0;
+	for (; p < end; p++) {
+		if (n >= 36) {
+			out[0] = '\0';
+			return;
+		}
+		out[n++] = *p == '/' ? '-' : *p;
+	}
+	if (n != 36) {
+		out[0] = '\0';
+		return;
+	}
+	out[n] = '\0';
+}
 
 static tidal_download_track_t bulk_download_tracks[TIDAL_MAX_HELD];
 
@@ -153,6 +182,7 @@ static void bulk_download_track_copy(int dst, const tidal_track_t *track) {
 	snprintf(bulk_download_tracks[dst].artist, sizeof(bulk_download_tracks[dst].artist), "%s", track->artist);
 	snprintf(bulk_download_tracks[dst].album, sizeof(bulk_download_tracks[dst].album), "%s", track->album);
 	snprintf(bulk_download_tracks[dst].album_id, sizeof(bulk_download_tracks[dst].album_id), "%s", track->album_id);
+	tidal_cover_uuid_from_url(track->cover, bulk_download_tracks[dst].cover_uuid);
 }
 static tidal_album_t result_albums[TIDAL_MAX_HELD];
 static tidal_artist_t result_artists[TIDAL_MAX_HELD];
@@ -717,12 +747,20 @@ static void download_layer_poll(lv_timer_t *timer) {
 	long done = 0, total = 0;
 	tidalcache_progress(&done, &total);
 	if (total > 0) {
+		lv_bar_set_mode(download_bar, LV_BAR_MODE_NORMAL);
 		int permille = done >= total ? 1000 : (int)(done * 1000 / total);
 		lv_bar_set_value(download_bar, permille, LV_ANIM_OFF);
 		lv_label_set_text_fmt(download_amount, "%.1f / %.1f MB \xC2\xB7 %d%%", (double)done / (1024.0 * 1024.0),
 							  (double)total / (1024.0 * 1024.0), permille / 10);
 	} else {
-		lv_bar_set_value(download_bar, 0, LV_ANIM_OFF);
+		// DASH tracks do not publish their final byte count. Keep a visible
+		// moving range in the bar while the byte counter reports live progress.
+		lv_bar_set_mode(download_bar, LV_BAR_MODE_RANGE);
+		lv_bar_set_value(download_bar, 1000, LV_ANIM_OFF);
+		int phase = (int)((lv_tick_get() / 3) % 1560);
+		int start = phase <= 780 ? phase : 1560 - phase;
+		lv_bar_set_start_value(download_bar, start, LV_ANIM_OFF);
+		lv_bar_set_value(download_bar, start + 220, LV_ANIM_OFF);
 		if (id) {
 			lv_label_set_text_fmt(download_amount, "%.1f MB", (double)done / (1024.0 * 1024.0));
 		} else {
@@ -2895,6 +2933,12 @@ static void *worker_main(void *arg) {
 							break;
 						}
 					}
+					char cover_url[TIDAL_URL_MAX] = "";
+					if (track->cover_uuid[0]) {
+						tidal_cover_url(track->cover_uuid, tidal_cover_px(), cover_url, sizeof(cover_url));
+					}
+					tidalcache_write_sidecars_at(path, track->title, track->artist, track->album,
+										track->album_id, track->track_number, cover_url);
 					if (!streamkeep_keep(path)) {
 						snprintf(result_error, sizeof(result_error), "%s", tr("stream_keep_failed"));
 						break;
@@ -3569,7 +3613,7 @@ static void open_downloads_cb(lv_event_t *e) {
 		titles[i] = entries[i].title;
 		artists[i] = entries[i].artist;
 	}
-	medialist_open_paths("Downloaded Tidal tracks", paths, titles, artists, count, NULL);
+	medialist_open_paths(tr("downloaded"), paths, titles, artists, count, NULL);
 	free(entries);
 	free(paths);
 	free(titles);
@@ -4233,16 +4277,16 @@ static void update_corner_buttons(void) {
 			settingsrow_place_corner_button(settings_btn, tidal_cfg, slot++);
 		}
 	}
-	if (search_btn) {
-		lv_obj_set_hidden(search_btn, !search);
-		if (search) {
-			settingsrow_place_corner_button(search_btn, tidal_cfg, slot++);
-		}
-	}
 	if (downloads_btn) {
 		lv_obj_set_hidden(downloads_btn, !downloads);
 		if (downloads) {
 			settingsrow_place_corner_button(downloads_btn, tidal_cfg, slot++);
+		}
+	}
+	if (search_btn) {
+		lv_obj_set_hidden(search_btn, !search);
+		if (search) {
+			settingsrow_place_corner_button(search_btn, tidal_cfg, slot++);
 		}
 	}
 	if (tidal_screen && tidal_cfg) {
