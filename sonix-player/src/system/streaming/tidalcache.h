@@ -32,14 +32,23 @@
 
 #define TIDALCACHE_DIR ".local/tidal-cache"
 
-// A bounded volatile playback cache. It is rooted at /tmp, never on the card;
-// manually kept tracks are copied to Music/Tidal by streamkeep.
+// The player has a writable UBIFS data partition separate from the microSD.
+// Keep whole-track playback files there instead of putting them in tmpfs RAM.
+#ifdef HOST_BUILD
+#define TIDALCACHE_TEMP_ROOT "/tmp"
+#else
+#define TIDALCACHE_TEMP_ROOT "/usr/data"
+#endif
+
+// A bounded temporary playback cache. It is rooted on internal writable
+// storage, never on the card; manually kept tracks are copied to Music/Tidal
+// by streamkeep.
 #define TIDALCACHE_MAX_BYTES (128L * 1024L * 1024L)
 
-// Base for the transient cache, set to /tmp on the player. NULL or empty
+// Base for the transient cache. NULL or empty
 // disables playback caching.
 void tidalcache_set_root(const char *root);
-// Removes the previous on-card temporary cache during the move to /tmp.
+// Removes any previous on-card temporary cache from earlier firmware versions.
 void tidalcache_clear_card_cache(const char *sd_root);
 bool tidalcache_ready(void);
 

@@ -4878,9 +4878,9 @@ bool tidalpage_search_artist(const char *artist) {
 
 static void home_loaded_cb(lv_event_t *e) {
 	(void)e;
-	// Playback cache stays in volatile storage as cards come and go. Explicit
-	// downloads use storage_sd_root() when they are kept on the card.
-	tidalcache_set_root("/tmp");
+	// Playback cache stays on internal storage as cards come and go. Explicit
+	// downloads are copied to storage_sd_root() when kept on the card.
+	tidalcache_set_root(TIDALCACHE_TEMP_ROOT);
 	qobuzart_set_root(storage_sd_root());
 	listcache_set_root(storage_sd_root());
 
@@ -4984,7 +4984,7 @@ void tidalpage_init(gui_config_t *cfg) {
 	qobuzart_set_root(storage_sd_root());
 	listcache_set_root(storage_sd_root());
 
-	tidalcache_set_root("/tmp");
+	tidalcache_set_root(TIDALCACHE_TEMP_ROOT);
 	rebuild_home();
 
 	lv_obj_add_event_cb(tidal_screen, home_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);

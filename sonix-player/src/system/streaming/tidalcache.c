@@ -2,10 +2,12 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -21,10 +23,12 @@
 #define FETCH_TIMEOUT_SECS 20
 #define FETCH_CHUNK 32768
 
-// A DASH segment is a few hundred kilobytes -- four seconds of audio -- and is
-// fetched into memory whole before being unwrapped. The ceiling is deliberately
-// generous: it only stops a runaway response from taking all the RAM there is.
+// DASH segments are staged on internal storage and mapped for parsing, so a
+// whole high-resolution segment does not consume the player's scarce heap.
+// This ceiling also bounds a malformed or runaway response.
 #define SEGMENT_LIMIT (8 * 1024 * 1024)
+#define INIT_SEGMENT_LIMIT (1024 * 1024)
+#define SEGMENT_IO_CHUNK (32 * 1024)
 
 // How many segments are fetched before playback starts. Each is worth about
 // four seconds, so three put roughly a dozen seconds in hand: the same order of
@@ -679,21 +683,50 @@ void tidalcache_write_sidecars_at(const char *path, const char *title, const cha
 		return; // already fetched, and at this size
 	}
 
-	char *body = NULL;
-	size_t len = 0;
-	if (!http_get(cover_url, &body, &len, 4 * 1024 * 1024, FETCH_TIMEOUT_SECS) || !body) {
-		const char *why = http_last_error();
-		fprintf(stderr, "tidalcache: cover '%s' not downloaded: %s\n", cover_url,
-				why && why[0] ? why : "no reason given");
+	char tmp[560];
+	if (snprintf(tmp, sizeof(tmp), "%s.tmp", cover) >= (int)sizeof(tmp)) {
 		return;
 	}
-
-	FILE *img = fopen(cover, "wb");
-	if (img) {
-		fwrite(body, 1, len, img);
-		fclose(img);
+	FILE *img = fopen(tmp, "wb");
+	if (!img) {
+		return;
 	}
-	free(body);
+	http_stream_t http;
+	http_stream_options_t options = {.no_icy = true, .no_https_downgrade = true};
+	bool opened = http_stream_open_ex(&http, cover_url, FETCH_TIMEOUT_SECS, &options);
+	bool ok = opened;
+	char buffer[SEGMENT_IO_CHUNK];
+	size_t total = 0;
+	while (ok) {
+		int n = http_stream_read(&http, buffer, sizeof(buffer));
+		if (n < 0) {
+			ok = false;
+			break;
+		}
+		if (n == 0) {
+			break;
+		}
+		if (total + (size_t)n > 4 * 1024 * 1024 || fwrite(buffer, 1, (size_t)n, img) != (size_t)n) {
+			ok = false;
+			break;
+		}
+		total += (size_t)n;
+	}
+	if (ok && (total == 0 || fflush(img) != 0)) {
+		ok = false;
+	}
+	if (opened) {
+		http_stream_close(&http);
+	}
+	if (fclose(img) != 0) {
+		ok = false;
+	}
+	if (!ok || rename(tmp, cover) != 0) {
+		const char *why = http_last_error();
+		fprintf(stderr, "tidalcache: cover '%s' not downloaded%s%s\n", cover_url, why ? ": " : "",
+				why ? why : "");
+		remove(tmp);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -702,8 +735,8 @@ void tidalcache_write_sidecars_at(const char *path, const char *title, const cha
 // Two shapes, and they really are different.
 //
 //   FILE   one socket, opened and held open, read in chunks. Same as Qobuz.
-//   DASH   one request per segment, each complete, the content handed to
-//          mp4flac, which unwraps it into the file.
+//   DASH   one request per segment, streamed to a temporary file and mapped
+//          for mp4flac to unwrap into the growing track file.
 //
 // What does not change is what the rest of the player sees: a growing file,
 // announced to growfile, openable by the decoder before it is finished.
@@ -721,7 +754,7 @@ typedef struct {
 	tidal_stream_t stream;
 
 	// FILE
-	http_stream_t http;
+	http_stream_t http = {0};
 	bool http_open;
 
 	// DASH
@@ -940,6 +973,75 @@ static bool pump_file(download_t *d, long until, bool *finished) {
 
 // --- the DASH shape --------------------------------------------------------
 
+static bool dash_segment_to_file(download_t *d, const char *url) {
+	char segment_path[560];
+	if (snprintf(segment_path, sizeof(segment_path), "%.520s.segment", d->path) >= (int)sizeof(segment_path)) {
+		return false;
+	}
+	FILE *file = fopen(segment_path, "wb");
+	if (!file) {
+		fprintf(stderr, "tidalcache: cannot open segment temp file: %s\n", strerror(errno));
+		return false;
+	}
+
+	http_stream_t http = {0};
+	http_stream_options_t options = {.no_icy = true, .no_https_downgrade = true};
+	bool opened = http_stream_open_ex(&http, url, FETCH_TIMEOUT_SECS, &options);
+	bool ok = opened;
+	if (!opened) {
+		const char *why = http_last_error();
+		fprintf(stderr, "tidalcache: segment stream did not open%s%s\n", why ? ": " : "", why ? why : "");
+	}
+	char buffer[SEGMENT_IO_CHUNK];
+	long total = 0;
+	while (ok) {
+		int n = http_stream_read(&http, buffer, sizeof(buffer));
+		if (n < 0) {
+			ok = false;
+			break;
+		}
+		if (n == 0) {
+			break;
+		}
+		if ((size_t)n > SEGMENT_LIMIT - (size_t)total || fwrite(buffer, 1, (size_t)n, file) != (size_t)n) {
+			ok = false;
+			break;
+		}
+		total += n;
+	}
+	if (ok && (total == 0 || fflush(file) != 0)) {
+		ok = false;
+	}
+	if (opened) {
+		http_stream_close(&http);
+	}
+	if (fclose(file) != 0) {
+		ok = false;
+	}
+	if (!ok) {
+		remove(segment_path);
+		return false;
+	}
+
+	int fd = open(segment_path, O_RDONLY);
+	struct stat st;
+	if (fd < 0 || fstat(fd, &st) != 0 || st.st_size <= 0 || st.st_size > SEGMENT_LIMIT) {
+		if (fd >= 0) close(fd);
+		remove(segment_path);
+		return false;
+	}
+	void *mapped = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	close(fd);
+	if (mapped == MAP_FAILED) {
+		remove(segment_path);
+		return false;
+	}
+	ok = mp4flac_segment(&d->unwrap, (const uint8_t *)mapped, (size_t)st.st_size);
+	munmap(mapped, (size_t)st.st_size);
+	remove(segment_path);
+	return ok;
+}
+
 // One segment: request, unwrap, write. `count` of them, or to the end when
 // count is 0.
 static bool pump_dash(download_t *d, int count, bool *finished) {
@@ -965,25 +1067,8 @@ static bool pump_dash(download_t *d, int count, bool *finished) {
 			return false;
 		}
 
-		char *body = NULL;
-		size_t len = 0;
-		if (!http_get(url, &body, &len, SEGMENT_LIMIT, FETCH_TIMEOUT_SECS) || !body) {
+		if (!dash_segment_to_file(d, url)) {
 			fprintf(stderr, "tidalcache: segment %d did not arrive\n", d->next_segment);
-			free(body);
-			return false;
-		}
-		if (len == 0) {
-			// An empty segment is not a segment. Carrying on would leave a
-			// silent gap in the middle of the track, in a file then marked
-			// complete and never downloaded again.
-			fprintf(stderr, "tidalcache: segment %d empty\n", d->next_segment);
-			free(body);
-			return false;
-		}
-
-		bool ok = mp4flac_segment(&d->unwrap, (const uint8_t *)body, len);
-		free(body);
-		if (!ok) {
 			return false;
 		}
 
@@ -1047,7 +1132,7 @@ static bool start_dash(download_t *d, bool *consumed, char *out, size_t size) {
 	// done, and saying so now beats discovering it at the first frame.
 	char *init = NULL;
 	size_t init_len = 0;
-	if (!http_get(d->stream.init_url, &init, &init_len, SEGMENT_LIMIT, FETCH_TIMEOUT_SECS) || !init) {
+	if (!http_get(d->stream.init_url, &init, &init_len, INIT_SEGMENT_LIMIT, FETCH_TIMEOUT_SECS) || !init) {
 		const char *why = http_last_error();
 		set_error(why && why[0] ? why : tr("tidal_cannot_reach_tidal"));
 		free(init);
