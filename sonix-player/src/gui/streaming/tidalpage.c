@@ -2261,7 +2261,7 @@ static bool prepare_track(const tidal_track_t *track, char *path, size_t size) {
 	// write the tags where nothing reads them.
 	if (track->title[0]) {
 		tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
-										track->track_number, track->cover);
+										track->track_number, track->duration, track->cover);
 	}
 	free(stream);
 
@@ -2327,7 +2327,7 @@ static void do_play(int index) {
 	// the download is still in progress, so the by-id lookup would fall back
 	// to the manifest's ".m4a" while the file is a ".flac".
 	tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
-								track->track_number, NULL);
+								track->track_number, track->duration, NULL);
 
 	// --- the queue: the whole list, not only what has downloaded ------------
 	//
@@ -2376,7 +2376,8 @@ static void do_play(int index) {
 			continue; // already written, and with the real MIME type
 		}
 		const tidal_track_t *t = &queued_tracks[i];
-		tidalcache_write_sidecars_at(paths[i], t->title, t->artist, t->album, t->album_id, t->track_number, NULL);
+		tidalcache_write_sidecars_at(paths[i], t->title, t->artist, t->album, t->album_id, t->track_number,
+									t->duration, NULL);
 	}
 
 	device_state_play_list(path_ptr, queued_count, start);
@@ -2385,7 +2386,7 @@ static void do_play(int index) {
 	// worth delaying the first note for. It goes before the player opens on
 	// purpose, so the image is already there when the page appears.
 	tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
-								track->track_number, track->cover);
+								track->track_number, track->duration, track->cover);
 
 	gui_post(play_started_async, NULL);
 
@@ -2920,7 +2921,7 @@ static void *worker_main(void *arg) {
 						}
 						free(stream);
 						tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
-												track->track_number, NULL);
+												track->track_number, track->duration, NULL);
 						tidalcache_note_played(path);
 						tidalcache_wait_idle();
 						if (download_cancelled()) {
@@ -2938,7 +2939,7 @@ static void *worker_main(void *arg) {
 						tidal_cover_url(track->cover_uuid, tidal_cover_px(), cover_url, sizeof(cover_url));
 					}
 					tidalcache_write_sidecars_at(path, track->title, track->artist, track->album,
-										track->album_id, track->track_number, cover_url);
+										track->album_id, track->track_number, track->duration, cover_url);
 					if (!streamkeep_keep(path)) {
 						snprintf(result_error, sizeof(result_error), "%s", tr("stream_keep_failed"));
 						break;
@@ -3539,7 +3540,7 @@ static void open_search_cb(lv_event_t *e) {
 typedef struct {
 	char path[512];
 	char title[TIDAL_TITLE_MAX];
-	char artist[TIDAL_NAME_MAX];
+	char detail[TIDAL_NAME_MAX + 24]; // artist and the cached duration
 } tidal_saved_entry_t;
 
 static int tidal_saved_cmp(const void *a, const void *b) {
@@ -3589,7 +3590,17 @@ static void open_downloads_cb(lv_event_t *e) {
 				*dot = '\0';
 			}
 		}
-		tidalcache_tag(entry->path, "artist", entry->artist, sizeof(entry->artist));
+		char artist[TIDAL_NAME_MAX] = "";
+		char duration[16] = "";
+		tidalcache_tag(entry->path, "artist", artist, sizeof(artist));
+		if (tidalcache_tag(entry->path, "duration", duration, sizeof(duration))) {
+			char length[16];
+			duration_text(atoi(duration), length, sizeof(length));
+			snprintf(entry->detail, sizeof(entry->detail), "%s%s%s", artist, artist[0] && length[0] ? " \xC2\xB7 " : "",
+					 length);
+		} else {
+			snprintf(entry->detail, sizeof(entry->detail), "%s", artist);
+		}
 		count++;
 	}
 	if (dir) {
@@ -3611,7 +3622,7 @@ static void open_downloads_cb(lv_event_t *e) {
 	for (int i = 0; i < count; i++) {
 		paths[i] = entries[i].path;
 		titles[i] = entries[i].title;
-		artists[i] = entries[i].artist;
+		artists[i] = entries[i].detail;
 	}
 	medialist_open_paths(tr("downloaded"), paths, titles, artists, count, NULL);
 	free(entries);
@@ -4794,6 +4805,17 @@ bool tidalpage_open_album(const char *album_id, const char *title) {
 	job.kind = JOB_ALBUM_TRACKS;
 	snprintf(job.id_text, sizeof(job.id_text), "%s", album_id);
 	snprintf(job.text, sizeof(job.text), "%s", title && title[0] ? title : tr("tidal"));
+	run(&job, "loading");
+	return true;
+}
+
+bool tidalpage_search_artist(const char *artist) {
+	if (!artist || !artist[0] || !tidal_logged_in()) {
+		return false;
+	}
+	job_t job = {0};
+	job.kind = JOB_SEARCH_ARTISTS;
+	snprintf(job.text, sizeof(job.text), "%s", artist);
 	run(&job, "loading");
 	return true;
 }

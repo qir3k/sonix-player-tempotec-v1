@@ -1222,6 +1222,26 @@ static void open_album_cb(void *user) {
 	switcher_set_player_return(medialist_tracks_screen);
 }
 
+// Tidal's track response only keeps the performer's readable name.  The page
+// resolves it through its artist search, then tapping the matching result
+// opens that artist's albums.  The option belongs only to Tidal: local tracks
+// already have the Music artist list, and the Qobuz cache has no equivalent
+// artist route here.
+static void open_tidal_artist_cb(void *user) {
+	(void)user;
+	device_state_t state;
+	device_state_get(&state);
+	if (!tidalcache_owns(state.current_file) || !state.metadata.artist[0]) {
+		return;
+	}
+	player_sheet_close(false);
+	if (!tidalpage_search_artist(state.metadata.artist)) {
+		gui_notify_popup("tidal_change_refused");
+		return;
+	}
+	switcher_set_player_return(tidal_list_screen);
+}
+
 // "Keep on card": the streaming caches hold a track only for as long as they
 // feel like it, and a cache sweep or a card swap takes it back. This copies the
 // download that is already on the card into the library proper, where it stays
@@ -1279,6 +1299,14 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
 	};
+	static const popover_item_t ITEMS_TIDAL[] = {
+		{"trackmenu_queue", open_queue_cb, NULL},
+		{"add_to_playlist", add_to_playlist_cb, NULL},
+		{"show_album", open_album_cb, NULL},
+		{"show_artist", open_tidal_artist_cb, NULL},
+		{"details", open_details_cb, NULL},
+		{"settings", open_settings_cb, NULL},
+	};
 	static const popover_item_t ITEMS_PODCAST[] = {
 		{"trackmenu_queue", open_queue_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
@@ -1302,10 +1330,15 @@ void trackmenu_open(lv_obj_t *anchor) {
 	device_state_t state;
 	device_state_get(&state);
 	bool podcast = state.current_file[0] && podcastcache_is_episode(state.current_file);
-	bool keepable = !podcast && streamkeep_is_stream_track(state.current_file);
+	bool tidal_track = tidalcache_owns(state.current_file);
+	// The Tidal Downloaded list is made of files already present on the card.
+	// Offering "Download" again is both misleading and useless offline.
+	bool keepable = !podcast && !tidal_track && streamkeep_is_stream_track(state.current_file);
 
 	if (keepable) {
 		popover_show(anchor, ITEMS_KEEP, 6);
+	} else if (tidal_track) {
+		popover_show(anchor, ITEMS_TIDAL, 6);
 	} else {
 		popover_show(anchor, podcast ? ITEMS_PODCAST : ITEMS, 5);
 	}

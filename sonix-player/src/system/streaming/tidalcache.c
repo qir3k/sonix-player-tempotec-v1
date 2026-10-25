@@ -563,7 +563,8 @@ long tidalcache_track_id(const char *path) {
 }
 
 void tidalcache_write_sidecars(long track_id, const char *mime, const char *title, const char *artist,
-							   const char *album, const char *album_id, int track_number, const char *cover_url) {
+							   const char *album, const char *album_id, int track_number, int duration_secs,
+							   const char *cover_url) {
 	if (!tidalcache_ready()) {
 		return;
 	}
@@ -578,14 +579,14 @@ void tidalcache_write_sidecars(long track_id, const char *mime, const char *titl
 	if (!tidalcache_find(track_id, path, sizeof(path))) {
 		tidalcache_path(track_id, mime, path, sizeof(path));
 	}
-	tidalcache_write_sidecars_at(path, title, artist, album, album_id, track_number, cover_url);
+	tidalcache_write_sidecars_at(path, title, artist, album, album_id, track_number, duration_secs, cover_url);
 }
 
 // The path-taking half. See the header: while a download is still growing,
 // tidalcache_find() says no and the guessed extension is the wrong one, so the
 // caller that knows where the file really is has to say so.
 void tidalcache_write_sidecars_at(const char *path, const char *title, const char *artist, const char *album,
-								  const char *album_id, int track_number, const char *cover_url) {
+								  const char *album_id, int track_number, int duration_secs, const char *cover_url) {
 	if (!tidalcache_ready() || !path || !path[0]) {
 		return;
 	}
@@ -606,6 +607,7 @@ void tidalcache_write_sidecars_at(const char *path, const char *title, const cha
 		fprintf(f, "album=%s\n", album ? album : "");
 		fprintf(f, "album_id=%s\n", album_id ? album_id : "");
 		fprintf(f, "track=%d\n", track_number);
+		fprintf(f, "duration=%d\n", duration_secs > 0 ? duration_secs : 0);
 		// The size the cover beside it was fetched at: this is how a changed
 		// setting is noticed and the cover re-fetched.
 		fprintf(f, "cover_px=%d\n", tidal_cover_px());
