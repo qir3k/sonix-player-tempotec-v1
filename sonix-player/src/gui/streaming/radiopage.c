@@ -79,6 +79,7 @@ typedef struct {
 	lv_obj_t *name;
 	lv_obj_t *detail;  // the line under the name, on station rows
 	lv_obj_t *quality; // ...the stream's quality badge on it
+	lv_obj_t *bitrate; // ...the bitrate spelled out beside the badge
 	lv_obj_t *code;	   // ...and the country code, on a search's hits
 	lv_obj_t *chevron;
 	lv_obj_t *menu_btn; // the ellipsis, on the favourites list only
@@ -91,6 +92,14 @@ typedef struct {
 #define PLAYMARK_WIDTH 6
 #define PLAYMARK_HEIGHT 52
 #define PLAYMARK_INSET 4 // from the row's left edge
+
+// The band of the row the mark owns, and what its right edge costs the text.
+// It used to live inside ROW_PAD_HOR alone, which left the bar's rounded end
+// running under the first letters of the name on every row that showed it: the
+// mark now takes a gutter out of the row's LEFT padding and nothing out of the
+// right, so the bar has its own column and the name, the badge and the bitrate
+// all start clear of it -- with the row still the full width it was.
+#define PLAYMARK_GUTTER (PLAYMARK_INSET + PLAYMARK_WIDTH + 4)
 #define ROW_PAD_HOR bp_pick(10, 14)
 
 // radio.txt's headings: a line of dim text over the first station of each
@@ -131,14 +140,16 @@ enum {
 	// and switch somebody's hidden row back on. The order the page shows them in
 	// is hub_order[] and is set below.
 	HUB_RECOMMENDED,
+
 };
 
-static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom", "recommended"};
+static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom", "recommended",
 static const char *const HUB_LABELS[HUB_ROWS] = {"radio_recently_played", "language", "radio_country", "genre",
 												  "radio_custom", "radio_recommended"};
 
 // The order a page that has never been arranged starts in: Recommended is the
-// second thing offered, right under what was played last.
+// second thing offered, right under what was played last, and the starred
+// stations are beside it.
 static const int HUB_DEFAULT_ORDER[HUB_ROWS] = {HUB_RECENT, HUB_RECOMMENDED, HUB_LANGUAGE,
 											  HUB_COUNTRY, HUB_GENRE, HUB_CUSTOM};
 
@@ -146,7 +157,6 @@ static lv_obj_t *hub_container;
 static lv_obj_t *hub_wifi_warning;
 static lv_obj_t *hub_wifi_row;
 static lv_obj_t *hub_rows[HUB_ROWS];
-static lv_obj_t *hub_favourites_btn;
 static lv_obj_t *hub_search_btn;
 static lv_obj_t *hub_settings_btn;
 
@@ -291,12 +301,29 @@ static void set_message(const char *text) {
 	if (!list_message) {
 		return;
 	}
-	if (text && text[0]) {
-		lv_label_set_text(list_message, tr(text));
-		show(list_message);
-	} else {
+	if (!(text && text[0])) {
 		hide(list_message);
+		return;
 	}
+	lv_label_set_text(list_message, tr(text));
+	show(list_message);
+
+	// Vertically centred in the part of the panel the list would have used.
+	// It used to sit at a fixed height from the top, which was right for the
+	// one message it was drawn for and wrong for the ones that followed: a
+	// single line of "Nothing found" reads as something left behind, and the
+	// two sentences about the filters were worse -- off the middle, with no
+	// list under them to explain the space.
+	lv_obj_update_layout(list_view);
+	int32_t view;
+	if (list_has_headings()) {
+		view = custom_list_height;
+	} else {
+		view = lv_obj_get_content_height(list_view);
+	}
+	int32_t here = lv_obj_get_height(list_message);
+	int32_t above = (view - here) / 2;
+	lv_obj_align(list_message, LV_ALIGN_TOP_MID, 0, above > 0 ? above : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +553,7 @@ static void headings_layout(void) {
 			lv_obj_set_style_text_font(label, &font_ui_22, 0);
 			// Close over its own rows rather than midway in the gap, so it
 			// reads as their title and not as the previous group's last line.
-			lv_obj_set_pos(label, ROW_PAD_HOR / 2, y + HEADING_HEIGHT - line - 10);
+			lv_obj_set_pos(label, PLAYMARK_GUTTER / 2, y + HEADING_HEIGHT - line - 10);
 			lv_obj_set_clickable(label, false);
 			heading_labels[heading_count++] = label;
 			y += HEADING_HEIGHT;
@@ -574,6 +601,15 @@ static void row_bind(row_t *row, int index) {
 	} else {
 		hide(row->quality);
 	}
+	// The bitrate beside the badge: "320 kbps", and nothing at all when the
+	// directory does not know one -- a blank space there would read as a
+	// station that is low quality rather than one that is unlisted.
+	if (s->bitrate > 0) {
+		lv_label_set_text_fmt(row->bitrate, "%d kbps", s->bitrate);
+		show(row->bitrate);
+	} else {
+		hide(row->bitrate);
+	}
 	bool with_code = page_is_search && list_mode == LIST_STATIONS && s->country[0];
 	if (with_code) {
 		lv_label_set_text(row->code, s->country);
@@ -581,7 +617,7 @@ static void row_bind(row_t *row, int index) {
 	} else {
 		hide(row->code);
 	}
-	if (quality != QUALITY_NONE || with_code) {
+	if (quality != QUALITY_NONE || s->bitrate > 0 || with_code) {
 		show(row->detail);
 	} else {
 		hide(row->detail);
@@ -1090,11 +1126,12 @@ static void build_list_page(gui_config_t *cfg) {
 	lv_obj_set_style_text_align(list_message, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(list_message, &theme_style_text_dim, 0);
 	lv_obj_set_style_text_font(list_message, &font_ui_24, 0);
-	// Wrapped and inside the margins: a message long enough to explain where to
-	// put a file runs off both edges of the screen otherwise.
+	// Wrapped and inside the margins. Its place is worked out when it is shown
+	// (see set_message): the list area is scrollable, so an alignment against
+	// the label's parent would centre it against whatever the content happens
+	// to be rather than against the screen the reader is looking at.
 	lv_label_set_long_mode(list_message, LV_LABEL_LONG_WRAP);
 	lv_obj_set_width(list_message, cfg->screen_width - 4 * cfg->padding);
-	lv_obj_align(list_message, LV_ALIGN_TOP_MID, 0, 120);
 	hide(list_message);
 
 	for (int i = 0; i < ROW_POOL; i++) {
@@ -1109,6 +1146,8 @@ static void build_list_page(gui_config_t *cfg) {
 		lv_obj_set_style_border_width(row->button, 0, 0);
 		lv_obj_set_style_shadow_width(row->button, 0, 0);
 		lv_obj_set_style_pad_hor(row->button, ROW_PAD_HOR, 0);
+		// The mark's gutter comes out of the left alone (see PLAYMARK_GUTTER).
+		lv_obj_set_style_pad_left(row->button, PLAYMARK_GUTTER, 0);
 		lv_obj_set_style_pad_ver(row->button, bp_pick(8, 10), 0);
 		lv_obj_set_style_pad_column(row->button, bp_pick(10, 14), 0);
 		hide(row->button);
@@ -1164,6 +1203,16 @@ static void build_list_page(gui_config_t *cfg) {
 		lv_obj_set_clickable(row->quality, false);
 		hide(row->quality);
 
+		// The badge says "an MP3 of this kind" and nothing more; the number
+		// says what it actually is. Both, on every row that has one, because
+		// "320" against "128" is the one difference a listener can act on
+		// without playing anything.
+		row->bitrate = lv_label_create(row->detail);
+		lv_label_set_text(row->bitrate, "");
+		lv_obj_add_style(row->bitrate, &theme_style_text_dim, 0);
+		lv_obj_set_style_text_font(row->bitrate, &font_ui_20, 0);
+		hide(row->bitrate);
+
 		row->code = lv_label_create(row->detail);
 		lv_label_set_text(row->code, "");
 		lv_obj_add_style(row->code, &theme_style_text_dim, 0);
@@ -1195,7 +1244,7 @@ static void build_list_page(gui_config_t *cfg) {
 		row->playmark = lv_obj_create(row->button);
 		lv_obj_set_ignore_layout(row->playmark, true);
 		lv_obj_set_size(row->playmark, PLAYMARK_WIDTH, PLAYMARK_HEIGHT);
-		lv_obj_align(row->playmark, LV_ALIGN_LEFT_MID, PLAYMARK_INSET - ROW_PAD_HOR, 0);
+		lv_obj_align(row->playmark, LV_ALIGN_LEFT_MID, PLAYMARK_INSET - PLAYMARK_GUTTER, 0);
 		lv_obj_add_style(row->playmark, &theme_style_accent_bg, 0);
 		lv_obj_set_style_radius(row->playmark, LV_RADIUS_CIRCLE, 0);
 		lv_obj_set_style_border_width(row->playmark, 0, 0);
@@ -1523,12 +1572,10 @@ static void hub_refresh(void) {
 	// every station in them is a stream: offering them over a page that says
 	// the Wi-Fi is off leads to a list nothing in which can be played.
 	if (connected) {
-		show(hub_favourites_btn);
 		show(hub_search_btn);
 		hide(hub_wifi_warning);
 		hide(hub_wifi_row);
 	} else {
-		hide(hub_favourites_btn);
 		hide(hub_search_btn);
 		show(hub_wifi_warning);
 		show(hub_wifi_row);
@@ -2293,7 +2340,7 @@ void radiopage_init(gui_config_t *cfg) {
 	radio_init();
 
 	hub_container = settingsrow_page(radiopage_screen, cfg, "radio");
-	settingsrow_title_corner_slots(settingsrow_page_title(radiopage_screen), cfg, 3);
+	settingsrow_title_corner_slots(settingsrow_page_title(radiopage_screen), cfg, 2);
 
 	// Before the header buttons below: the gear's event is bound with the
 	// settings screen as its user data, and LVGL copies that pointer at
@@ -2306,21 +2353,16 @@ void radiopage_init(gui_config_t *cfg) {
 	// the gesture, so as on the Qobuz pages it is attached to both.
 	player_sheet_attach_drag(hub_container, true);
 
-	// Three, and three only, and in the Music page's order once the heart is
-	// back among them: search, the favourites heart, and the settings for this
-	// page. Corner buttons are placed from the right edge, so slot 0 (the right
-	// most) is the settings gear, the heart sits beside it and search is the
-	// leftmost of the three. Recently played is a row in the list below, with
-	// the categories it belongs beside, so its corner button and the custom-
-	// stations one went with it: the custom list is a row too, and both can be
-	// moved or switched off in Radio settings.
+	// Two, and two only, and in the Music page's order: search, and the
+	// settings for this page. Corner buttons are placed from the right edge, so
+	// slot 0 (the rightmost) is the settings gear and search is beside it. The
+	// heart is gone from the header: the starred stations are the FAVOURITES
+	// row below, between Recommended and Language, and they can be moved or
+	// switched off with the rest.
 	hub_settings_btn = corner_button(cfg, 0, &icon_music_settings);
 	lv_obj_add_event_cb(hub_settings_btn, radio_settings_cb, LV_EVENT_CLICKED, NULL);
 
-	hub_favourites_btn = corner_button(cfg, 1, &icon_heart_outline);
-	lv_obj_add_event_cb(hub_favourites_btn, favourites_cb, LV_EVENT_CLICKED, NULL);
-
-	hub_search_btn = corner_button(cfg, 2, &icon_search);
+	hub_search_btn = corner_button(cfg, 1, &icon_search);
 	lv_obj_add_event_cb(hub_search_btn, search_cb, LV_EVENT_CLICKED, NULL);
 
 	hub_layout_load();
@@ -2330,6 +2372,8 @@ void radiopage_init(gui_config_t *cfg) {
 	hub_rows[HUB_GENRE] = settingsrow_add(hub_container, HUB_LABELS[HUB_GENRE], NULL, genre_cb, NULL);
 	hub_rows[HUB_CUSTOM] = settingsrow_add(hub_container, HUB_LABELS[HUB_CUSTOM], NULL, custom_cb, NULL);
 	hub_rows[HUB_RECOMMENDED] = settingsrow_add(hub_container, HUB_LABELS[HUB_RECOMMENDED], NULL, recommended_cb, NULL);
+	// The heart leads this one row, the way the corner button wore it in the
+	// header: filled, because the list it opens is the starred ones.
 
 	// The same notice as the Wi-Fi transfer page: a centred message, and below
 	// it the "Wi-Fi settings" row that leads to where it can be fixed.

@@ -254,6 +254,9 @@ static lv_obj_t *make_viewport(lv_obj_t *screen, gui_config_t *cfg, lv_obj_t **b
 #define PLAYMARK_WIDTH bp_pick(4, 6)
 #define PLAYMARK_HEIGHT bp_pick(36, 52)
 #define PLAYMARK_INSET bp_pick(3, 4) // from the row's left edge
+// The band of the row the mark owns, so its rounded end stops at the bar and
+// the text starts after it rather than underneath it (see PLAYMARK in medialist.c).
+#define PLAYMARK_GUTTER (PLAYMARK_INSET + PLAYMARK_WIDTH + 4)
 
 #define THUMB_POLL_MS 150
 
@@ -786,6 +789,7 @@ static void build_books_page(gui_config_t *cfg) {
 		lv_obj_set_style_shadow_width(row->button, 0, 0);
 		lv_obj_set_style_pad_all(row->button, ROW_PAD, 0);
 		lv_obj_set_style_pad_column(row->button, ROW_PAD, 0);
+		lv_obj_set_style_pad_left(row->button, PLAYMARK_GUTTER, 0);
 		lv_obj_set_hidden(row->button, true);
 		lv_obj_set_event_bubble(row->button, true); // so the player sheet can be dragged in
 		lv_obj_add_event_cb(row->button, book_clicked_cb, LV_EVENT_CLICKED, NULL);
@@ -810,7 +814,7 @@ static void build_books_page(gui_config_t *cfg) {
 		row->playmark = lv_obj_create(row->button);
 		lv_obj_set_ignore_layout(row->playmark, true);
 		lv_obj_set_size(row->playmark, PLAYMARK_WIDTH, PLAYMARK_HEIGHT);
-		lv_obj_align(row->playmark, LV_ALIGN_LEFT_MID, PLAYMARK_INSET - ROW_PAD, 0);
+		lv_obj_align(row->playmark, LV_ALIGN_LEFT_MID, PLAYMARK_INSET - PLAYMARK_GUTTER, 0);
 		lv_obj_add_style(row->playmark, &theme_style_accent_bg, 0);
 		lv_obj_set_style_radius(row->playmark, LV_RADIUS_CIRCLE, 0);
 		lv_obj_set_style_border_width(row->playmark, 0, 0);

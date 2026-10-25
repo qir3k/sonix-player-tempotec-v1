@@ -72,28 +72,30 @@ static int strip_h;
 // runs the sign through the figures. A lift, rather than a change of the
 // strip's padding: it moves the clock and nothing else, so the title and the
 // artist keep the places they were tuned for, and the clock gains its air
-// under every face. Three pixels more than the first attempt: the sign hangs
-// 4 px off the foot of the screen, and with the smaller lift the air under the
-// figures was plainly thinner than the air under the sign. Three more again:
-// at 11 the gap above the sign still read wider than the one below it, because
-// the sign's own box carries a few pixels of slack under its glyph. Now the two
-// bands read as one margin.
-#define CLOCK_LIFT bp_pick(14, 18)
-
-// How far the title is lifted out of its line, so the words do not slide down
-// the strip now that the clock no longer sits at its foot.
-#define TITLE_RISE bp_pick(3, 4)
-
-// How far the artist is lifted: one pixel further than the title.
+// under every face.
 //
-// The lift above moves the clock and nothing else, which opens the air under
-// the clock but takes the same amount out of the gap above it: with the clock
-// alone raised, the two gaps read 12 px and 7 px at the V1's sizes. The artist
-// is the one line between both gaps, so it is the line that splits what the
-// lift opened. Measured on the renderer, with the title and the clock where
-// they are: at four pixels the two gaps are both 11 (test_screensaver.c
-// checks it, on the rendered rows rather than the boxes).
-#define ARTIST_RISE (TITLE_RISE + 1)
+// As small as the sign allows, and no smaller. The lift is not a design
+// choice -- it is the clearance the sign needs -- and every pixel of it is a
+// pixel of air between the clock and the sign nobody asked for, which is what
+// the last round of this was about: at ten the figures stood fourteen rows
+// clear of the sign. Four leaves them eight, and the two gaps between the
+// three lines are put back by the shifts below rather than by flying the
+// clock up (test_screensaver.c measures both, on the rendered rows).
+// Clock lift removed: instead of lifting the clock we move the title
+// and artist down to create balanced gaps between all three lines.
+// This keeps the clock at its natural position and shifts the text lines
+// down by the same total amount the clock would have moved up.
+#define CLOCK_LIFT 0
+
+// How far the title is shifted DOWN out of its line.
+// With the clock no longer lifted (CLOCK_LIFT=0), the title shifts down
+// by 4-5px so the gap above the clock and the gap below remain similar.
+#define TITLE_SHIFT bp_pick(4, 5)
+
+// How far the artist is shifted DOWN out of its line.
+// Previously bp_pick(3,4): now shifted down more so the lower gap
+// (artist-clock) stays balanced with the upper gap (title-artist).
+#define ARTIST_SHIFT bp_pick(5, 6)
 
 // The Framed style's sleeve. It keeps at least this much of the panel free on
 // either side, and above and below itself inside the area over the strip; its
@@ -1136,14 +1138,14 @@ void screensaver_init(gui_config_t *cfg) {
 	lv_obj_set_width(title_label, lv_pct(100));
 	lv_obj_set_style_text_font(title_label, &font_ui_28, 0);
 	lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_style_translate_y(title_label, -TITLE_RISE, 0);
+	lv_obj_set_style_translate_y(title_label, TITLE_SHIFT, 0);
 	scrolltext_apply(title_label);
 
 	artist_label = lv_label_create(info_strip);
 	lv_obj_set_width(artist_label, lv_pct(100));
 	lv_obj_set_style_text_font(artist_label, &font_ui_22, 0);
 	lv_obj_set_style_text_align(artist_label, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_style_translate_y(artist_label, -ARTIST_RISE, 0);
+	lv_obj_set_style_translate_y(artist_label, ARTIST_SHIFT, 0);
 	scrolltext_apply(artist_label);
 
 	// The time, in the largest figures the screen has -- lifted clear of the

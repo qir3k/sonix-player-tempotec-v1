@@ -69,6 +69,9 @@
 #define PLAYMARK_WIDTH bp_pick(4, 6)
 #define PLAYMARK_HEIGHT bp_pick(26, 52)
 #define PLAYMARK_INSET bp_pick(3, 4)
+// The band of the row the mark owns, so the row's text starts clear of its
+// rounded end (see PLAYMARK in medialist.c).
+#define PLAYMARK_GUTTER (PLAYMARK_INSET + PLAYMARK_WIDTH + 4)
 
 // How many row widgets exist. A 720 px panel shows six or seven; the spares
 // cover the partly visible rows at each end and give the recycling somewhere
@@ -1506,6 +1509,8 @@ static void init_list_styles(void) {
 	lv_style_set_radius(&style_list_btn, LIST_ROW_RADIUS);
 	lv_style_set_shadow_width(&style_list_btn, 0);
 	lv_style_set_pad_all(&style_list_btn, LIST_ROW_PAD);
+	// The left edge is the now-playing mark's gutter (see PLAYMARK_GUTTER).
+	lv_style_set_pad_left(&style_list_btn, PLAYMARK_GUTTER);
 	lv_style_set_pad_column(&style_list_btn, bp_pick(8, 14));
 }
 
@@ -1561,7 +1566,7 @@ static void build_rows(int width) {
 		row->playmark = lv_obj_create(row->button);
 		lv_obj_set_ignore_layout(row->playmark, true);
 		lv_obj_set_size(row->playmark, PLAYMARK_WIDTH, PLAYMARK_HEIGHT);
-		lv_obj_align(row->playmark, LV_ALIGN_LEFT_MID, PLAYMARK_INSET - LIST_ROW_PAD, 0);
+		lv_obj_align(row->playmark, LV_ALIGN_LEFT_MID, PLAYMARK_INSET - PLAYMARK_GUTTER, 0);
 		lv_obj_add_style(row->playmark, &theme_style_accent_bg, 0);
 		lv_obj_set_style_radius(row->playmark, LV_RADIUS_CIRCLE, 0);
 		lv_obj_set_style_border_width(row->playmark, 0, 0);

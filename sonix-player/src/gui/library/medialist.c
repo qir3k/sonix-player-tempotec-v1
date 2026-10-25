@@ -3520,6 +3520,8 @@ static void init_styles(void) {
 	lv_style_set_shadow_width(&style_row, 0);
 	lv_style_set_pad_all(&style_row, ROW_PAD);
 	lv_style_set_pad_column(&style_row, ROW_PAD);
+	// Add right padding to prevent text/detail overlap
+	lv_style_set_pad_right(&style_row, ROW_PAD);
 }
 
 // Coming back to a list through the back chevron. The library can have been

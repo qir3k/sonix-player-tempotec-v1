@@ -2565,6 +2565,7 @@ static void paint_pill(lv_obj_t *btn, bool on) {
 	}
 	lv_obj_set_style_bg_color(btn, on ? theme()->accent : theme()->surface_pressed, 0);
 	lv_obj_set_style_text_color(lv_obj_get_child(btn, 0), on ? theme_on_accent() : theme()->text_primary, 0);
+	lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
 }
 
 // The order button wears the order the list is in: the same two glyphs the
@@ -3769,21 +3770,13 @@ static void pick_order_cb(lv_event_t *e) {
 	// it (list_loaded_cb), and reading it is what puts it in this order.
 }
 
+// The three order pills, and they are the same pills every other settings page
+// uses. They were their own thing -- taller, with a bigger face and their own
+// paddings -- which on a page of shared cards read as one card drawn by
+// somebody else. The shared pill passes its value as the event's user data,
+// which is what the old callback read.
 static lv_obj_t *make_order_pill(lv_obj_t *parent, const char *text, podcast_sort_t order) {
-	lv_obj_t *btn = lv_btn_create(parent);
-	lv_obj_set_size(btn, LV_SIZE_CONTENT, bp_pick(48, 64));
-	lv_obj_set_style_pad_hor(btn, bp_pick(12, 22), 0);
-	lv_obj_set_style_pad_ver(btn, 0, 0);
-	lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-	lv_obj_set_style_shadow_width(btn, 0, 0);
-	lv_obj_set_style_border_width(btn, 0, 0);
-	lv_obj_add_event_cb(btn, pick_order_cb, LV_EVENT_CLICKED, (void *)(intptr_t)order);
-
-	lv_obj_t *label = lv_label_create(btn);
-	lv_label_set_text(label, tr(text));
-	lv_obj_set_style_text_font(label, &font_ui_24, 0);
-	lv_obj_center(label);
-	return btn;
+	return settingsrow_pill_text(parent, text, (int)order, pick_order_cb);
 }
 
 // The card the three pills sit in. The row wraps, unlike the skip amounts':
