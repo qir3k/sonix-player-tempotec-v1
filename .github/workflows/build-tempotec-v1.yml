@@ -29,34 +29,14 @@ on:
         description: Release tag to upload the built image to, replacing its assets (v1.upt, v1_md5.txt). Empty publishes nothing.
         required: false
         type: string
-  pull_request:
-    paths:
-      - .github/workflows/build-tempotec-v1.yml
-      - sonix-packer/**
-      - sonix-player/Makefile
-      - sonix-player/rockboxdev/**
-      - sonix-player/src/**
-  # Working branches build themselves: the image is the only way to try a
-  # layout change on the device, and a dispatch needs a token that can write
-  # to Actions. No path filter here on purpose - a session branch has to be
-  # able to produce an image on request, not only when a build input changed.
-  #
-  # main builds too, and tags build: a merge is a tree nobody has built yet,
-  # and it is the tree a release is cut from. What this cannot fix -- a
-  # release taken from whichever artifact happens to be newest -- it makes
-  # visible instead: the artifact is named after the commit it really holds
-  # (see "Record the revision being built"), so an image can be checked
-  # against the tag it claims to be before anybody flashes it.
+  # Firmware builds are published only from the branches intended to produce
+  # installable images. Develop on dev without running the long firmware build;
+  # merging dev into main or personal starts the build for that destination.
+  # Manual dispatch and tags remain available for deliberate builds/releases.
   push:
     branches:
       - main
-      # This fork's own branches. The firmware image is the only way to try a
-      # layout change on the device, so the three branches that hold real trees
-      # build it; the release steps below are gated to personal and to tags,
-      # so a push here only makes an artifact.
-      - dev
       - personal
-      - arena/**
     tags:
       - '*'
 
@@ -213,7 +193,7 @@ jobs:
       # which version it is (OS_version, which the update check measures
       # releases against), it looks for updates in this repository's releases
       # (ota-repo), and About credits whoever built it (forked-by). Nothing
-      # here runs on main, dev or a tag build, so those images keep exactly
+      # here runs on main or a tag build, so those images keep exactly
       # what their asset file says.
       - name: Stamp the personal build's version and update source
         if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
