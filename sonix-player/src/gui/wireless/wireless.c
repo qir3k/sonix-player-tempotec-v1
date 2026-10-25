@@ -326,7 +326,7 @@ static lv_obj_t *wireless_action_grid(lv_obj_t *parent) {
 		lv_obj_set_width(label, LV_SIZE_CONTENT);
 		lv_obj_set_height(label, lv_font_get_line_height(&font_ui_14));
 		lv_obj_add_style(label, &theme_style_text, 0);
-		lv_obj_set_style_text_font(label, &font_ui_12, 0);
+		lv_obj_set_style_text_font(label, &font_ui_14, 0);
 		lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
 
 		action_icons[i] = (wireless_icon_t){.button = button, .icon = icon, .tone = item->tone};
