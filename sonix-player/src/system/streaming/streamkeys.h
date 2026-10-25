@@ -23,6 +23,10 @@
 //     client_id = ...
 //     client_secret = ...
 //
+//     [ytmusic]
+//     client_id = ...apps.googleusercontent.com
+//     client_secret = ...
+//
 //     [podcast]
 //     api_key = ...
 //     api_secret = ...
@@ -46,7 +50,8 @@
 // It is there because an image published for anyone to download ships without
 // keys -- there is no other way it could be published -- and the person who
 // installs it should be able to turn streaming on without building a firmware.
-// Copy one file to the card and restart.
+// It can also add a missing provider key to a personal image without replacing
+// any key already present. Copy one file to the card and restart.
 //
 // A private build does not have to hand-write the Qobuz pair at all: it sits
 // as plain strings inside the stock hiby_player, and
@@ -82,12 +87,13 @@ void streamkeys_init(void);
 // streamkeys_init() has run -- nothing mounts the card before the player does,
 // so at startup there is nothing to read there yet.
 //
-// Only a firmware that found no keys of its own is affected: one that ships a
-// sealed streaming-keys.bin keeps it, and a card cannot quietly replace what
-// the image says. That is what makes this safe to leave in a release.
+// Card values fill only keys absent from the image. Existing image credentials
+// stay in effect; a card can add credentials for another provider without
+// replacing them. A sealed card file is tried first, then the plain INI fills
+// any remaining gaps.
 //
-// True when keys are now held that were not held before, which is the caller's
-// signal to hand them to the services that read them at their own startup.
+// True when the card added at least one missing key, which is the caller's
+// signal to hand the newly available keys to services that already initialized.
 bool streamkeys_load_card(const char *card_root);
 
 // NULL when absent. The pointers stay valid for the life of the program.
@@ -95,6 +101,8 @@ const char *streamkeys_qobuz_app_id(void);
 const char *streamkeys_qobuz_app_secret(void);
 const char *streamkeys_tidal_client_id(void);
 const char *streamkeys_tidal_client_secret(void);
+const char *streamkeys_ytmusic_client_id(void);
+const char *streamkeys_ytmusic_client_secret(void);
 // Podcast Index. This pair identifies this player rather than a HiBy
 // application: it is requested free on podcastindex.org, and each request is
 // signed with the SHA-1 of key + secret + time. Same rule as the other two:

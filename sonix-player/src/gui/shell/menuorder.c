@@ -38,6 +38,7 @@ static const menu_item_t STREAMING_ITEMS[] = {
 	{"tidal", "tidal"},
 	{"qobuz", "qobuz"},
 	{"subsonic", "subsonic"},
+	{"ytmusic", "YouTube Music"},
 };
 
 static const menu_item_t *items_for(menuorder_section_t section, int *count) {
