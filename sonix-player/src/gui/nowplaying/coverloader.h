@@ -22,12 +22,14 @@
 // Browser rows use slots 0..9; the library index pages (medialist.c) use
 // 12..23 for the name lists and 24..35 for the track lists; the search page
 // takes 36..59 -- its twelve track hits and twelve album hits; the audiobook
-// list takes 60..71 for its twelve rows; one artist's records take 72..83; and the
-// album carousel takes 84..89 -- so the pools never trample each other's requests.
-#define COVERLOADER_SLOTS 90
+// list takes 60..71 for its twelve rows; one artist's records take 72..83; the
+// album carousel takes 84..89; and the radio station list takes 90..99 -- so
+// the pools never trample each other's requests.
+#define COVERLOADER_SLOTS 100
 #define COVERLOADER_SEARCH_BASE 36
 #define COVERLOADER_SEARCH_COUNT 24
 #define COVERLOADER_AUDIOBOOKS_BASE 60
+#define COVERLOADER_RADIO_BASE 90
 
 // The album carousel's six places take 84..89 -- five that can be seen and one
 // that is always just off an edge, because the column scrolls through the
@@ -42,6 +44,13 @@ void coverloader_start(void);
 // Asks for the artwork of `path` at `size` pixels, for `slot`. Returns
 // immediately. Any earlier request on this slot is abandoned.
 void coverloader_request(int slot, const char *path, int size);
+
+// The same, for a path that IS a picture rather than a track or an album
+// folder: a radio station's downloaded icon is a plain .jpg or .png beside the
+// cache, and cover_thumb_load() would look for embedded art and a folder cover
+// that do not exist and find nothing. Decoded through the image-file loader,
+// which is what the station's icon needs.
+void coverloader_request_image_file(int slot, const char *path, int size);
 
 // Forgets the slot: anything pending is abandoned and anything already decoded
 // for it is freed.

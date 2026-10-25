@@ -31,6 +31,11 @@
 // magnitude as the Qobuz prebuffer, arrived at by a different route.
 #define DASH_HEAD_SEGMENTS 3
 
+// What one segment is worth in sound. Used only to decide whether the prebuffer
+// kept up: fetching the head in less time than it plays for means playback will
+// not catch the download.
+#define DASH_SEGMENT_SECS 4.0
+
 static char cache_dir[512];
 
 static __thread char last_error[192];
@@ -267,6 +272,9 @@ long tidalcache_bytes(void) {
 
 #define PRUNE_MAX_ENTRIES 512
 
+static bool is_protected_stem(const char *stem);
+static bool is_recent_stem(const char *stem);
+
 // Drops the least recently played until the cache fits again. By last access
 // and not creation date: an album downloaded a month ago but played again
 // yesterday has to stay.
@@ -299,6 +307,22 @@ static void prune(long keep_room_for) {
 	}
 
 	for (int i = 0; i < count && total + keep_room_for > TIDALCACHE_MAX_BYTES; i++) {
+		// What the queue is about to play is not the cache's to take back.
+		// Without this the pruner could delete the next track while the
+		// queue still points at it -- "next does nothing" until the download
+		// runs again -- and the atime it sorts by does not mean what it says
+		// on this card: the mount is MS_NOATIME, so playing a track never
+		// updates it. Protected and recent first, then the descending atime.
+		char stem[640];
+		snprintf(stem, sizeof(stem), "%.500s/%.63s", cache_dir, entries[i].name);
+		char *dot = strrchr(stem + strlen(cache_dir) + 1, '.');
+		if (dot) {
+			*dot = '\0';
+		}
+		if (is_protected_stem(stem) || is_recent_stem(stem) || growfile_prefix_is_growing(stem)) {
+			continue;
+		}
+
 		char path[640];
 		snprintf(path, sizeof(path), "%.500s/%.63s", cache_dir, entries[i].name);
 		if (remove(path) == 0) {
@@ -309,8 +333,6 @@ static void prune(long keep_room_for) {
 
 	free(entries);
 }
-
-static bool is_recent_stem(const char *stem);
 
 // The tracks the queue still has ahead of it, which the automatic clear must
 // not touch.
@@ -666,6 +688,8 @@ typedef struct {
 	// DASH
 	mp4flac_t unwrap;
 	int next_segment; // the next one to request, in Tidal's numbering
+
+	bool foreground; // the user is waiting for this track (not a prefetch)
 } download_t;
 
 static unsigned generation = 1;
@@ -680,12 +704,27 @@ void tidalcache_wait_idle(void) { streamturn_wait_idle(); }
 static pthread_mutex_t active_lock = PTHREAD_MUTEX_INITIALIZER;
 static http_stream_t *active_stream;
 static long active_track_id;
+static char active_path[512];
 
 long tidalcache_downloading_id(void) {
 	pthread_mutex_lock(&active_lock);
 	long id = active_track_id;
 	pthread_mutex_unlock(&active_lock);
 	return id;
+}
+
+bool tidalcache_downloading_path(long track_id, char *out, size_t out_size) {
+	if (!out || out_size == 0) {
+		return false;
+	}
+	out[0] = '\0';
+	pthread_mutex_lock(&active_lock);
+	bool found = track_id != 0 && active_track_id == track_id && active_path[0];
+	if (found) {
+		snprintf(out, out_size, "%s", active_path);
+	}
+	pthread_mutex_unlock(&active_lock);
+	return found;
 }
 
 static volatile bool network_wanted;
@@ -729,6 +768,9 @@ static void download_end(download_t *d, bool ok) {
 	}
 	if (active_track_id == d->track_id) {
 		active_track_id = 0;
+	}
+	if (active_path[0] && strcmp(active_path, d->path) == 0) {
+		active_path[0] = '\0';
 	}
 	pthread_mutex_unlock(&active_lock);
 
@@ -976,13 +1018,22 @@ static bool start_dash(download_t *d, bool *consumed, char *out, size_t size) {
 		return false;
 	}
 
-	// If the first segments took more than a couple of seconds, the rest will
-	// take as long per piece, which is worth telling the user.
-	if (!finished && slow_start_cb) {
+	// Whether the head has as much audio in it as it took to fetch. Three
+	// segments are about twelve seconds of sound; if fetching them took longer
+	// than they play for (with a little margin), playback will catch the
+	// download and the wait is worth warning about. A fixed couple of seconds
+	// demanded six times real time from a link that was keeping up perfectly
+	// well, which is why the notice appeared on every other track.
+	//
+	// And only when the user is waiting for this one: the prefetcher runs this
+	// same start for the next track behind the one playing, and a warning about
+	// a download nobody is waiting for is noise.
+	if (!finished && d->foreground && slow_start_cb) {
 		struct timespec t1;
 		clock_gettime(CLOCK_MONOTONIC, &t1);
 		double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
-		if (elapsed >= 2.0) {
+		double audio_secs = (double)head * DASH_SEGMENT_SECS;
+		if (elapsed > audio_secs / 1.2) {
 			slow_start_cb((int)elapsed);
 		}
 	}
@@ -1072,8 +1123,11 @@ static bool start_file(download_t *d, bool *consumed, int duration_secs, char *o
 			printf("tidalcache: %ld needs %.0f KB/s, the network gives %.0f -> starting with %ld KB of %ld\n", d->track_id,
 				   required / 1024, measured / 1024, want / 1024, d->total / 1024);
 
+			// Only a foreground start, and only a wait worth mentioning. Two
+			// seconds used to be enough to earn a notice on a perfectly good
+			// link; four is a start somebody will notice.
 			int wait_secs = (int)((want - d->done) / measured);
-			if (wait_secs >= 2 && slow_start_cb) {
+			if (wait_secs >= 4 && d->foreground && slow_start_cb) {
 				slow_start_cb(wait_secs);
 			}
 		}
@@ -1096,7 +1150,8 @@ static bool start_file(download_t *d, bool *consumed, int duration_secs, char *o
 	return true;
 }
 
-bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_secs, char *out, size_t size) {
+bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_secs, bool foreground, char *out,
+					  size_t size) {
 	if (!out || size == 0) {
 		return false;
 	}
@@ -1151,6 +1206,7 @@ bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_
 	}
 	d->track_id = track_id;
 	d->stream = *stream;
+	d->foreground = foreground;
 	snprintf(d->path, sizeof(d->path), "%s", path);
 	marker_path(d->path, d->marker, sizeof(d->marker));
 
@@ -1171,6 +1227,7 @@ bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_
 
 	pthread_mutex_lock(&active_lock);
 	active_track_id = track_id;
+	snprintf(active_path, sizeof(active_path), "%s", path);
 	pthread_mutex_unlock(&active_lock);
 
 	bool consumed = false;
@@ -1195,6 +1252,11 @@ bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_
 		}
 		if (active_track_id == track_id) {
 			active_track_id = 0;
+		}
+		// Only this attempt's name: never a newer download's, even though the
+		// turn makes that impossible today.
+		if (active_path[0] && strcmp(active_path, d->path) == 0) {
+			active_path[0] = '\0';
 		}
 		pthread_mutex_unlock(&active_lock);
 		streamturn_release();

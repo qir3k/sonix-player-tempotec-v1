@@ -16,12 +16,12 @@
 #include "src/system/bluetooth/bluetooth.h"
 #include "src/system/bluetooth/btreceiver.h"
 #include "src/system/core/lang.h"
+#include "src/system/device/power.h"
 
 lv_obj_t *btreceiverpage_screen;
 
 #define POLL_MS 500
 
-static lv_obj_t *big_icon;
 static lv_obj_t *format_label;
 static lv_obj_t *device_label;
 static lv_obj_t *status_label;
@@ -192,7 +192,15 @@ static void poll_cb(lv_timer_t *timer) {
 	if (lv_screen_active() != btreceiverpage_screen) {
 		return;
 	}
+	// Arriving is the switch, and it has to be watched with the panel dark as
+	// well: a phone that connects after the screen went off must still be able
+	// to play. Only the painting below stops -- power_slow_in_standby() slows
+	// this timer to a fifth of its beat in standby, because a dark screen is
+	// not worth redrawing.
 	start_if_sender();
+	if (!power_screen_is_on()) {
+		return;
+	}
 	// The codec can be renegotiated mid-stream and the Bluetooth serial moves
 	// when it is, so both serials count. The stream falling silent counts too
 	// and has no serial of its own: nothing runs when frames stop arriving, so
@@ -306,6 +314,9 @@ static void loaded_cb(lv_event_t *e) {
 	// Arriving is the switch: there is nothing else this page does, so a toggle
 	// on it would only repeat what opening it already said.
 	started_for[0] = '\0';
+	if (poll_timer) {
+		lv_timer_resume(poll_timer); // in case a previous dark spell left it paused
+	}
 	start_if_sender();
 	refresh();
 }
@@ -339,28 +350,15 @@ void btreceiverpage_init(gui_config_t *cfg) {
 	settingsrow_scale_corner_icon(codec_glyph, cfg);
 	lv_obj_center(codec_glyph);
 
-	// Straight into the flex flow with no alignment of its own: the container
-	// settingsrow_page() builds already centres its children, and an object
-	// positioned by alignment leaves the flow and is measured as taking no
-	// space. On the V1 the 200 px source nearly fills the display and crowds
-	// the receiver status below it, so scale both its drawing and layout box.
-	big_icon = lv_image_create(container);
-	lv_image_set_src(big_icon, &icon_bluetooth_receiver_page);
-	// 64 on the V1 rather than 96: the equaliser card below has to share the
-	// panel with the icon, the codec line, the device and the track, and the
-	// mark is decoration where the codec is the reason the page exists.
-	int icon_size = compact ? 64 : 200;
-	int source_side = LV_MAX((int)icon_bluetooth_receiver_page.header.w,
-							 (int)icon_bluetooth_receiver_page.header.h);
-	lv_obj_set_size(big_icon, icon_size, icon_size);
-	lv_image_set_inner_align(big_icon, LV_IMAGE_ALIGN_CENTER);
-	if (source_side > 0) {
-		lv_image_set_scale(big_icon, (uint32_t)(LV_SCALE_NONE * icon_size / source_side));
-	}
-	lv_obj_set_style_margin_top(big_icon, compact ? 2 : 40, 0);
-
-	// Straight under the mark and ahead of the format line, so on the V1 they
-	// are on screen without a scroll.
+	// No mark at the top. The 64 px Bluetooth glyph was decoration, and on the
+	// V1 it was the 66 px that pushed the codec, the device and the sender's
+	// track under the fold: a phone streaming with AVRCP metadata overflowed
+	// the panel by about a line, so the artist and album it exists to show had
+	// to be scrolled to. With the glyph gone the same content fits without a
+	// scroll, which is what this page is for.
+	//
+	// Straight ahead of the format line, so on the V1 they are on screen
+	// without a scroll.
 	lv_obj_t *equaliser_pills = NULL;
 	settingsrow_pills(container, "dac_equalisers", &equaliser_pills);
 	eq_pill = settingsrow_pill(equaliser_pills, "eq_short", 0, eq_cb);
@@ -414,5 +412,10 @@ void btreceiverpage_init(gui_config_t *cfg) {
 	switcher_set_back_guard(btreceiverpage_screen, back_guard);
 
 	poll_timer = lv_timer_create(poll_cb, POLL_MS, NULL);
-	(void)poll_timer;
+	// A dark screen is not a reason to stop receiving, but it is a reason to
+	// stop painting: the receiver keeps running with the panel off, and this
+	// timer would otherwise wake the one core decoding the phone's stream
+	// twice a second all night. Slowed, not stopped: `start_if_sender()` still
+	// has to notice a phone that connects while the screen is dark.
+	power_slow_in_standby(poll_timer, 2000);
 }

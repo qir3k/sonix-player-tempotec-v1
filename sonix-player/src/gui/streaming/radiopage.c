@@ -14,6 +14,7 @@
 #include "src/gui/shell/icons.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/nowplaying/coverflow.h"
+#include "src/gui/nowplaying/coverloader.h"
 #include "src/gui/shell/confirm.h"
 #include "src/gui/shell/popover.h"
 #include "src/gui/shell/settingsrow.h"
@@ -76,6 +77,7 @@ typedef enum {
 
 typedef struct {
 	lv_obj_t *button;
+	lv_obj_t *icon;	   // the station's own art, at the left of the row
 	lv_obj_t *name;
 	lv_obj_t *detail;  // the line under the name, on station rows
 	lv_obj_t *quality; // ...the stream's quality badge on it
@@ -85,7 +87,19 @@ typedef struct {
 	lv_obj_t *menu_btn; // the ellipsis, on the favourites list only
 	lv_obj_t *playmark; // the accent bar on the station that is loaded, radio.txt only
 	int index;
+	int pool;		  // this row's place in the pool, and so in the coverloader's slots
+	cover_image_t art; // the decoded icon, owned here, or empty
+	char art_url[256]; // the station favicon this row is showing, so a scroll does not re-stat the card
+	char art_path[512]; // the cache file art was decoded from, or ""
+	int art_state;	   // 0 nothing asked, 1 out with the loader, 2 settled
+	bool art_refresh;  // the list was reopened: look for an icon that landed since
 } row_t;
+
+// The station's icon at the left of its row, the way every other list here
+// shows a thumb: the same 36 px the music lists use, inside the 76 px row. The
+// two lines of text beside it need the rest, and the playmark's gutter already
+// owns the first 14 px.
+#define RADIO_ICON_SIZE bp_pick(36, 36)
 
 // The mark on the loaded station, as the track lists draw it on the track that
 // is playing (medialist.c).
@@ -128,30 +142,33 @@ static gui_config_t *g_cfg;
 // user chooses in Radio settings. Recently played used to be a corner button
 // beside the heart and the search; it is a row among the categories now, where
 // it belongs -- it is a list of stations, like the others.
-#define HUB_ROWS 6
+#define HUB_ROWS 7
 enum {
 	HUB_RECENT = 0,
 	HUB_LANGUAGE,
 	HUB_COUNTRY,
 	HUB_GENRE,
 	HUB_CUSTOM,
-	// Last, and not beside Recent: the ids are what the saved hidden mask is
-	// indexed by, so a row added in the middle would move every bit after it
-	// and switch somebody's hidden row back on. The order the page shows them in
-	// is hub_order[] and is set below.
 	HUB_RECOMMENDED,
-
+	// The starred stations, added last -- after Recommended, not between it and
+	// Custom. The ids are what the saved hidden mask is indexed by, so a row
+	// added in the middle would move every bit after it: a player that had
+	// hidden Recommended would find Favourites hidden instead and Recommended
+	// back on. The order the page shows them in is hub_order[] and is set
+	// below.
+	HUB_FAVOURITES,
 };
 
-static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom", "recommended"};
+static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom", "recommended",
+												"favourites"};
 static const char *const HUB_LABELS[HUB_ROWS] = {"radio_recently_played", "language", "radio_country", "genre",
-												  "radio_custom", "radio_recommended"};
+												 "radio_custom", "radio_recommended", "favourites"};
 
-// The order a page that has never been arranged starts in: Recommended is the
-// second thing offered, right under what was played last, and the starred
-// stations are beside it.
-static const int HUB_DEFAULT_ORDER[HUB_ROWS] = {HUB_RECENT, HUB_RECOMMENDED, HUB_LANGUAGE,
-											  HUB_COUNTRY, HUB_GENRE, HUB_CUSTOM};
+// The order a page that has never been arranged starts in: the starred stations
+// are the second thing offered, right under what was played last, and
+// Recommended is beside them.
+static const int HUB_DEFAULT_ORDER[HUB_ROWS] = {HUB_RECENT, HUB_FAVOURITES, HUB_RECOMMENDED,
+											  HUB_LANGUAGE, HUB_COUNTRY, HUB_GENRE, HUB_CUSTOM};
 
 static lv_obj_t *hub_container;
 static lv_obj_t *hub_wifi_warning;
@@ -565,6 +582,123 @@ static void headings_layout(void) {
 	custom_list_height = y > 0 ? y : ROW_PITCH;
 }
 
+// The station's icon, if this one has played here before and its picture is
+// still in <card>/.local/radio-art. There is no download in this path: the list
+// binds ten rows on the UI thread and a network round trip there is the one
+// thing the page must not do. A station that has never played shows the same
+// radio glyph the player uses for a stream with no artwork, and the real icon
+// appears the next time the list is built after that station plays once.
+static int radio_icon_placeholder_scale(void) {
+	int side = LV_MAX((int)icon_radio_player.header.w, (int)icon_radio_player.header.h);
+	return side > 0 ? (LV_SCALE_NONE * RADIO_ICON_SIZE) / side : LV_SCALE_NONE;
+}
+
+static void row_art_placeholder(row_t *row) {
+	lv_image_set_src(row->icon, &icon_radio_player);
+	lv_image_set_scale(row->icon, (uint32_t)radio_icon_placeholder_scale());
+	lv_obj_set_style_image_recolor_opa(row->icon, LV_OPA_COVER, 0);
+}
+
+// Takes the picture off the widget before freeing it: LVGL keeps drawing from
+// the buffer it was last handed, and the row is rebuilt under a finger during a
+// scroll. Then lets the loader forget the request, whatever stage it was at.
+static void row_art_drop(row_t *row) {
+	if (!row->icon) {
+		return; // a row before its widgets exist: nothing to drop
+	}
+	lv_image_set_src(row->icon, NULL);
+	coverloader_release(COVERLOADER_RADIO_BASE + row->pool);
+	cover_free(&row->art);
+	row->art_url[0] = '\0';
+	row->art_path[0] = '\0';
+	row->art_state = 0;
+}
+
+static void row_art_bind(row_t *row, const radio_station_t *station) {
+	// The station's favicon URL, not the file: the row is rebound on every
+	// scroll tick, and the two stats radio_station_art_path() makes must not
+	// run ten times a frame while a finger moves. Scrolling to a station whose
+	// picture is in hand, or whose search has already been made, touches
+	// nothing; only opening the list again (art_refresh) looks at the card once
+	// more, for an icon the station wrote when it played since.
+	bool same = strcmp(station->favicon, row->art_url) == 0;
+	if (same && (row->art.pixels || !row->art_refresh)) {
+		row->art_refresh = false;
+		if (row->art.pixels) {
+			lv_image_set_src(row->icon, &row->art.dsc);
+			lv_image_set_scale(row->icon, LV_SCALE_NONE);
+			lv_obj_set_style_image_recolor_opa(row->icon, LV_OPA_TRANSP, 0);
+		} else {
+			row_art_placeholder(row);
+		}
+		return;
+	}
+
+	// A different station, the first bind, or a reopened list with no picture:
+	// drop whatever the row held, then ask for the new picture when there is
+	// one to ask for.
+	row->art_refresh = false;
+	row_art_drop(row);
+	snprintf(row->art_url, sizeof(row->art_url), "%s", station->favicon);
+	radio_station_art_path(station->favicon, row->art_path, sizeof(row->art_path));
+	row_art_placeholder(row);
+	if (row->art_path[0]) {
+		coverloader_request_image_file(COVERLOADER_RADIO_BASE + row->pool, row->art_path, RADIO_ICON_SIZE);
+		row->art_state = 1;
+	}
+}
+
+static void row_art_collect(row_t *row) {
+	if (row->art_state != 1) {
+		return;
+	}
+	cover_image_t image = {0};
+	bool finished = false;
+	bool found = coverloader_take(COVERLOADER_RADIO_BASE + row->pool, &image, &finished);
+	if (!finished) {
+		return;
+	}
+	row->art_state = 2;
+	if (!found) {
+		return;
+	}
+	// Off the widget first: LVGL draws from the buffer it was handed, and freeing
+	// it while it is still the icon's source is a use-after-free on the next
+	// frame. (Usually empty -- a request is only made with nothing in hand --
+	// but the row is a pooled widget and this is the cheap guard.)
+	if (row->art.pixels) {
+		lv_image_set_src(row->icon, NULL);
+	}
+	cover_free(&row->art);
+	row->art = image;
+	// Bound to a station when it lands, and not hidden: the row may have been
+	// hidden or rebound while the decode was out, and its new station's art
+	// must not be replaced by this one.
+	if (row->index >= 0 && !lv_obj_is_hidden(row->button)) {
+		lv_image_set_src(row->icon, &row->art.dsc);
+		lv_image_set_scale(row->icon, LV_SCALE_NONE);
+		lv_obj_set_style_image_recolor_opa(row->icon, LV_OPA_TRANSP, 0);
+	}
+}
+
+// Runs on the list's poll timer: a finished picture is put up without waiting
+// for the next bind.
+static void rows_art_update(void) {
+	for (int i = 0; i < ROW_POOL; i++) {
+		row_art_collect(&rows[i]);
+	}
+}
+
+// The page was opened again: a station that played while it was closed has
+// written its icon to the cache since, so each row looks at the card once more
+// on its next bind. Not done for a page appended to (scrolling), where nothing
+// has had time to change and ten re-stats would only cost the scroll.
+static void rows_art_refresh(void) {
+	for (int i = 0; i < ROW_POOL; i++) {
+		rows[i].art_refresh = true;
+	}
+}
+
 static void row_bind(row_t *row, int index) {
 	row->index = index;
 	row_update_playmark(row);
@@ -581,6 +715,7 @@ static void row_bind(row_t *row, int index) {
 	lv_obj_set_height(row->button, row_height());
 
 	if (list_mode == LIST_TERMS) {
+		hide(row->icon); // a language or a country has no picture
 		lv_label_set_text(row->name, terms[index].label);
 		hide(row->detail);
 		show(row->chevron);
@@ -588,7 +723,9 @@ static void row_bind(row_t *row, int index) {
 		return;
 	}
 
+	show(row->icon);
 	const radio_station_t *s = &stations[index];
+	row_art_bind(row, s);
 	lv_label_set_text(row->name, s->name);
 
 	// Under the name: the quality badge, and on a search's hits the country
@@ -960,6 +1097,11 @@ static void list_poll_cb(lv_timer_t *timer) {
 		return;
 	}
 
+	// Station icons land here, on the same beat as the rest of the list's
+	// bookkeeping: the decode happened off the UI thread and this only swaps
+	// the finished picture in.
+	rows_art_update();
+
 	// The mark follows the station, which changes from the player and the
 	// side keys as well as from here.
 	if (list_mode == LIST_CUSTOM) {
@@ -1058,6 +1200,9 @@ static void list_poll_cb(lv_timer_t *timer) {
 
 static void list_loaded_cb(lv_event_t *e) {
 	(void)e;
+	// A station played while this page was away wrote its icon to the cache
+	// then; reopening is the moment the rows should look for it.
+	rows_art_refresh();
 	// Both stored lists can change from the player while this page is closed:
 	// the star adds and removes favourites, and every station played lands in
 	// the recents.
@@ -1066,7 +1211,10 @@ static void list_loaded_cb(lv_event_t *e) {
 		list_rebuild();
 		set_message(station_count ? NULL : stored_empty_message());
 	} else {
-		list_window_update();
+		// A rebuild, not only a window update, so the refreshed rows are bound
+		// again. Keeping the scroll makes the difference invisible when there
+		// is nothing new.
+		list_rebuild_keep(true);
 	}
 }
 
@@ -1157,11 +1305,23 @@ static void build_list_page(gui_config_t *cfg) {
 		lv_obj_set_flex_flow(row->button, LV_FLEX_FLOW_ROW);
 		lv_obj_set_flex_align(row->button, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
+		// The station's icon, the first thing in the row, exactly as every
+		// other list here puts a thumb before its name. It starts clear of the
+		// playmark's gutter and the text column takes what is left.
+		row->pool = i;
+		row->icon = lv_image_create(row->button);
+		lv_obj_set_size(row->icon, RADIO_ICON_SIZE, RADIO_ICON_SIZE);
+		lv_image_set_inner_align(row->icon, LV_IMAGE_ALIGN_CENTER);
+		lv_obj_add_style(row->icon, &theme_style_icon, 0);
+		lv_obj_set_style_image_recolor_opa(row->icon, LV_OPA_COVER, 0);
+		lv_obj_set_clickable(row->icon, false);
+		lv_obj_set_event_bubble(row->icon, true);
+		row_art_placeholder(row);
+
 		// The name, and under it the quality badge -- one small glyph, not the
 		// codec and the bitrate spelled out -- with the country code beside it on
-		// a search's hits. No icon in front: an identical note on every row says
-		// nothing, and a station is recognised by its name. A station that
-		// cannot be played stays faint, and the popup says why.
+		// a search's hits. The station's own icon leads it, when it has one. A
+		// station that cannot be played stays faint, and the popup says why.
 		lv_obj_t *text = lv_obj_create(row->button);
 		lv_obj_set_flex_grow(text, 1);
 		lv_obj_set_height(text, LV_SIZE_CONTENT);
@@ -2364,8 +2524,8 @@ void radiopage_init(gui_config_t *cfg) {
 	// settings for this page. Corner buttons are placed from the right edge, so
 	// slot 0 (the rightmost) is the settings gear and search is beside it. The
 	// heart is gone from the header: the starred stations are the FAVOURITES
-	// row below, between Recommended and Language, and they can be moved or
-	// switched off with the rest.
+	// row below, under Recently played, and they can be moved or switched off
+	// with the rest.
 	hub_settings_btn = corner_button(cfg, 0, &icon_music_settings);
 	lv_obj_add_event_cb(hub_settings_btn, radio_settings_cb, LV_EVENT_CLICKED, NULL);
 
@@ -2378,9 +2538,13 @@ void radiopage_init(gui_config_t *cfg) {
 	hub_rows[HUB_COUNTRY] = settingsrow_add(hub_container, HUB_LABELS[HUB_COUNTRY], NULL, country_cb, NULL);
 	hub_rows[HUB_GENRE] = settingsrow_add(hub_container, HUB_LABELS[HUB_GENRE], NULL, genre_cb, NULL);
 	hub_rows[HUB_CUSTOM] = settingsrow_add(hub_container, HUB_LABELS[HUB_CUSTOM], NULL, custom_cb, NULL);
-	hub_rows[HUB_RECOMMENDED] = settingsrow_add(hub_container, HUB_LABELS[HUB_RECOMMENDED], NULL, recommended_cb, NULL);
+	hub_rows[HUB_FAVOURITES] =
+		settingsrow_add(hub_container, HUB_LABELS[HUB_FAVOURITES], NULL, favourites_cb, NULL);
+	hub_rows[HUB_RECOMMENDED] =
+		settingsrow_add(hub_container, HUB_LABELS[HUB_RECOMMENDED], NULL, recommended_cb, NULL);
 	// The heart leads this one row, the way the corner button wore it in the
 	// header: filled, because the list it opens is the starred ones.
+	settingsrow_add_icon(hub_rows[HUB_FAVOURITES], &icon_heart_filled, THEME_SEMANTIC_RED);
 
 	// The same notice as the Wi-Fi transfer page: a centred message, and below
 	// it the "Wi-Fi settings" row that leads to where it can be fixed.

@@ -11,6 +11,7 @@
 
 #include "src/gui/shell/gui.h"
 #include "src/system/core/utils.h"
+#include "src/system/decode/growfile.h"
 #include "src/system/device/system.h"
 #include "src/system/device/usb.h"
 #include "src/system/streaming/podcastdl.h"
@@ -20,6 +21,14 @@
 #define KEEP_MUSIC_DIR "Music"
 #define KEEP_PART_SUFFIX ".part"
 #define KEEP_CHUNK 32768
+
+// How long "Keep on card" waits for a download that is still in flight. A
+// hi-res DASH track can take minutes on a slow link, and the wait sleeps, so it
+// costs the player nothing but the one slot "one keep at a time" already
+// reserves. Long enough for the biggest track on the slowest link anybody would
+// listen through, short enough to end a keep that will never finish.
+#define KEEP_WAIT_MAX_MS (30 * 60 * 1000)
+#define KEEP_WAIT_STEP_MS 200
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static bool running;
@@ -229,6 +238,39 @@ static void notify_async(void *user) {
 
 static void notify(int done) { gui_post(notify_async, (void *)(intptr_t)done); }
 
+// Waits for a download that is still growing to finish. A track being listened
+// to is downloaded past its prebuffer in the background, so the marker the cache
+// keeps beside it exists exactly when somebody is most likely to press "Keep on
+// card" -- and refusing at once, which is what this used to do, meant the button
+// never worked for a track that was playing. It waits here instead, on a sleep,
+// and the copy starts when the file is whole.
+//
+// A download that ended badly leaves its marker but stops growing; that is a
+// failure to report, not one to wait thirty minutes for. The small grace after
+// the growth stops is for the success path, where download_end() clears the
+// marker in the same breath as it stops the growth.
+static bool wait_for_download(const char *path, const char *marker) {
+	int waited = 0;
+	while (waited < KEEP_WAIT_MAX_MS) {
+		struct stat st;
+		if (stat(marker, &st) != 0) {
+			return true; // finished, or never was in flight
+		}
+		if (!growfile_is_growing(path)) {
+			for (int i = 0; i < 10; i++) {
+				usleep(100 * 1000);
+				if (stat(marker, &st) != 0) {
+					return true;
+				}
+			}
+			return false; // the download gave up and left its marker
+		}
+		usleep(KEEP_WAIT_STEP_MS * 1000);
+		waited += KEEP_WAIT_STEP_MS;
+	}
+	return false;
+}
+
 static void *keep_worker(void *arg) {
 	char path[768];
 	char service[16];
@@ -238,11 +280,11 @@ static void *keep_worker(void *arg) {
 	thread_be_low_priority("stream keep"); // the card is also playing from it
 
 	// The download is still growing: a copy now would be a truncated track the
-	// library would then index as a real one.
+	// library would then index as a real one. Wait for it, rather than refusing
+	// a track that is merely still arriving (see wait_for_download).
 	char marker[800];
 	snprintf(marker, sizeof(marker), "%.760s.incompleto", path);
-	struct stat st;
-	bool ok = stat(marker, &st) != 0;
+	bool ok = wait_for_download(path, marker);
 
 	if (ok) {
 		char dest[768];
@@ -285,9 +327,10 @@ bool streamkeep_keep(const char *path) {
 	}
 	// No card, one that is read-only, or one the computer is using: none of
 	// them will take a track, and finding that out after the copy starts is
-	// worse than saying so now.
+	// worse than saying so now. The caller says why -- it knows whether the
+	// card is missing or merely unusable, and saying it here as well would put
+	// two toasts on the screen for one tap.
 	if (!storage_sd_root() || !storage_sd_writable() || !storage_card_attached() || usb_storage_active()) {
-		notify(0);
 		return false;
 	}
 

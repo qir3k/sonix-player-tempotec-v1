@@ -2115,6 +2115,19 @@ static bool radio_art_find(const char *url, char *out, size_t size) {
 	return false;
 }
 
+// The lists' way in: the cached icon's path, or false when this station has not
+// played here yet. Deliberately not a download -- the list binds ten rows at a
+// time on the UI thread, and a network round trip there is the one thing this
+// page must not do. The station's icon is fetched once, when it is played, and
+// this is the same file Now Playing and the screensaver draw.
+bool radio_station_art_path(const char *favicon, char *out, size_t out_size) {
+	if (!out || out_size == 0) {
+		return false;
+	}
+	out[0] = '\0';
+	return radio_art_find(favicon, out, out_size);
+}
+
 // The folder beside the one the station list lives in; it may not exist yet on
 // a card that has only ever played music.
 static bool radio_art_dir_make(const char *path) {

@@ -122,6 +122,9 @@ void clock_format_hm(char *out, size_t out_size, int hour, int minute) {
 }
 bool power_screen_is_on(void) { return screen_on; }
 void power_notify_activity(void) {}
+// No phone feeding the DAC in this test: the screensaver is the thing under
+// test, and receiver mode is the one state that takes it off the wake.
+bool btreceiver_is_active(void) { return false; }
 void power_pause_in_standby(lv_timer_t *timer) { (void)timer; }
 void screensaverpics_set_root(const char *card_root) { (void)card_root; }
 // The largest picture the screensaver last asked the folder for, and how many
@@ -570,9 +573,10 @@ static void check_clock_clearance(void) {
 
 // The strip's three lines must sit in two gaps of the same size: the air
 // between the title and the artist is the air between the artist and the
-// clock. The clock is lifted out of its line to clear the swipe-up sign (see
-// CLOCK_LIFT), which opens the lower gap, so the artist is lifted half as far
-// and the two gaps meet in the middle.
+// clock. Lifting the clock to clear the swipe-up sign (CLOCK_LIFT) takes its
+// lift out of the lower gap, and four pixels is what closes the three-pixel
+// difference the two gaps had with the clock at its foot. The title and the
+// artist are left where they were.
 //
 // Measured on the rendered rows rather than the boxes: the faces leave their
 // own leading inside a line box, and it is the ink a reader sees.
