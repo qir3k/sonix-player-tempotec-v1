@@ -229,6 +229,7 @@ static void build_marks(void) {
 	menu_mark = -1;
 	if (marks_title) {
 		lv_label_set_text(marks_title, open_title[0] ? open_title : tr("bookmarks"));
+		settingsrow_title_realign(marks_title);
 	}
 	if (!marks) {
 		marks = calloc(MARKS_MAX, sizeof(*marks));

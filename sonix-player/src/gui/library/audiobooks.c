@@ -653,6 +653,7 @@ static void books_open(list_id_t list, const char *value, const char *title) {
 	books_list = list;
 	snprintf(books_value, sizeof(books_value), "%s", value ? value : "");
 	lv_label_set_text(books_title, title);
+	settingsrow_title_realign(books_title);
 	reload_books();
 	switch_screen(books_screen);
 }
@@ -962,6 +963,7 @@ static void reload_names(void) {
 static void names_open(list_id_t kind) {
 	names_kind = kind;
 	lv_label_set_text(names_title, tr(kind == LIST_SERIES ? "audiobook_series" : "audiobook_authors"));
+	settingsrow_title_realign(names_title);
 	reload_names();
 	switch_screen(names_screen);
 }

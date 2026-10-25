@@ -1321,6 +1321,7 @@ static void fill_list(int from) {
 	paint_pill(pill_trending, list_kind == JOB_TRENDING);
 	if (list_title) {
 		lv_label_set_text(list_title, home_view ? tr("podcasts") : result_title);
+		settingsrow_title_realign(list_title);
 	}
 
 	if (list_count == 0) {

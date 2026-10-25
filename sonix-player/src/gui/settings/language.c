@@ -66,6 +66,7 @@ static void refresh_titles(void) {
 	}
 	if (page_title) {
 		lv_label_set_text(page_title, text);
+		settingsrow_title_realign(page_title);
 	}
 	if (panel_title) {
 		lv_label_set_text(panel_title, text);

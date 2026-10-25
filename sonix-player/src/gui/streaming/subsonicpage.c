@@ -277,6 +277,7 @@ static void edit_cb(lv_event_t *e) {
 	const char *values[] = {draft.server, draft.username, draft.password};
 	const size_t sizes[] = {sizeof(draft.server), sizeof(draft.username), sizeof(draft.password)};
 	lv_label_set_text(edit_title, tr(keys[editing]));
+	settingsrow_title_realign(edit_title);
 	lv_textarea_set_max_length(edit_field, (uint32_t)sizes[editing] - 1);
 	// Keep the password readable so it can be checked before connecting.
 	lv_textarea_set_password_mode(edit_field, false);
@@ -319,6 +320,7 @@ static void reset_library(void) {
 	snprintf(current_list.title, sizeof(current_list.title), "%s", tr("artists"));
 	lv_obj_clean(list_container);
 	lv_label_set_text(list_title, current_list.title);
+	settingsrow_title_realign(list_title);
 }
 
 static void connect_cb(lv_event_t *e) {
@@ -398,6 +400,7 @@ static void run_list(job_t job, bool push_history) {
 	shown_more = false;
 	lv_obj_clean(list_container);
 	lv_label_set_text(list_title, job.title);
+	settingsrow_title_realign(list_title);
 	if (lv_screen_active() != list_screen) {
 		switch_screen(list_screen);
 	}

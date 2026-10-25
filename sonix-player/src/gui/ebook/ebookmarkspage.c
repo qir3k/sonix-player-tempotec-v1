@@ -128,6 +128,7 @@ static void build_marks(void) {
 	lv_obj_clean(marks_list);
 	if (marks_title) {
 		lv_label_set_text(marks_title, open_book_name);
+		settingsrow_title_realign(marks_title);
 	}
 
 	int count = bookmark_count(open_book_path);

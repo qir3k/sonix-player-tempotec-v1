@@ -1106,10 +1106,12 @@ static void list_scrolled_cb(lv_event_t *e) {
 static void title_refresh(void) {
 	if (strcmp(path, root_path) == 0) {
 		lv_label_set_text(title_label, tr("file_explorer"));
+		settingsrow_title_realign(title_label);
 		return;
 	}
 	const char *slash = strrchr(path, '/');
 	lv_label_set_text(title_label, slash ? slash + 1 : path);
+	settingsrow_title_realign(title_label);
 }
 
 static void rebuild(void) {
