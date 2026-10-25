@@ -4100,9 +4100,8 @@ void medialist_open(const char *title, library_list_t kind, library_filter_t fil
 }
 
 // A track list built from paths handed in rather than queried: a playlist's
-// contents. It reuses the tracks panel wholesale -- covers, the ellipsis
-// menu, the tap that starts the whole list as the queue -- by filling the
-// model through the very callback library_for_each would have used.
+// contents. It reuses the tracks panel wholesale -- covers and row playback --
+// by filling the model through the very callback library_for_each would have used.
 void medialist_open_paths(const char *title, const char *const *paths, const char *const *names,
 						  const char *const *artists, int count, const char *playlist) {
 	panel_t *p = &panel_tracks;
@@ -4123,13 +4122,14 @@ void medialist_open_paths(const char *title, const char *const *paths, const cha
 
 	// A list handed in as paths has an order of its own -- the one whoever
 	// built it put it in -- so the buttons that reorder the list stay away.
-	// circle-play is not one of them: it orders the queue, not the list.
-	show_corner(p->play_btn, true);
+	// Row taps still start individual tracks.
+	play_menu_hide();
+	show_corner(p->play_btn, false);
 	show_corner(p->sort_btn, false);
 	show_corner(p->album_btn, false);
 	show_corner(p->reverse_btn, false);
-	p->corner_slots = 1;
-	settingsrow_title_corner_slots(p->title_label, p->cfg, 1);
+	p->corner_slots = 0;
+	settingsrow_title_corner_slots(p->title_label, p->cfg, 0);
 
 	for (int i = 0; i < ROW_POOL; i++) {
 		row_drop_thumb(p, &p->rows[i]);

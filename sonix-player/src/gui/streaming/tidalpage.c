@@ -3547,43 +3547,85 @@ static int tidal_saved_cmp(const void *a, const void *b) {
 	return strcasecmp(((const tidal_saved_entry_t *)a)->title, ((const tidal_saved_entry_t *)b)->title);
 }
 
-static void open_downloads_cb(lv_event_t *e) {
-	(void)e;
-	const char *root = tidalcache_dir();
-	if (!root) {
+static bool tidal_saved_tag(const char *path, const char *key, char *out, size_t size) {
+	if (!path || !key || !out || size == 0) {
+		return false;
+	}
+	out[0] = '\0';
+	char tags[800];
+	if ((size_t)snprintf(tags, sizeof(tags), "%.760s.tags", path) >= sizeof(tags)) {
+		return false;
+	}
+	FILE *file = fopen(tags, "r");
+	if (!file) {
+		return false;
+	}
+	size_t key_len = strlen(key);
+	char line[512];
+	bool found = false;
+	while (!found && fgets(line, sizeof(line), file)) {
+		if (strncmp(line, key, key_len) != 0 || line[key_len] != '=') {
+			continue;
+		}
+		char *value = line + key_len + 1;
+		char *end = value + strlen(value);
+		while (end > value && (end[-1] == '\n' || end[-1] == '\r')) {
+			*--end = '\0';
+		}
+		snprintf(out, size, "%s", value);
+		found = out[0] != '\0';
+	}
+	fclose(file);
+	return found;
+}
+
+static void tidal_saved_scan_dir(const char *root, tidal_saved_entry_t **entries, int *count, int *capacity,
+								 int depth) {
+	if (depth > 16 || *count >= TIDAL_SAVED_MAX) {
 		return;
 	}
-	tidal_saved_entry_t *entries = NULL;
-	int capacity = 0;
-	int count = 0;
 	DIR *dir = opendir(root);
+	if (!dir) {
+		return;
+	}
 	struct dirent *de;
-	while (dir && count < TIDAL_SAVED_MAX && (de = readdir(dir)) != NULL) {
-		if (de->d_name[0] == '.' || !playlist_is_playable_file(de->d_name)) {
+	while (*count < TIDAL_SAVED_MAX && (de = readdir(dir)) != NULL) {
+		if (de->d_name[0] == '.' || strcmp(de->d_name, "..") == 0) {
+			continue;
+		}
+		char path[768];
+		int n = snprintf(path, sizeof(path), "%s/%s", root, de->d_name);
+		if (n < 0 || (size_t)n >= sizeof(path)) {
 			continue;
 		}
 		struct stat st;
-		if (count == capacity) {
-			int next = capacity ? capacity * 2 : 8;
+		if (lstat(path, &st) != 0) {
+			continue;
+		}
+		if (S_ISDIR(st.st_mode)) {
+			tidal_saved_scan_dir(path, entries, count, capacity, depth + 1);
+			continue;
+		}
+		if (!S_ISREG(st.st_mode) || !playlist_is_playable_file(de->d_name) || growfile_is_growing(path)) {
+			continue;
+		}
+		if (*count == *capacity) {
+			int next = *capacity ? *capacity * 2 : 8;
 			if (next > TIDAL_SAVED_MAX) {
 				next = TIDAL_SAVED_MAX;
 			}
-			tidal_saved_entry_t *grown = realloc(entries, (size_t)next * sizeof(*entries));
+			tidal_saved_entry_t *grown = realloc(*entries, (size_t)next * sizeof(**entries));
 			if (!grown) {
 				break;
 			}
-			entries = grown;
-			capacity = next;
+			*entries = grown;
+			*capacity = next;
 		}
-		tidal_saved_entry_t *entry = &entries[count];
-		int n = snprintf(entry->path, sizeof(entry->path), "%s/%s", root, de->d_name);
-		if (n < 0 || (size_t)n >= sizeof(entry->path) || growfile_is_growing(entry->path)) {
+		tidal_saved_entry_t *entry = &(*entries)[*count];
+		if (snprintf(entry->path, sizeof(entry->path), "%s", path) >= (int)sizeof(entry->path)) {
 			continue;
 		}
-		if (stat(entry->path, &st) != 0 || !S_ISREG(st.st_mode)) {
-			continue;
-		}
-		if (!tidalcache_tag(entry->path, "title", entry->title, sizeof(entry->title))) {
+		if (!tidal_saved_tag(path, "title", entry->title, sizeof(entry->title))) {
 			snprintf(entry->title, sizeof(entry->title), "%s", de->d_name);
 			char *dot = strrchr(entry->title, '.');
 			if (dot) {
@@ -3592,20 +3634,34 @@ static void open_downloads_cb(lv_event_t *e) {
 		}
 		char artist[TIDAL_NAME_MAX] = "";
 		char duration[16] = "";
-		tidalcache_tag(entry->path, "artist", artist, sizeof(artist));
-		if (tidalcache_tag(entry->path, "duration", duration, sizeof(duration))) {
+		tidal_saved_tag(path, "artist", artist, sizeof(artist));
+		if (tidal_saved_tag(path, "duration", duration, sizeof(duration))) {
 			char length[16];
 			duration_text(atoi(duration), length, sizeof(length));
-			snprintf(entry->detail, sizeof(entry->detail), "%s%s%s", artist, artist[0] && length[0] ? " \xC2\xB7 " : "",
-					 length);
+			snprintf(entry->detail, sizeof(entry->detail), "%s%s%s", artist,
+					 artist[0] && length[0] ? " \xC2\xB7 " : "", length);
 		} else {
 			snprintf(entry->detail, sizeof(entry->detail), "%s", artist);
 		}
-		count++;
+		(*count)++;
 	}
-	if (dir) {
-		closedir(dir);
+	closedir(dir);
+}
+
+static void open_downloads_cb(lv_event_t *e) {
+	(void)e;
+	const char *sd_root = storage_sd_root();
+	if (!sd_root || !sd_root[0]) {
+		return;
 	}
+	char root[512];
+	if (snprintf(root, sizeof(root), "%s/Music/Tidal", sd_root) >= (int)sizeof(root)) {
+		return;
+	}
+	tidal_saved_entry_t *entries = NULL;
+	int count = 0;
+	int capacity = 0;
+	tidal_saved_scan_dir(root, &entries, &count, &capacity, 0);
 	if (count > 1) {
 		qsort(entries, (size_t)count, sizeof(*entries), tidal_saved_cmp);
 	}
@@ -4822,9 +4878,9 @@ bool tidalpage_search_artist(const char *artist) {
 
 static void home_loaded_cb(lv_event_t *e) {
 	(void)e;
-	// The card may have been inserted or removed since the page was built, and
-	// without a card there is nowhere to download to.
-	tidalcache_set_root(storage_sd_root());
+	// Playback cache stays in volatile storage as cards come and go. Explicit
+	// downloads use storage_sd_root() when they are kept on the card.
+	tidalcache_set_root("/tmp");
 	qobuzart_set_root(storage_sd_root());
 	listcache_set_root(storage_sd_root());
 
@@ -4928,7 +4984,7 @@ void tidalpage_init(gui_config_t *cfg) {
 	qobuzart_set_root(storage_sd_root());
 	listcache_set_root(storage_sd_root());
 
-	tidalcache_set_root(storage_sd_root());
+	tidalcache_set_root("/tmp");
 	rebuild_home();
 
 	lv_obj_add_event_cb(tidal_screen, home_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);

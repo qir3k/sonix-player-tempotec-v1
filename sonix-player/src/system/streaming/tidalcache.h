@@ -32,16 +32,15 @@
 
 #define TIDALCACHE_DIR ".local/tidal-cache"
 
-// The same ceiling as Qobuz. The two count separately, so in the worst case --
-// using both on the same day -- they take twice as much. That is deliberate:
-// they are two transient caches that empty themselves, and a shared budget
-// would mean listening to Tidal deletes what was being listened to on Qobuz.
-#define TIDALCACHE_MAX_BYTES (1024L * 1024L * 1024L)
+// A bounded volatile playback cache. It is rooted at /tmp, never on the card;
+// manually kept tracks are copied to Music/Tidal by streamkeep.
+#define TIDALCACHE_MAX_BYTES (128L * 1024L * 1024L)
 
-// Where the card is. Once at startup and on every card change; NULL or empty
-// disables the cache (and with it Tidal, which cannot play anything without
-// it).
-void tidalcache_set_root(const char *sd_root);
+// Base for the transient cache, set to /tmp on the player. NULL or empty
+// disables playback caching.
+void tidalcache_set_root(const char *root);
+// Removes the previous on-card temporary cache during the move to /tmp.
+void tidalcache_clear_card_cache(const char *sd_root);
 bool tidalcache_ready(void);
 
 // The path this track would have. Says nothing about whether it exists.
