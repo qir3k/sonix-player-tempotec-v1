@@ -22,6 +22,7 @@
 #define YTMUSIC_SESSION_FILE "ytmusic_session.ini"
 #define YTMUSIC_COOKIE_MAX 6000
 #define YTMUSIC_RESPONSE_LIMIT (3 * 1024 * 1024)
+#define YTMUSIC_RESPONSE_TOKEN_LIMIT 160000
 #define YTMUSIC_TIMEOUT 15
 #define YTMUSIC_SITE "https://music.youtube.com"
 #define YTMUSIC_OAUTH_DEVICE_URL "https://oauth2.googleapis.com/device/code"
@@ -853,7 +854,7 @@ int ytmusic_search_tracks(const char *query, ytmusic_track_t *tracks, int limit,
 	char *body = NULL;
 	if (!youtubei_post("search", request, false, &body, NULL, error, error_size)) return -1;
 	json_doc_t doc;
-	if (!json_parse_limited(body, &doc, 60000)) {
+	if (!json_parse_limited(body, &doc, YTMUSIC_RESPONSE_TOKEN_LIMIT)) {
 		free(body);
 		set_error(error, error_size, "ytmusic_unreadable_reply");
 		return -1;
@@ -877,7 +878,7 @@ int ytmusic_browse_chart_tracks(ytmusic_track_t *tracks, int limit,
 	char *body = NULL;
 	if (!youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
 	json_doc_t doc;
-	if (!json_parse_limited(body, &doc, 60000)) {
+	if (!json_parse_limited(body, &doc, YTMUSIC_RESPONSE_TOKEN_LIMIT)) {
 		free(body);
 		set_error(error, error_size, "ytmusic_unreadable_reply");
 		return -1;

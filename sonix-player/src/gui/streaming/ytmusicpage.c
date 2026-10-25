@@ -29,7 +29,9 @@ static lv_obj_t *results_screen;
 static lv_obj_t *results_list;
 static lv_obj_t *results_title;
 static lv_obj_t *search_field;
-static lv_obj_t *session_row;
+static lv_obj_t *sign_in_row;
+static lv_obj_t *signed_in_row;
+static lv_obj_t *sign_out_row;
 static lv_obj_t *login_screen;
 static lv_obj_t *login_qr;
 static lv_obj_t *login_code_label;
@@ -72,6 +74,13 @@ typedef struct {
 
 static void login_tick_cb(lv_timer_t *timer);
 
+static void home_refresh_session_rows(void) {
+	bool logged_in = ytmusic_logged_in();
+	if (sign_in_row) lv_obj_set_hidden(sign_in_row, logged_in);
+	if (signed_in_row) lv_obj_set_hidden(signed_in_row, !logged_in);
+	if (sign_out_row) lv_obj_set_hidden(sign_out_row, !logged_in);
+}
+
 static void login_stop(void) {
 	login_active = false;
 	login_busy = false;
@@ -106,7 +115,7 @@ static void login_result_done(void *data) {
 		login_elapsed = 0;
 		lv_label_set_text(login_code_label, device_login.user_code);
 		lv_label_set_text(login_url_label, device_login.verification_url);
-		lv_label_set_text(login_message, "Open this page on your phone, enter the code shown below, then approve access.");
+		lv_label_set_text(login_message, "Scan the QR code, or enter this code on Google.");
 		bool qr_ok = login_qr &&
 			lv_qrcode_update(login_qr, device_login.verification_url,
 							(uint32_t)strlen(device_login.verification_url)) == LV_RESULT_OK;
@@ -127,6 +136,7 @@ static void login_result_done(void *data) {
 	}
 	if (result->state == YTMUSIC_LOGIN_OK) {
 		login_stop();
+		home_refresh_session_rows();
 		toast_success("ytmusic_signed_in");
 		if (lv_screen_active() == login_screen) switch_screen(ytmusic_screen);
 		free(result);
@@ -420,24 +430,10 @@ static void search_cb(lv_event_t *e) {
 	show_search();
 }
 
-static void import_session_cb(lv_event_t *e) {
-	(void)e;
-	if (!gui_card_available()) {
-		gui_notify_no_card();
-		return;
-	}
-	char error[192] = "";
-	if (ytmusic_import_session_file(page_cfg->sd_root_path, error, sizeof(error))) {
-		settingsrow_add_caption(session_row, "Session saved on this player and restored after reboot.");
-		toast_success("ytmusic_signed_in");
-	} else {
-		toast_error(error[0] ? error : "ytmusic_session_file_invalid");
-	}
-}
-
 static void logout_cb(lv_event_t *e) {
 	(void)e;
 	if (ytmusic_logout()) {
+		home_refresh_session_rows();
 		toast_success("ytmusic_signed_out");
 	}
 	else toast_error("ytmusic_session_remove_failed");
@@ -446,6 +442,7 @@ static void logout_cb(lv_event_t *e) {
 static void build_search_page(void) {
 	search_screen = lv_obj_create(NULL);
 	lv_obj_add_style(search_screen, &theme_style_screen, 0);
+	lv_obj_set_scrollable(search_screen, false);
 	settingsrow_title(search_screen, page_cfg, "Search YouTube Music");
 	search_field = lv_textarea_create(search_screen);
 	lv_textarea_set_one_line(search_field, true);
@@ -453,11 +450,16 @@ static void build_search_page(void) {
 	lv_obj_set_size(search_field, page_cfg->screen_width - 2 * page_cfg->padding, 62);
 	lv_obj_align(search_field, LV_ALIGN_TOP_LEFT, page_cfg->padding, settingsrow_content_top(page_cfg));
 	lv_obj_add_style(search_field, &theme_style_card, 0);
+	lv_obj_set_scrollbar_mode(search_field, LV_SCROLLBAR_MODE_OFF);
+	lv_obj_set_style_radius(search_field, 12, 0);
+	lv_obj_set_style_border_width(search_field, 0, 0);
+	lv_obj_set_style_shadow_width(search_field, 0, 0);
+	lv_obj_set_style_pad_all(search_field, 14, 0);
 	lv_obj_set_style_text_font(search_field, &font_ui_24, 0);
 	keyboard_style_caret(search_field);
 	lv_obj_add_event_cb(search_field, search_field_cb, LV_EVENT_CLICKED, NULL);
 	search_keyboard = keyboard_create(search_screen, page_cfg->screen_width,
-		page_cfg->screen_width < 320 ? 144 : 316, search_field, NULL, "search", search_accept_cb, NULL);
+		page_cfg->screen_width < 320 ? 144 : 316, search_field, NULL, "ok", search_accept_cb, NULL);
 	switcher_attach_back_gesture(search_screen);
 
 	results_screen = lv_obj_create(NULL);
@@ -471,26 +473,22 @@ static void build_search_page(void) {
 static void build_login_page(void) {
 	login_screen = lv_obj_create(NULL);
 	lv_obj_add_style(login_screen, &theme_style_screen, 0);
-	settingsrow_title(login_screen, page_cfg, "Sign in to YouTube Music");
+	lv_obj_set_scrollable(login_screen, false);
+	settingsrow_title(login_screen, page_cfg, "Sign in with Google");
 
 	lv_obj_t *box = lv_obj_create(login_screen);
-	lv_obj_set_size(box, page_cfg->screen_width - 2 * page_cfg->padding, LV_SIZE_CONTENT);
-	lv_obj_align(box, LV_ALIGN_TOP_MID, 0, settingsrow_content_top(page_cfg) + 12);
+	int top = settingsrow_content_top(page_cfg);
+	lv_obj_set_size(box, page_cfg->screen_width - 2 * page_cfg->padding,
+				 page_cfg->screen_height - top - page_cfg->padding);
+	lv_obj_align(box, LV_ALIGN_TOP_MID, 0, top);
 	lv_obj_set_style_bg_opa(box, 0, 0);
 	lv_obj_set_style_border_width(box, 0, 0);
-	lv_obj_set_style_pad_all(box, 0, 0);
-	lv_obj_set_style_pad_row(box, 14, 0);
-	lv_obj_set_scrollable(box, false);
+	lv_obj_set_style_pad_all(box, page_cfg->padding, 0);
+	lv_obj_set_style_pad_row(box, 10, 0);
+	lv_obj_set_scroll_dir(box, LV_DIR_VER);
+	lv_obj_set_scrollbar_mode(box, LV_SCROLLBAR_MODE_OFF);
 	lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-	lv_obj_t *hint = lv_label_create(box);
-	lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
-	lv_obj_set_width(hint, lv_pct(100));
-	lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_add_style(hint, &theme_style_text, 0);
-	lv_obj_set_style_text_font(hint, &font_ui_20, 0);
-	lv_label_set_text(hint, "Use the QR code or page address on your phone. Enter the code below and approve access.");
 
 	login_qr = lv_qrcode_create(box);
 	lv_qrcode_set_size(login_qr, YTMUSIC_LOGIN_QR_SIZE);
@@ -514,17 +512,18 @@ static void build_login_page(void) {
 	lv_label_set_long_mode(login_code_label, LV_LABEL_LONG_CLIP);
 	lv_obj_set_width(login_code_label, lv_pct(100));
 	lv_obj_set_style_text_align(login_code_label, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_style_text_font(login_code_label, &font_ui_20_bold, 0);
-	lv_obj_set_style_text_letter_space(login_code_label, 3, 0);
+	lv_obj_add_style(login_code_label, &theme_style_text, 0);
+	lv_obj_set_style_text_font(login_code_label, &font_ui_36_bold, 0);
+	lv_obj_set_style_text_letter_space(login_code_label, 5, 0);
 	lv_label_set_text(login_code_label, "");
 
 	login_message = lv_label_create(box);
 	lv_label_set_long_mode(login_message, LV_LABEL_LONG_WRAP);
 	lv_obj_set_width(login_message, lv_pct(100));
 	lv_obj_set_style_text_align(login_message, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_add_style(login_message, &theme_style_text_dim, 0);
+	lv_obj_add_style(login_message, &theme_style_text, 0);
 	lv_obj_set_style_text_font(login_message, &font_ui_20, 0);
-	lv_label_set_text(login_message, "Requesting a Google sign-in code…");
+	lv_label_set_text(login_message, "Requesting sign-in code…");
 
 	lv_obj_add_event_cb(login_screen, login_screen_unloaded, LV_EVENT_SCREEN_UNLOADED, NULL);
 	switcher_attach_back_gesture(login_screen);
@@ -539,16 +538,14 @@ void ytmusicpage_init(gui_config_t *cfg) {
 	settingsrow_add_icon(row, &icon_search, THEME_SEMANTIC_CYAN);
 	row = settingsrow_add(home, "Top Songs Charts", NULL, charts_cb, NULL);
 	settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_RED);
-	session_row = settingsrow_action(home, "Import YouTube Music sign-in from microSD", import_session_cb, NULL);
-	row = session_row;
-	settingsrow_add_icon(row, &icon_import, THEME_SEMANTIC_GREEN);
-	row = settingsrow_action(home, "Sign in with Google", login_begin_done_cb, NULL);
+	sign_in_row = settingsrow_action(home, "Sign in with Google", login_begin_done_cb, NULL);
+	row = sign_in_row;
 	settingsrow_add_icon(row, &icon_import, THEME_SEMANTIC_CYAN);
-	settingsrow_add_caption(row,
-		"Set [ytmusic] client_id and client_secret in streaming-keys.ini, then sign in once. Session is saved for reboots.");
-	row = settingsrow_action(home, "Sign out of YouTube Music", logout_cb, NULL);
-	settingsrow_add_icon(row, &icon_log_out, THEME_SEMANTIC_RED);
-	settingsrow_add_caption(session_row, "Optional fallback: import a trusted Cookie header from the microSD card.");
+	signed_in_row = settingsrow_action(home, "Signed in with Google", NULL, NULL);
+	settingsrow_add_icon(signed_in_row, &icon_check, THEME_SEMANTIC_GREEN);
+	sign_out_row = settingsrow_action(home, "Sign out of YouTube Music", logout_cb, NULL);
+	settingsrow_add_icon(sign_out_row, &icon_log_out, THEME_SEMANTIC_RED);
+	home_refresh_session_rows();
 	player_sheet_attach_drag(home, true);
 	build_search_page();
 	build_login_page();
