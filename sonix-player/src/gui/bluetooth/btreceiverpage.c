@@ -11,6 +11,8 @@
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
+#include "src/gui/settings/musicsettings.h"
+#include "src/system/audio/eq.h"
 #include "src/system/bluetooth/bluetooth.h"
 #include "src/system/bluetooth/btreceiver.h"
 #include "src/system/core/lang.h"
@@ -27,6 +29,50 @@ static lv_obj_t *title_label;
 static lv_timer_t *poll_timer;
 static unsigned last_serial = (unsigned)-1;
 static lv_color_t status_normal_color;
+static lv_obj_t *eq_pill;
+static lv_obj_t *peq_pill;
+static lv_obj_t *mseb_pill;
+
+// The pills follow the equalisers, not the finger: they are the same three
+// settings the control centre and the DAC page switch, so any of them may have
+// changed since this page was last looked at.
+static void paint_equaliser_pills(void) {
+	settingsrow_pill_active(eq_pill, eq_get_enabled());
+	settingsrow_pill_active(peq_pill, peq_get_enabled());
+	settingsrow_pill_active(mseb_pill, mseb_get_enabled());
+}
+
+// The control centre cannot be pulled down while receiver mode holds the
+// screen, so the three equalisers are out of reach exactly when a phone is
+// feeding the DAC -- a curve set before the phone connected is heard, and the
+// listener cannot compare it without leaving the mode. The same card of three
+// pills the DAC page carries, through the same calls, so either place shows
+// what the other did.
+//
+// A card and not three switch rows for the reason dacpage.c spells out: the
+// V1's 248 px under the heading cannot hold four 56 px switch rows and the
+// codec line this page exists to show. Three pills wrap to two lines at worst.
+//
+// The equalisers do reach this audio: btreceiver.c runs the incoming block
+// through eq_process() just before it is written, so a curve chosen here is
+// what the phone's stream goes through.
+static void eq_cb(lv_event_t *e) {
+	(void)e;
+	musicsettings_set_eq_enabled(!eq_get_enabled());
+	paint_equaliser_pills();
+}
+
+static void peq_cb(lv_event_t *e) {
+	(void)e;
+	peq_set_enabled(!peq_get_enabled());
+	paint_equaliser_pills();
+}
+
+static void mseb_cb(lv_event_t *e) {
+	(void)e;
+	musicsettings_set_mseb_enabled(!mseb_get_enabled());
+	paint_equaliser_pills();
+}
 
 // ---------------------------------------------------------------------------
 
@@ -52,6 +98,7 @@ static void refresh(void) {
 	}
 
 	lv_obj_set_style_text_color(status_label, status_normal_color, 0);
+	paint_equaliser_pills();
 
 	lv_obj_set_hidden(title_label, true);
 
@@ -299,7 +346,10 @@ void btreceiverpage_init(gui_config_t *cfg) {
 	// the receiver status below it, so scale both its drawing and layout box.
 	big_icon = lv_image_create(container);
 	lv_image_set_src(big_icon, &icon_bluetooth_receiver_page);
-	int icon_size = compact ? 96 : 200;
+	// 64 on the V1 rather than 96: the equaliser card below has to share the
+	// panel with the icon, the codec line, the device and the track, and the
+	// mark is decoration where the codec is the reason the page exists.
+	int icon_size = compact ? 64 : 200;
 	int source_side = LV_MAX((int)icon_bluetooth_receiver_page.header.w,
 							 (int)icon_bluetooth_receiver_page.header.h);
 	lv_obj_set_size(big_icon, icon_size, icon_size);
@@ -307,7 +357,16 @@ void btreceiverpage_init(gui_config_t *cfg) {
 	if (source_side > 0) {
 		lv_image_set_scale(big_icon, (uint32_t)(LV_SCALE_NONE * icon_size / source_side));
 	}
-	lv_obj_set_style_margin_top(big_icon, compact ? 8 : 40, 0);
+	lv_obj_set_style_margin_top(big_icon, compact ? 2 : 40, 0);
+
+	// Straight under the mark and ahead of the format line, so on the V1 they
+	// are on screen without a scroll.
+	lv_obj_t *equaliser_pills = NULL;
+	settingsrow_pills(container, "dac_equalisers", &equaliser_pills);
+	eq_pill = settingsrow_pill(equaliser_pills, "eq_short", 0, eq_cb);
+	peq_pill = settingsrow_pill(equaliser_pills, "peq", 1, peq_cb);
+	mseb_pill = settingsrow_pill(equaliser_pills, "mseb", 2, mseb_cb);
+	paint_equaliser_pills();
 
 	format_label = lv_label_create(container);
 	lv_obj_set_width(format_label, lv_pct(100));

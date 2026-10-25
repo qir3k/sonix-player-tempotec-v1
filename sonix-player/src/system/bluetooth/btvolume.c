@@ -56,6 +56,7 @@ static int pending_remote = -1; // a 0..127 that arrived over the bus
 static int last_bt = -1;		// what the stream holds, as far as this side knows
 static bool path_live;			// a connection and a stream: writes can go over the bus
 static bool bus_broken;			// the stream is there but does not answer about its volume
+static bool want_receiver;		// the path is the A2DP sink's (receiver mode), not the headphones'
 
 // The stream whose level has already been adopted. Adoption happens once per
 // connection, not once per change on the bus: bluealsa resets SoftVolume its
@@ -191,7 +192,10 @@ static void handle_properties_changed(const dbus_msg_t *m) {
 				return;
 			}
 			pthread_mutex_lock(&lock);
-			if (strcmp(m->path, want_path) == 0 && soft != !want_sync) {
+			// The receivers's own SoftVolume is always false and is not the
+			// headphones' synchronised setting, so a read-back of it must not
+			// be mistaken for somebody moving it.
+			if (!want_receiver && strcmp(m->path, want_path) == 0 && soft != !want_sync) {
 				bus_reset = true; // something else moved it: write it again
 				pthread_cond_signal(&wake);
 			}
@@ -278,7 +282,12 @@ static void *btvolume_worker(void *unused) {
 			break;
 		}
 		snprintf(path, sizeof(path), "%s", want_path);
-		sync_on = want_sync;
+		// The receiving stream is always "synchronised": its Volume property
+		// carries the phone's AVRCP level, SoftVolume is false (bluealsa must
+		// not scale it a second time under the level this side applies), and
+		// the level is adopted at once rather than after a settle window.
+		sync_on = want_receiver ? true : want_sync;
+		bool receiver = want_receiver;
 		local = pending_local;
 		remote = pending_remote;
 		reset = bus_reset;
@@ -364,13 +373,38 @@ static void *btvolume_worker(void *unused) {
 					deferred_remote = -1;
 				} else {
 					printf("btvolume: %s for %s\n",
-						   sync_on ? "native volume (synchronised)" : "software volume (separate)", have_path);
+						   receiver ? "phone volume (receiver mode)"
+								: (sync_on ? "native volume (synchronised)" : "software volume (separate)"),
+						   have_path);
 
 					pthread_mutex_lock(&lock);
 					bool already_adopted = strcmp(adopted_path, have_path) == 0;
 					pthread_mutex_unlock(&lock);
 
-					if (sync_on && !already_adopted) {
+					if (receiver) {
+						// The phone's level is already on the stream, and it is
+						// what the listener is hearing: take it as this side's
+						// level at once. No settle window -- there is no second
+						// AVRCP announcement coming, and waiting would leave the
+						// DAC at the previous track's level.
+						int volume = 0;
+						if (get_stream_volume(conn, have_path, &volume)) {
+							pthread_mutex_lock(&lock);
+							last_bt = volume;
+							pthread_mutex_unlock(&lock);
+							apply_local(bt_to_local(volume));
+							state = BTV_READY;
+							local = -1;
+							deferred_local = -1;
+							deferred_remote = -1;
+						} else {
+							pthread_mutex_lock(&lock);
+							bus_broken = true;
+							pthread_mutex_unlock(&lock);
+							state = BTV_READY;
+							local = -1;
+						}
+					} else if (sync_on && !already_adopted) {
 						state = BTV_ADOPT;
 						adopt_deadline = 0;
 						adopt_seen = -1;
@@ -480,7 +514,8 @@ static void *btvolume_worker(void *unused) {
 
 			if (state == BTV_READY) {
 				if (remote >= 0 && sync_on) {
-					printf("btvolume: the headphones moved the volume -> %d/127\n", remote);
+					printf("btvolume: %s moved the volume -> %d/127\n",
+						   receiver ? "the phone" : "the headphones", remote);
 					apply_local(bt_to_local(remote));
 					local = -1;
 				}
@@ -564,6 +599,17 @@ void btvolume_stop(void) {
 }
 
 void btvolume_set_device(const char *mac) {
+	// The receiver's stream is the one on the bus while the mode runs: the
+	// outgoing A2DP path is not up (the phone is the sender), and writing it
+	// here would tear the bridge away from the stream that is being listened
+	// to.
+	pthread_mutex_lock(&lock);
+	bool receiver = want_receiver;
+	pthread_mutex_unlock(&lock);
+	if (receiver) {
+		return;
+	}
+
 	char path[PATH_MAX_LEN] = "";
 	if (mac && mac[0]) {
 		char address[64];
@@ -591,6 +637,38 @@ void btvolume_set_device(const char *mac) {
 	pthread_mutex_unlock(&lock);
 }
 
+// The other direction: see btvolume.h. The path is bluealsa's sink PCM, whose
+// Volume is the AVRCP absolute volume the sending phone sets.
+void btvolume_set_receiver(const char *mac) {
+	char path[PATH_MAX_LEN] = "";
+	if (mac && mac[0]) {
+		char address[64];
+		snprintf(address, sizeof(address), "%s", mac);
+		for (char *p = address; *p; p++) {
+			if (*p == ':' || *p == '-') {
+				*p = '_';
+			}
+		}
+		snprintf(path, sizeof(path), "/org/bluealsa/hci0/dev_%s/a2dpsink/source", address);
+	}
+
+	pthread_mutex_lock(&lock);
+	bool now = path[0] != '\0';
+	if (strcmp(path, want_path) != 0 || now != want_receiver) {
+		want_receiver = now;
+		snprintf(want_path, sizeof(want_path), "%s", path);
+		// A different stream, or none: whatever was pending belonged to the
+		// other one.
+		path_live = false;
+		pending_local = -1;
+		pending_remote = -1;
+		last_bt = -1;
+		adopted_path[0] = '\0';
+		pthread_cond_signal(&wake);
+	}
+	pthread_mutex_unlock(&lock);
+}
+
 void btvolume_set_sync(bool on) {
 	pthread_mutex_lock(&lock);
 	if (on != want_sync) {
@@ -602,8 +680,15 @@ void btvolume_set_sync(bool on) {
 
 void btvolume_notify_local(int percent) {
 	pthread_mutex_lock(&lock);
-	pending_local = clamp_int(percent, 0, 100);
-	pthread_cond_signal(&wake);
+	// In receiver mode this is also how the level adopted from the phone comes
+	// back -- apply_local() raises the slider, the slider reports itself here.
+	// Writing a level the stream already holds would be one AVRCP round trip
+	// per remote change for nothing, so an unchanged step is dropped.
+	bool already = want_receiver && last_bt >= 0 && local_to_bt(percent) == last_bt;
+	if (!already) {
+		pending_local = clamp_int(percent, 0, 100);
+		pthread_cond_signal(&wake);
+	}
 	pthread_mutex_unlock(&lock);
 }
 

@@ -1910,11 +1910,14 @@ static bool prepare_track(const tidal_track_t *track, char *path, size_t size) {
 		fprintf(stderr, "tidal: WARNING real name '%s' but the queue expects '%s'\n", path, guessed);
 	}
 
-	// The real MIME type from the manifest, not the guessed one: a FLAC
+	// The path just downloaded, not one worked out from the MIME type: a FLAC
 	// stitched back together from segments carries no tags of its own, and
-	// these sidecars are all the player will have to read.
-	tidalcache_write_sidecars(track->id, stream->mime, track->title, track->artist, track->album, track->album_id,
-							  track->track_number, track->cover);
+	// these sidecars are all the player will have to read. The marker is still
+	// beside the file here (the rest is still downloading), so the by-id
+	// variant would look for ".m4a" -- the container in the manifest -- and
+	// write the tags where nothing reads them.
+	tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
+								track->track_number, track->cover);
 	free(stream);
 
 	// Prefetched tracks count too: they occupy the card, which is what the
@@ -1966,20 +1969,20 @@ static void do_play(int index) {
 		return;
 	}
 
-	// Only the MIME type is still needed from the manifest, and everything
-	// after this takes a while: holding three kilobytes through the queue
-	// build would be three kilobytes wasted.
-	char mime[sizeof(stream->mime)];
-	snprintf(mime, sizeof(mime), "%s", stream->mime);
+	// Nothing more is needed from the manifest, and everything after this
+	// takes a while: holding three kilobytes through the queue build would be
+	// three kilobytes wasted.
 	free(stream);
 
 	// One more track in the cache; it prunes itself from time to time.
 	tidalcache_note_played(path);
 
 	// Tags before starting playback: that is when device_state reads the
-	// metadata, and a moment later would be too late.
-	tidalcache_write_sidecars(track->id, mime, track->title, track->artist, track->album, track->album_id,
-							  track->track_number, NULL);
+	// metadata, and a moment later would be too late. Against the real path:
+	// the download is still in progress, so the by-id lookup would fall back
+	// to the manifest's ".m4a" while the file is a ".flac".
+	tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
+								track->track_number, NULL);
 
 	// --- the queue: the whole list, not only what has downloaded ------------
 	//
@@ -2028,7 +2031,7 @@ static void do_play(int index) {
 			continue; // already written, and with the real MIME type
 		}
 		const tidal_track_t *t = &queued_tracks[i];
-		tidalcache_write_sidecars(t->id, expected, t->title, t->artist, t->album, t->album_id, t->track_number, NULL);
+		tidalcache_write_sidecars_at(paths[i], t->title, t->artist, t->album, t->album_id, t->track_number, NULL);
 	}
 
 	device_state_play_list(path_ptr, queued_count, start);
@@ -2036,8 +2039,8 @@ static void do_play(int index) {
 	// The cover now, with the music already playing: it is a download and not
 	// worth delaying the first note for. It goes before the player opens on
 	// purpose, so the image is already there when the page appears.
-	tidalcache_write_sidecars(track->id, mime, track->title, track->artist, track->album, track->album_id,
-							  track->track_number, track->cover);
+	tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
+								track->track_number, track->cover);
 
 	gui_post(play_started_async, NULL);
 

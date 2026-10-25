@@ -123,6 +123,17 @@ const char *tidalcache_dir(void);
 void tidalcache_write_sidecars(long track_id, const char *mime, const char *title, const char *artist,
 							   const char *album, const char *album_id, int track_number, const char *cover_url);
 
+// The same, for a caller that already holds the real local path.
+//
+// Which is every caller that has just started a download: the marker beside the
+// file is still there, so tidalcache_find() answers "not downloaded" and the
+// function above would fall back to the extension the MIME type suggests --
+// ".m4a" for a hi-res DASH stream whose file is unwrapped to ".flac" -- and
+// write the tags beside a file that does not exist. The player then reads the
+// bare name back ("471624591.flac") for the whole first track.
+void tidalcache_write_sidecars_at(const char *path, const char *title, const char *artist, const char *album,
+								  const char *album_id, int track_number, const char *cover_url);
+
 // The Tidal album id the track belongs to, read back from the sidecar. False if
 // the path is not from this cache or the sidecar does not say. Used by "Show
 // album" in the player.

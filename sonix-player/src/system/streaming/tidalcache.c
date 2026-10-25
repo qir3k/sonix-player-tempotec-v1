@@ -552,7 +552,15 @@ void tidalcache_write_sidecars(long track_id, const char *mime, const char *titl
 	if (!tidalcache_find(track_id, path, sizeof(path))) {
 		tidalcache_path(track_id, mime, path, sizeof(path));
 	}
-	if (!path[0]) {
+	tidalcache_write_sidecars_at(path, title, artist, album, album_id, track_number, cover_url);
+}
+
+// The path-taking half. See the header: while a download is still growing,
+// tidalcache_find() says no and the guessed extension is the wrong one, so the
+// caller that knows where the file really is has to say so.
+void tidalcache_write_sidecars_at(const char *path, const char *title, const char *artist, const char *album,
+								  const char *album_id, int track_number, const char *cover_url) {
+	if (!tidalcache_ready() || !path || !path[0]) {
 		return;
 	}
 

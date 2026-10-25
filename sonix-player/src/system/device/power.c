@@ -932,6 +932,17 @@ static void restore_radios_if_due(void) {
 	if (!g_radio_restore_pending) {
 		return;
 	}
+	// Receiver mode holds the DAC with someone else's stream, and bringing a
+	// parked radio back is a firmware download (Wi-Fi) or a stack rebuild
+	// (Bluetooth) on the one core that is decoding it. The mode is a reason to
+	// wait, not a quiet moment: the restore stays pending and runs on the tick
+	// after the mode has been left. This is the wake stall that survived the
+	// radio restore's move off the wake itself -- a phone feeding the player
+	// is not `playback_in_progress()` whenever it happens to be paused between
+	// tracks, and the burst then landed on the incoming stream.
+	if (btreceiver_is_active()) {
+		return;
+	}
 	if (!g_screen_on) {
 		// The screen went dark again: the radios stay parked, and the next wake
 		// starts the wait over.

@@ -2060,15 +2060,22 @@ static void radio_buffer_prefill(radio_buffer_t *b, unsigned mine) {
 }
 
 // Where a station's icon is kept: <card>/.local/radio-art/<md5 of its
-// address>.img, the shape the streaming lists' covers use for the same reason.
+// address>.<jpg|png>, the shape the streaming lists' covers use for the same
+// reason.
 //
 // The download used to go to /tmp on every station change, so the same icon was
 // fetched again at every listen and the file was gone after a reboot. The
 // address a station reports is stable for as long as its icon is, which makes it
 // the whole cache key.
+//
+// The extension is the picture's own and not a house one: albumart.c decides a
+// path IS the artwork by its extension ("the path IS a picture", albumart.c),
+// and a station icon kept as "<hash>.img" fell through to the track path -- no
+// tags, no folder, no sibling cover -- so every station showed the radio
+// placeholder however well the download had gone. .jpg or .png, from the bytes.
 #define RADIO_ART_DIR ".local/radio-art"
 
-static bool radio_art_path(const char *url, char *out, size_t size) {
+static bool radio_art_base(const char *url, char *out, size_t size) {
 	char root[sizeof(store_root)];
 	pthread_mutex_lock(&store_lock);
 	snprintf(root, sizeof(root), "%s", store_root);
@@ -2080,8 +2087,32 @@ static bool radio_art_path(const char *url, char *out, size_t size) {
 
 	char hash[MD5_HEX_LEN];
 	md5_hex(url, strlen(url), hash);
-	snprintf(out, size, "%s/%s/%.32s.img", root, RADIO_ART_DIR, hash);
+	snprintf(out, size, "%s/%s/%.32s", root, RADIO_ART_DIR, hash);
 	return true;
+}
+
+// The cached icon for this address, whichever of the two shapes it was saved
+// as. The old ".img" spelling is deliberately not looked for: nothing could
+// decode it, so the station is better off downloading its icon once more than
+// finding a file no loader will accept.
+static bool radio_art_find(const char *url, char *out, size_t size) {
+	char base[512];
+	if (!radio_art_base(url, base, sizeof(base))) {
+		out[0] = '\0';
+		return false;
+	}
+	static const char *const EXTS[] = {".jpg", ".png"};
+	for (size_t i = 0; i < sizeof(EXTS) / sizeof(EXTS[0]); i++) {
+		char path[544];
+		snprintf(path, sizeof(path), "%s%s", base, EXTS[i]);
+		struct stat st;
+		if (stat(path, &st) == 0 && st.st_size > 0) {
+			snprintf(out, size, "%s", path);
+			return true;
+		}
+	}
+	out[0] = '\0';
+	return false;
 }
 
 // The folder beside the one the station list lives in; it may not exist yet on
@@ -2116,16 +2147,12 @@ static void fetch_favicon(const char *url) {
 	// The card's copy first: a station keeps its icon for as long as it exists,
 	// so this is one download per station rather than one per listening.
 	char cached[512];
-	bool on_card = radio_art_path(url, cached, sizeof(cached));
-	if (on_card) {
-		struct stat st;
-		if (stat(cached, &st) == 0 && st.st_size > 0) {
-			pthread_mutex_lock(&now_lock);
-			snprintf(now_state.cover_path, sizeof(now_state.cover_path), "%s", cached);
-			now_touch();
-			pthread_mutex_unlock(&now_lock);
-			return;
-		}
+	if (radio_art_find(url, cached, sizeof(cached))) {
+		pthread_mutex_lock(&now_lock);
+		snprintf(now_state.cover_path, sizeof(now_state.cover_path), "%s", cached);
+		now_touch();
+		pthread_mutex_unlock(&now_lock);
+		return;
 	}
 
 	char *body = NULL;
@@ -2148,10 +2175,16 @@ static void fetch_favicon(const char *url) {
 		return; // not something the cover decoder can read
 	}
 
-	char path[512];
-	if (on_card && radio_art_dir_make(cached)) {
-		snprintf(path, sizeof(path), "%s", cached);
-	} else {
+	char base[512];
+	bool on_card = radio_art_base(url, base, sizeof(base));
+	char path[544];
+	if (on_card) {
+		snprintf(path, sizeof(path), "%s%s", base, ext);
+		if (!radio_art_dir_make(path)) {
+			on_card = false;
+		}
+	}
+	if (!on_card) {
 		// No card, or one that will not take it: /tmp still gives the player
 		// something to draw, it just will not survive the listen.
 		snprintf(path, sizeof(path), "/tmp/sonix-radio-cover%s", ext);

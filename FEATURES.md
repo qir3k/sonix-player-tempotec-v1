@@ -94,7 +94,7 @@
 ## Streaming
 
 - **Subsonic / Gonic** - a new Streaming destination for your own server. Test the connection, browse music folders or artists/albums in pages of 200, and play the page as a queue. MP3 256/320, Opus, or original FLAC/MP3/Opus; transcoding runs on the server. Two fixed 1 MiB RAM rings isolate HTTP/TLS from decoding, refill near 50%, and pre-cache 512 KiB of the upcoming track near 90%. No growing disk cache or playback seeking; compatible-format gapless uses the existing ALSA handoff. Remembering credentials is optional and stores an unencrypted private file. See [setup and limitations](docs/subsonic.md).
-- **Tidal** - sign in with the code on screen or with the QR-Code; Low, High, CD and Hi-res quality. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player. Search is a page of its own with a field under the pills (Tracks, Albums, Artists) and the last ten searches kept beneath it, and the rows, pills and titles follow the V1's 240 px panel rather than the 480 px one. A list's first page is kept on the card, so opening a tab shows its names at once instead of fetching them again; a change made on the page drops the copy it made wrong, and a copy nobody has touched is read for half a day. A long press on a row of the favourites, of an album's tracks, of search results or of a playlist's own tracks starts a selection: tick as many rows as wanted, then favourite, unfavourite or take out all of them from the corner — a playlist's tracks go by position, the last of them first, so the positions the rest are renumbered by are never the ones still to come. A whole playlist stays a single-row action, since it is deleted outright rather than changed.
+- **Tidal** - sign in with the code on screen or with the QR-Code; Low, High, CD and Hi-res quality. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player. Search is a page of its own with a field under the pills (Tracks, Albums, Artists) and the last ten searches kept beneath it, and the rows, pills and titles follow the V1's 240 px panel rather than the 480 px one. A list's first page is kept on the card, so opening a tab shows its names at once instead of fetching them again; a change made on the page drops the copy it made wrong, and a copy nobody has touched is read for half a day. A long press on a row of the favourites, of an album's tracks, of search results or of a playlist's own tracks starts a selection: tick as many rows as wanted, then favourite, unfavourite or take out all of them from the corner — a playlist's tracks go by position, the last of them first, so the positions the rest are renumbered by are never the ones still to come. A whole playlist stays a single-row action, since it is deleted outright rather than changed. **Keep on card** in the player's track menu copies the track that is playing — which had to be downloaded to play it anyway — into `Music/Tidal/<artist>/<album>` with its tags and its cover, where it stays like any file of your own: no cache sweep takes it, and the next library scan finds it with its title and artist.
 - **Qobuz** - sign in with the account; MP3 320, FLAC 16/44.1, 24/96 and 24/192. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player.
 - **Podcasts** - the Podcast Index catalogue: search, trending, follow up to 100
 shows kept on the device. Downloaded episodes land in the card's `Podcast`
@@ -132,12 +132,18 @@ and the visibility of every row is arranged from **Radio settings → List
 reorder**). The region picker offers the sixty countries with the most stations
 behind them, alphabetically, with **Any country** first.
 - **Radio → Quality filter** - **Radio settings → Quality filter** keeps every
-list to streams of 320 kbps and up, which is the default; **Any bitrate** is
-there for a country where nothing that high exists. The bar is applied to every
+list to streams of 320 kbps and up, which is the default; **128 kbps and up**
+is the middle bar for a country where the high one leaves too little, and
+**Any bitrate** is there for a country where nothing that high exists. The bar is applied to every
 list, a search included, and the answer is checked against it again in case a
 mirror ignores the parameter. The same settings drop duplicates: two entries of
 the same station, in the same country or pointing at the same stream, are one
 row.
+- **Radio → Station artwork** - the directory's icon for a station,
+downloaded when it starts and kept on the card under `.local/radio-art`, so
+the player page shows the station's own art instead of the placeholder. The
+picture is saved with the extension its bytes say it has, which is what the
+cover loader asks for.
 - **Radio → Sleep timer** - the radio's own, in **Radio settings** and as the
 fourth sleep-timer circle in the control centre: a stretch set for a station is
 its own, like the music's, the audiobook's and the podcast's, and a hold on the
@@ -155,7 +161,12 @@ circle opens the radio's settings page on it.
   control: off, cancellation, transparency, adaptive.
 - **Bluetooth in** - a phone or laptop connects and the player becomes its
   speaker, decoding through its own DAC. The incoming codec, rate and depth are
-  shown.
+  shown. Volume works both ways without switching "Bluetooth volume sync" off
+  on the phone: the phone's own keys move the level this device plays at, and
+  the player's keys move the phone's slider. The graphic EQ, PEQ and MSEB run
+  on the incoming stream too, with their own pills on the receiver page — the
+  status bar cannot be pulled down while the mode holds the screen — and any
+  of the three can be switched on and off from there.
 - **AirPlay** - the player appears as an AirPlay target.
 - **DLNA** - the player appears as a renderer.
 - **Wi-Fi** - scan and join the networks in the air, and hidden ones too:

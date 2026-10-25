@@ -4167,6 +4167,13 @@ void bluetooth_notify_volume(int percent) {
 	}
 	pthread_mutex_unlock(&lock);
 
+	// In receiver mode there is no outgoing A2DP link for the job below to
+	// write: the stream on the bus is the phone's, and its Volume property is
+	// what carries the level back to it. The bridge owns that path.
+	if (btreceiver_is_active()) {
+		btvolume_notify_local(percent);
+	}
+
 	// One job in flight is enough: it picks up whatever the latest value is when
 	// it runs, so holding the volume key costs one AVRCP write, not one per
 	// step.

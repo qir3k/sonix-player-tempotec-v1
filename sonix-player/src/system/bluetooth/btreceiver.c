@@ -3,7 +3,9 @@
 #include "btreceiver.h"
 
 #include "src/system/audio/audio.h"
+#include "src/system/audio/eq.h"
 #include "src/system/bluetooth/bluetooth.h"
+#include "src/system/bluetooth/btvolume.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/core/utils.h"
@@ -263,6 +265,12 @@ static session_t capture_session(const char *mac, const char *name, bool may_gue
 	unsigned in_bits = info.bits ? info.bits : FALLBACK_BITS;
 	publish_format(name, &info);
 
+	// The phone's volume rocker, bridged: its AVRCP absolute volume is on this
+	// PCM, and the bridge turns it into this player's output level (and the
+	// other way round). Started with the session because the PCM object only
+	// exists while one is open.
+	btvolume_set_receiver(mac);
+
 	snd_pcm_t *pcm = open_capture(mac, rate, channels, in_bits);
 	if (!pcm) {
 		return SESSION_NO_PCM;
@@ -390,13 +398,27 @@ static session_t capture_session(const char *mac, const char *name, bool may_gue
 		}
 		pthread_mutex_unlock(&lock);
 
+		// The equalisers, on the block about to be written -- the graphic EQ,
+		// PEQ and MSEB in one call, exactly as the USB DAC path does it
+		// (usbdac.c) and as a local track's chain does. The phone's stream is
+		// not the player's own, but what is being tuned is the headphones, and
+		// the page's pills are on screen for this reason.
+		//
+		// A no-op when all three are off. Applied after the widening so the
+		// 32-bit path is the one every sample takes, whatever the sender's
+		// depth was.
 		if (widen) {
 			const int16_t *src = chunk;
 			for (snd_pcm_sframes_t i = 0; i < got * (snd_pcm_sframes_t)channels; i++) {
 				wide[i] = (int32_t)((uint32_t)(uint16_t)src[i] << 16);
 			}
+			eq_process_s32(wide, (int)got, (int)channels, (int)rate);
 			audio_external_write(wide, (int)got);
+		} else if (in_bits == 32) {
+			eq_process_s32((int32_t *)chunk, (int)got, (int)channels, (int)rate);
+			audio_external_write(chunk, (int)got);
 		} else {
+			eq_process((short *)chunk, (int)got, (int)channels, (int)rate);
 			audio_external_write(chunk, (int)got);
 		}
 	}
@@ -638,6 +660,10 @@ done:
 		touch();
 	}
 	pthread_mutex_unlock(&lock);
+	if (session == session_id) {
+		// The PCM is gone: the volume bridge has nothing left to write.
+		btvolume_set_receiver(NULL);
+	}
 	fprintf(stderr, "btreceiver: the capture thread has finished\n");
 	return NULL;
 }
@@ -711,6 +737,9 @@ void btreceiver_stop(void) {
 	// phone that carries on playing into nothing is one the user has to go and
 	// pause by hand -- having just been listening to it on this device.
 	bluetooth_receiver_command("Pause");
+
+	// And the volume bridge lets go of the PCM that is about to disappear.
+	btvolume_set_receiver(NULL);
 
 	// The thread is detached and closes the output itself; waiting on it here
 	// would hold the interface for as long as one read takes. What matters is

@@ -143,7 +143,7 @@ enum {
 
 };
 
-static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom", "recommended",
+static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom", "recommended"};
 static const char *const HUB_LABELS[HUB_ROWS] = {"radio_recently_played", "language", "radio_country", "genre",
 												  "radio_custom", "radio_recommended"};
 
@@ -167,7 +167,7 @@ static bool hub_hidden[HUB_ROWS];
 static lv_obj_t *radio_settings_screen;
 static settingsrow_duration_t radio_sleep_row;
 static lv_obj_t *radio_region_value;	 // the row that shows the chosen country
-static lv_obj_t *radio_quality_pills[2]; // 0 = any bitrate, 1 = the good ones
+static lv_obj_t *radio_quality_pills[3]; // any bitrate, 128 and up, 320 and up
 
 // The arrangement of the hub's rows, on a page of its own (Radio settings >
 // List reorder).
@@ -246,6 +246,7 @@ static bool page_append;		  // ...and it is a continuation, not a fresh list
 
 static void list_window_update(void);
 static void list_reload_stored(void);
+static bool list_has_headings(void);
 static const char *stored_empty_message(void);
 
 // ---------------------------------------------------------------------------
@@ -1638,12 +1639,15 @@ static void radio_region_refresh(void) {
 }
 
 static void radio_quality_refresh(void) {
+	// One lit pill per bar, tried as the exact levels the pills set: a value
+	// from an older config that is neither (a hand-edited quality_min, say)
+	// leaves every pill dark rather than claiming a bar it is not.
+	static const int LEVELS[] = {0, 128, 320};
 	int min = radio_min_bitrate();
-	if (radio_quality_pills[0]) {
-		settingsrow_pill_active(radio_quality_pills[0], min <= 0);
-	}
-	if (radio_quality_pills[1]) {
-		settingsrow_pill_active(radio_quality_pills[1], min > 0);
+	for (size_t i = 0; i < sizeof(LEVELS) / sizeof(LEVELS[0]); i++) {
+		if (radio_quality_pills[i]) {
+			settingsrow_pill_active(radio_quality_pills[i], min == LEVELS[i]);
+		}
 	}
 }
 
@@ -1988,12 +1992,15 @@ static void build_radio_settings_page(gui_config_t *cfg) {
 	settingsrow_add(container, "radio_region", &radio_region_value, open_region_cb, NULL);
 
 	// How good a stream has to be before it is worth listing. 320 and up is the
-	// default (see radio.c); "Any bitrate" is there for a country where nothing
-	// that high exists.
+	// default (see radio.c); 128 and up is the middle ground for a country
+	// where the high bar leaves too little, and "Any bitrate" for one where
+	// nothing that high exists at all. The row wraps, so the third pill takes a
+	// second line on the V1's 240 px instead of squeezing the other two.
 	lv_obj_t *quality_pills = NULL;
 	settingsrow_pills(container, "radio_quality", &quality_pills);
 	radio_quality_pills[0] = settingsrow_pill(quality_pills, "radio_quality_any", 0, radio_quality_pick_cb);
-	radio_quality_pills[1] = settingsrow_pill(quality_pills, "radio_quality_320", 320, radio_quality_pick_cb);
+	radio_quality_pills[1] = settingsrow_pill(quality_pills, "radio_quality_128", 128, radio_quality_pick_cb);
+	radio_quality_pills[2] = settingsrow_pill(quality_pills, "radio_quality_320", 320, radio_quality_pick_cb);
 
 	settingsrow_add(container, "radio_reorder", NULL, open_order_cb, NULL);
 

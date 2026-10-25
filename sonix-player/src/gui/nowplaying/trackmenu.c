@@ -30,6 +30,7 @@
 #include "src/gui/streaming/podcastpage.h"
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/qobuzcache.h"
+#include "src/system/streaming/streamkeep.h"
 #include "src/system/streaming/tidalcache.h"
 #include "src/system/library/library.h"
 #include "src/system/playback/playlist.h"
@@ -1221,6 +1222,27 @@ static void open_album_cb(void *user) {
 	switcher_set_player_return(medialist_tracks_screen);
 }
 
+// "Keep on card": the streaming caches hold a track only for as long as they
+// feel like it, and a cache sweep or a card swap takes it back. This copies the
+// download that is already on the card into the library proper, where it stays
+// and where the next scan finds it with its tags. See streamkeep.c.
+static void keep_on_card_cb(void *user) {
+	(void)user;
+	device_state_t state;
+	device_state_get(&state);
+	if (!state.current_file[0]) {
+		return;
+	}
+	player_sheet_close(false);
+	if (streamkeep_busy()) {
+		gui_notify_popup("stream_keep_busy");
+		return;
+	}
+	if (!streamkeep_keep(state.current_file)) {
+		gui_notify_popup(gui_card_available() ? "stream_keep_failed" : "sd_card_missing");
+	}
+}
+
 static void open_settings_cb(void *user) {
 	(void)user;
 	player_sheet_close(false);
@@ -1264,12 +1286,29 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
 	};
+	// A Tidal or Qobuz track that was played from its download gains one line:
+	// the cache copies it into the library, where it stays. A table rather than
+	// a line appended at runtime for the same reason as the two above -- the
+	// string-extraction tool only reads these initialisers.
+	static const popover_item_t ITEMS_KEEP[] = {
+		{"trackmenu_queue", open_queue_cb, NULL},
+		{"add_to_playlist", add_to_playlist_cb, NULL},
+		{"show_album", open_album_cb, NULL},
+		{"trackmenu_keep_on_card", keep_on_card_cb, NULL},
+		{"details", open_details_cb, NULL},
+		{"settings", open_settings_cb, NULL},
+	};
 
 	device_state_t state;
 	device_state_get(&state);
 	bool podcast = state.current_file[0] && podcastcache_is_episode(state.current_file);
+	bool keepable = !podcast && streamkeep_is_stream_track(state.current_file);
 
-	popover_show(anchor, podcast ? ITEMS_PODCAST : ITEMS, 5);
+	if (keepable) {
+		popover_show(anchor, ITEMS_KEEP, 6);
+	} else {
+		popover_show(anchor, podcast ? ITEMS_PODCAST : ITEMS, 5);
+	}
 }
 
 void trackmenu_init(gui_config_t *cfg) {
