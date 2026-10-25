@@ -1648,15 +1648,24 @@ void power_screen_off(void) {
 	// wake hook and wake_repaint), so the screen goes down at once and the
 	// pre-draw waits for a wake that will not be feeding a phone.
 	bool receiver = btreceiver_is_active();
-	bool light_only = receiver && g_cfg.brightness_path;
+	// During receiver playback a panel reset and the full wake repaint take
+	// hundreds of milliseconds on the same core that drains the A2DP PCM. Keep
+	// scan-out alive whenever possible and only change the backlight. If this
+	// board has no independent brightness control, leave the panel lit rather
+	// than blanking it and forcing that audio-starving repaint on wake.
+	bool light_only = receiver;
 
 	set_indevs_enabled(false); // no touch events into LVGL while the panel is down
 	if (light_only) {
 		// Leave the framebuffer scanning its existing image. Blanking the panel
 		// resets it, and redrawing the whole interface on wake can starve the
 		// receiver's short audio buffers on this single-core device.
+		if (g_cfg.brightness_path) {
+			backlight_write(BRIGHTNESS_MIN);
+		}
 		backlight_hold();
 		g_receiver_light_only = true;
+		fprintf(stderr, "power: receiver screen off (panel scan retained; backlight-only)\n");
 	} else {
 		if (receiver) {
 			backlight_write(BRIGHTNESS_MIN);

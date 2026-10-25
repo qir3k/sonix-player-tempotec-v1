@@ -32,8 +32,6 @@ typedef struct {
 	bool wifi;
 	lv_obj_t *toggle;
 	lv_obj_t *detail;
-	lv_obj_t *options;
-	lv_obj_t *option_icon;
 	// The card's own glyph, kept so a later theme or accent change can repaint
 	// it: a colour set when the card was built is a snapshot, and it would go
 	// on wearing the accent the page was built under.
@@ -128,9 +126,6 @@ static void radio_detail_refresh(radio_row_t *row) {
 		lv_obj_remove_state(row->toggle, LV_STATE_DISABLED);
 	} else {
 		lv_obj_add_state(row->toggle, LV_STATE_DISABLED);
-	}
-	if (row->options) {
-		lv_obj_set_hidden(row->options, !available || !enabled);
 	}
 
 	char bt_detail[BT_CONNECTED_DETAIL_MAX];
@@ -281,51 +276,6 @@ static lv_obj_t *radio_card(lv_obj_t *parent, const char *label, const lv_image_
 	theme_apply_switch(row->toggle);
 	lv_obj_add_event_cb(row->toggle, radio_changed_cb, LV_EVENT_VALUE_CHANGED, row);
 
-	row->options = lv_btn_create(card);
-	wireless_remove_edges(row->options);
-	lv_obj_set_size(row->options, lv_pct(100), 30);
-	lv_obj_set_style_bg_opa(row->options, LV_OPA_TRANSP, 0);
-	lv_obj_add_style(row->options, &theme_style_card_pressed, LV_STATE_PRESSED);
-	lv_obj_set_style_border_width(row->options, 0, 0);
-	lv_obj_set_style_outline_width(row->options, 0, 0);
-	lv_obj_set_style_shadow_width(row->options, 0, 0);
-	lv_obj_set_style_radius(row->options, bp_tile_radius(), 0);
-	lv_obj_set_style_pad_hor(row->options, 20, 0);
-	lv_obj_set_style_pad_column(row->options, 6, 0);
-	lv_obj_set_flex_flow(row->options, LV_FLEX_FLOW_ROW);
-	lv_obj_set_flex_align(row->options, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-	lv_obj_set_event_bubble(row->options, true);
-	lv_obj_add_event_cb(row->options, switch_screen_cb, LV_EVENT_CLICKED, target);
-
-	const lv_image_dsc_t *option_source = row->wifi ? &icon_wifi_search : &icon_bluetooth_search;
-	theme_semantic_t option_tone = row->wifi ? THEME_SEMANTIC_BLUE : THEME_SEMANTIC_PURPLE;
-	row->option_icon = lv_image_create(row->options);
-	lv_image_set_src(row->option_icon, option_source);
-	lv_obj_add_style(row->option_icon, &theme_style_icon, 0);
-	lv_obj_set_size(row->option_icon, 16, 16);
-	lv_image_set_inner_align(row->option_icon, LV_IMAGE_ALIGN_CENTER);
-	int option_side = LV_MAX((int)option_source->header.w, (int)option_source->header.h);
-	lv_image_set_scale(row->option_icon, option_side ? (uint32_t)(LV_SCALE_NONE * 16 / option_side) : LV_SCALE_NONE);
-	lv_obj_set_style_image_recolor(row->option_icon, theme_semantic_color(option_tone), 0);
-	lv_obj_set_style_image_recolor_opa(row->option_icon, LV_OPA_COVER, 0);
-
-	lv_obj_t *option_label = lv_label_create(row->options);
-	lv_label_set_text(option_label, tr(row->wifi ? "wifi_available_networks" : "bt_paired_devices"));
-	lv_label_set_long_mode(option_label, LV_LABEL_LONG_DOT);
-	lv_obj_set_width(option_label, LV_SIZE_CONTENT);
-	lv_obj_set_flex_grow(option_label, 1);
-	lv_obj_set_height(option_label, lv_font_get_line_height(&font_ui_14));
-	lv_obj_add_style(option_label, &theme_style_text, 0);
-	lv_obj_set_style_text_font(option_label, &font_ui_14, 0);
-
-	lv_obj_t *chevron = lv_image_create(row->options);
-	lv_image_set_src(chevron, &icon_chevron_right);
-	lv_obj_add_style(chevron, &theme_style_icon, 0);
-	lv_obj_set_size(chevron, 14, 14);
-	lv_image_set_inner_align(chevron, LV_IMAGE_ALIGN_CENTER);
-	lv_image_set_scale(chevron, (uint32_t)(LV_SCALE_NONE * 14 / 36));
-	lv_obj_set_style_image_opa(chevron, LV_OPA_60, 0);
-
 	radios_refresh();
 	return card;
 }
@@ -333,7 +283,7 @@ static lv_obj_t *radio_card(lv_obj_t *parent, const char *label, const lv_image_
 static lv_obj_t *wireless_action_grid(lv_obj_t *parent) {
 	const int tile_gap = 4;
 	const int card_pad = 4;
-	const int tile_height = 48;
+	const int tile_height = 44;
 	const int content_width = wireless_cfg->screen_width - 2 * wireless_cfg->padding;
 	const int tile_width = LV_MAX(1, (content_width - 2 * card_pad - tile_gap) / 2);
 	lv_obj_t *card = wireless_card(parent, 2 * tile_height + tile_gap + 2 * card_pad);
@@ -350,32 +300,34 @@ static lv_obj_t *wireless_action_grid(lv_obj_t *parent) {
 		lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
 		lv_obj_add_style(button, &theme_style_card_pressed, LV_STATE_PRESSED);
 		lv_obj_set_style_radius(button, bp_tile_radius(), 0);
-		lv_obj_set_style_pad_all(button, 4, 0);
-		lv_obj_set_style_pad_gap(button, 2, 0);
+		lv_obj_set_style_pad_hor(button, 5, 0);
+		lv_obj_set_style_pad_ver(button, 2, 0);
+		lv_obj_set_style_pad_gap(button, 4, 0);
 		lv_obj_set_event_bubble(button, true);
 		lv_obj_set_scrollable(button, false);
-		lv_obj_set_flex_flow(button, LV_FLEX_FLOW_COLUMN);
-		lv_obj_set_flex_align(button, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+		lv_obj_set_flex_flow(button, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(button, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 		lv_obj_add_event_cb(button, switch_screen_cb, LV_EVENT_CLICKED, *item->target);
 
 		lv_obj_t *icon = lv_image_create(button);
 		lv_image_set_src(icon, item->icon);
 		lv_obj_add_style(icon, &theme_style_icon, 0);
-		lv_obj_set_size(icon, 20, 20);
+		lv_obj_set_size(icon, 16, 16);
 		lv_image_set_inner_align(icon, LV_IMAGE_ALIGN_CENTER);
 		int side = LV_MAX((int)item->icon->header.w, (int)item->icon->header.h);
-		lv_image_set_scale(icon, side ? (uint32_t)(LV_SCALE_NONE * 20 / side) : LV_SCALE_NONE);
+		lv_image_set_scale(icon, side ? (uint32_t)(LV_SCALE_NONE * 16 / side) : LV_SCALE_NONE);
 		lv_obj_set_style_image_recolor(icon, theme_semantic_color(item->tone), 0);
 		lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
 
 		lv_obj_t *label = lv_label_create(button);
 		lv_label_set_text(label, tr(item->label));
 		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-		lv_obj_set_width(label, lv_pct(100));
+		lv_obj_set_flex_grow(label, 1);
+		lv_obj_set_width(label, LV_SIZE_CONTENT);
 		lv_obj_set_height(label, lv_font_get_line_height(&font_ui_14));
 		lv_obj_add_style(label, &theme_style_text, 0);
-		lv_obj_set_style_text_font(label, &font_ui_14, 0);
-		lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_style_text_font(label, &font_ui_12, 0);
+		lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
 
 		action_icons[i] = (wireless_icon_t){.button = button, .icon = icon, .tone = item->tone};
 	}
@@ -439,10 +391,6 @@ static void wireless_refresh_theme(void) {
 		if (row->heading_icon) {
 			lv_obj_set_style_image_recolor(row->heading_icon, theme_semantic_color(tone), 0);
 			lv_obj_set_style_image_recolor_opa(row->heading_icon, LV_OPA_COVER, 0);
-		}
-		if (row->option_icon) {
-			lv_obj_set_style_image_recolor(row->option_icon, theme_semantic_color(tone), 0);
-			lv_obj_set_style_image_recolor_opa(row->option_icon, LV_OPA_COVER, 0);
 		}
 	}
 	radios_refresh();

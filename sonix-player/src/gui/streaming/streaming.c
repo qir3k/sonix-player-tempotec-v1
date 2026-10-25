@@ -4,6 +4,7 @@
 
 #include "src/gui/board_profile.h"
 #include "src/gui/shell/gridpage.h"
+#include "src/gui/shell/menuorder.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
@@ -19,6 +20,8 @@ lv_obj_t *streaming_screen;
 
 static lv_obj_t *streaming_grid;
 static lv_obj_t *streaming_list;
+static gui_config_t *streaming_cfg;
+static lv_obj_t *streaming_rows[5];
 
 typedef struct {
 	const char *label;
@@ -35,14 +38,49 @@ static const streaming_item_t tokyo_items[] = {
 	{"subsonic", &icon_music_note, THEME_SEMANTIC_BLUE, &subsonic_screen},
 };
 
+static void make_streaming_entries(grid_entry_t *entries, int *order, bool *visible) {
+	int count = menuorder_load(MENUORDER_STREAMING, order, 5, visible);
+	for (int i = 0; i < count; i++) {
+		int id = order[i];
+		const streaming_item_t *item = &tokyo_items[id];
+		entries[i] = (grid_entry_t){item->label, item->icon, item->target, NULL};
+	}
+}
+
 static void streaming_list_build(gui_config_t *cfg) {
 	streaming_list = settingsrow_page(streaming_screen, cfg, "streaming");
 	player_sheet_attach_drag(streaming_list, true);
 
-	for (unsigned int i = 0; i < sizeof(tokyo_items) / sizeof(tokyo_items[0]); i++) {
+	for (int i = 0; i < 5; i++) {
 		const streaming_item_t *item = &tokyo_items[i];
-		lv_obj_t *row = settingsrow_add(streaming_list, item->label, NULL, switch_screen_cb, *item->target);
-		settingsrow_add_icon(row, item->icon, item->tone);
+		streaming_rows[i] = settingsrow_add(streaming_list, item->label, NULL, switch_screen_cb, *item->target);
+		settingsrow_add_icon(streaming_rows[i], item->icon, item->tone);
+	}
+}
+
+void streaming_refresh_layout(void) {
+	if (!streaming_cfg) {
+		return;
+	}
+	int order[5];
+	bool visible[5];
+	if (menuorder_load(MENUORDER_STREAMING, order, 5, visible) != 5) {
+		return;
+	}
+	if (streaming_grid) {
+		grid_entry_t entries[5];
+		make_streaming_entries(entries, order, visible);
+		gridpage_replace_entries(streaming_grid, streaming_cfg, entries, 5, 2, 3);
+		for (int i = 0; i < 5; i++) {
+			lv_obj_set_hidden(lv_obj_get_child(streaming_grid, i), !visible[order[i]]);
+		}
+	}
+	if (streaming_list) {
+		for (int i = 0; i < 5; i++) {
+			lv_obj_t *row = streaming_rows[order[i]];
+			lv_obj_set_hidden(row, !visible[order[i]]);
+			lv_obj_move_to_index(row, i);
+		}
 	}
 }
 
@@ -57,28 +95,26 @@ static void streaming_refresh_theme(void) {
 }
 
 void streaming_init(gui_config_t *cfg) {
+	streaming_cfg = cfg;
 	qobuzpage_init(cfg);
 	tidalpage_init(cfg);
 	podcastpage_init(cfg);
 	subsonicpage_init(cfg);
 
-	const grid_entry_t entries[] = {
-		{"tidal", &icon_menu_tidal, &tidal_screen, NULL},
-		{"qobuz", &icon_menu_qobuz, &qobuz_screen, NULL},
-		{"radio", &icon_menu_radio, &radiopage_screen, NULL},
-		{"podcasts", &icon_menu_podcast, &podcast_screen, NULL},
-		{"subsonic", &icon_menu_streaming, &subsonic_screen, NULL},
-	};
+	grid_entry_t entries[5];
+	int order[5];
+	bool visible[5];
+	make_streaming_entries(entries, order, visible);
 
 	// Dark and Light keep their established two-column grid. Tokyo Night on the
 	// V1 gets the same destinations as a compact, icon-led list.
-	streaming_grid = gridpage_build(streaming_screen, cfg, entries, (int)(sizeof(entries) / sizeof(entries[0])), 2, 3,
-									 true);
+	streaming_grid = gridpage_build(streaming_screen, cfg, entries, 5, 2, 3, true);
 	if (bp_is_tempotec_v1()) {
 		streaming_list_build(cfg);
 	} else {
 		settingsrow_title(streaming_screen, cfg, "streaming");
 	}
 	streaming_refresh_theme();
+	streaming_refresh_layout();
 	theme_register_refresh(streaming_refresh_theme);
 }

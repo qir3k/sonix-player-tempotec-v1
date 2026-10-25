@@ -32,10 +32,22 @@ static const menu_item_t MORE_ITEMS[] = {
 	{"notes", "notes"},
 };
 
+static const menu_item_t STREAMING_ITEMS[] = {
+	{"radio", "radio"},
+	{"podcasts", "podcasts"},
+	{"tidal", "tidal"},
+	{"qobuz", "qobuz"},
+	{"subsonic", "subsonic"},
+};
+
 static const menu_item_t *items_for(menuorder_section_t section, int *count) {
 	if (section == MENUORDER_MORE) {
 		*count = (int)(sizeof(MORE_ITEMS) / sizeof(MORE_ITEMS[0]));
 		return MORE_ITEMS;
+	}
+	if (section == MENUORDER_STREAMING) {
+		*count = (int)(sizeof(STREAMING_ITEMS) / sizeof(STREAMING_ITEMS[0]));
+		return STREAMING_ITEMS;
 	}
 	*count = (int)(sizeof(HOME_ITEMS) / sizeof(HOME_ITEMS[0]));
 	return HOME_ITEMS;
@@ -78,7 +90,8 @@ int menuorder_load(menuorder_section_t section, int *order, int max, bool *visib
 	for (int i = 0; i < count; i++) {
 		visible[i] = true;
 	}
-	const char *key = section == MENUORDER_MORE ? "more_menu_order" : "main_menu_order";
+	const char *key = section == MENUORDER_MORE ? "more_menu_order"
+													: section == MENUORDER_STREAMING ? "streaming_menu_order" : "main_menu_order";
 	char stored[512];
 	snprintf(stored, sizeof(stored), "%s", config_get("ui", key, ""));
 	int out = 0;
@@ -162,6 +175,8 @@ void menuorder_save(menuorder_section_t section, const int *order, int count, co
 		}
 		used += (size_t)n;
 	}
-	config_set("ui", section == MENUORDER_MORE ? "more_menu_order" : "main_menu_order", stored);
+	const char *key = section == MENUORDER_MORE ? "more_menu_order"
+											: section == MENUORDER_STREAMING ? "streaming_menu_order" : "main_menu_order";
+	config_set("ui", key, stored);
 	config_save();
 }

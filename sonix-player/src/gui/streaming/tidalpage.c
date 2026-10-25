@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include <malloc.h>
 
 #include "src/gui/board_profile.h"
@@ -31,6 +32,7 @@
 #include "src/system/streaming/tidal.h"
 #include "src/system/streaming/listcache.h"
 #include "src/system/streaming/tidalcache.h"
+#include "src/system/streaming/streamkeep.h"
 #include "src/system/streaming/streamturn.h"
 #include "src/system/streaming/tidalsync.h"
 #include "src/system/core/utils.h"
@@ -88,6 +90,7 @@ typedef enum {
 	JOB_USER_PLAYLISTS,
 	JOB_FEATURED,
 	JOB_PLAY,
+	JOB_BULK_DOWNLOAD,
 } job_kind_t;
 
 typedef struct {
@@ -116,6 +119,7 @@ static unsigned job_serial;
 // What came back. Only the worker writes here, and only while the GUI is not
 // reading (it reads inside the async, which runs after the worker is done).
 static tidal_track_t result_tracks[TIDAL_MAX_HELD];
+static tidal_track_t bulk_download_tracks[TIDAL_MAX_HELD];
 static tidal_album_t result_albums[TIDAL_MAX_HELD];
 static tidal_artist_t result_artists[TIDAL_MAX_HELD];
 static tidal_playlist_t result_playlists[TIDAL_MAX_HELD];
@@ -545,6 +549,7 @@ typedef enum {
 	BULK_NONE,
 	BULK_TRACK_ADD,
 	BULK_TRACK_REMOVE,
+	BULK_TRACK_DOWNLOAD,
 	// A playlist's own tracks: removed by position, from the end of the list
 	// backwards, because every removal renumbers the ones after it (see
 	// bulk_step).
@@ -660,6 +665,7 @@ static void bulk_finish(void) {
 		break;
 	}
 	bool added = bulk_kind == BULK_TRACK_ADD || bulk_kind == BULK_ALBUM_ADD || bulk_kind == BULK_ARTIST_ADD;
+	bool downloaded = bulk_kind == BULK_TRACK_DOWNLOAD;
 	selection_stop();
 	if (bulk_failed) {
 		toast_error(bulk_message[0] ? bulk_message : tr("tidal_change_refused"));
@@ -673,7 +679,7 @@ static void bulk_finish(void) {
 	// playlist, so re-reading it would only throw the scroll position away;
 	// every other addition is on a screen whose list does not change either
 	// (a search, an album), where the re-read has always been a no-op.
-	if (!added) {
+	if (!added && !downloaded) {
 		reload_current_list();
 	}
 }
@@ -748,8 +754,8 @@ static void bulk_confirmed_cb(void *user) {
 
 // The corner's tick asks what to do rather than doing it: a selection is a
 // deliberate act, and the sheet names the act before anything is written to the
-// account. One entry, because a list can do one thing in bulk -- the same thing
-// its row menu does.
+// account. Track rows can also be kept on the card; playlist tracks carry the
+// same actions as well as their playlist-specific removal.
 static const char *bulk_action_label(bulk_kind_t kind) {
 	switch (kind) {
 	case BULK_TRACK_ADD:
@@ -760,6 +766,8 @@ static const char *bulk_action_label(bulk_kind_t kind) {
 	case BULK_ALBUM_REMOVE:
 	case BULK_ARTIST_REMOVE:
 		return "remove_from_favourites";
+	case BULK_TRACK_DOWNLOAD:
+		return "trackmenu_keep_on_card";
 	case BULK_PLAYLIST_REMOVE:
 		return "medialist_remove_from_playlist";
 	case BULK_PLAYLIST_DELETE:
@@ -787,7 +795,7 @@ static void bulk_sheet_cb(lv_event_t *e) {
 	if (!any) {
 		return;
 	}
-	popover_item_t items[2];
+	popover_item_t items[3];
 	memset(items, 0, sizeof(items));
 	int count = 0;
 
@@ -804,6 +812,10 @@ static void bulk_sheet_cb(lv_event_t *e) {
 		items[count].action = bulk_sheet_action;
 		items[count].user = (void *)(intptr_t)BULK_PLAYLIST_REMOVE;
 		count++;
+		items[count].label = "trackmenu_keep_on_card";
+		items[count].action = bulk_sheet_action;
+		items[count].user = (void *)(intptr_t)BULK_TRACK_DOWNLOAD;
+		count++;
 	} else {
 		bulk_kind_t kind = bulk_kind_for(list_kind);
 		const char *label = bulk_action_label(kind);
@@ -814,6 +826,12 @@ static void bulk_sheet_cb(lv_event_t *e) {
 		items[count].action = bulk_sheet_action;
 		items[count].user = (void *)(intptr_t)kind;
 		count++;
+		if (list_kind == JOB_SEARCH_TRACKS || list_kind == JOB_ALBUM_TRACKS || list_kind == JOB_FAV_TRACKS) {
+			items[count].label = "trackmenu_keep_on_card";
+			items[count].action = bulk_sheet_action;
+			items[count].user = (void *)(intptr_t)BULK_TRACK_DOWNLOAD;
+			count++;
+		}
 	}
 	popover_show(lv_event_get_current_target(e), items, count);
 }
@@ -835,8 +853,13 @@ static void bulk_begin(bulk_kind_t kind) {
 		switch (bulk_kind) {
 		case BULK_TRACK_ADD:
 		case BULK_TRACK_REMOVE:
+		case BULK_TRACK_DOWNLOAD:
 			if (result_tracks[i].id > 0) {
-				bulk_track_ids[bulk_count++] = result_tracks[i].id;
+				bulk_track_ids[bulk_count] = result_tracks[i].id;
+				if (bulk_kind == BULK_TRACK_DOWNLOAD) {
+					bulk_download_tracks[bulk_count] = result_tracks[i];
+				}
+				bulk_count++;
 			}
 			break;
 		case BULK_PLAYLIST_REMOVE:
@@ -872,6 +895,15 @@ static void bulk_begin(bulk_kind_t kind) {
 	}
 	if (bulk_kind == BULK_PLAYLIST_DELETE) {
 		confirm_show("system_are_you_sure", NULL, "delete", bulk_confirmed_cb, NULL);
+		return;
+	}
+	if (bulk_kind == BULK_TRACK_DOWNLOAD) {
+		job_t job = {0};
+		job.kind = JOB_BULK_DOWNLOAD;
+		bulk_running = true;
+		start_worker();
+		busy_show("loading");
+		submit(&job);
 		return;
 	}
 	bulk_running = true;
@@ -1531,6 +1563,15 @@ static void job_done_cb(void *user) {
 	// Before reading any result_*: from here on the worker is held and nothing
 	// writes underneath. It is released on the way out, in job_result_taken().
 	busy_hide();
+	if (result_kind == JOB_BULK_DOWNLOAD) {
+		bulk_failed = result_error[0] != '\0';
+		if (bulk_failed) {
+			snprintf(bulk_message, sizeof(bulk_message), "%s", result_error);
+		}
+		bulk_finish();
+		job_result_taken();
+		return;
+	}
 
 	if (result_error[0]) {
 		// Login has its own page to report on. A transient popup would leave
@@ -2451,7 +2492,7 @@ static void *worker_main(void *arg) {
 		// makes do_play() a no-op: it finds an empty list and returns
 		// silently.) Nor does an extra page clear it: the old rows stay on
 		// screen and usable while the new ones download.
-		if (job.kind != JOB_PLAY && off == 0) {
+		if (job.kind != JOB_PLAY && job.kind != JOB_BULK_DOWNLOAD && off == 0) {
 			result_count = 0;
 			result_title[0] = '\0';
 		}
@@ -2561,6 +2602,51 @@ static void *worker_main(void *arg) {
 				do_play(job.index);
 				break;
 
+			case JOB_BULK_DOWNLOAD:
+				for (int i = 0; i < bulk_count; i++) {
+					const tidal_track_t *track = &bulk_download_tracks[i];
+					if (track->id <= 0 || !track->streamable) {
+						continue;
+					}
+					char path[512];
+					if (!tidalcache_find(track->id, path, sizeof(path))) {
+						tidal_stream_t *stream = calloc(1, sizeof(*stream));
+						if (!stream || !tidal_track_stream(track->id, stream)) {
+							const char *why = tidal_last_error();
+							snprintf(result_error, sizeof(result_error), "%s",
+									 why && why[0] ? why : tr("download_failed"));
+							free(stream);
+							break;
+						}
+						if (!tidalcache_start(track->id, stream, track->duration, false, path, sizeof(path))) {
+							const char *why = tidalcache_last_error();
+							snprintf(result_error, sizeof(result_error), "%s",
+									 why && why[0] ? why : tr("download_failed"));
+							free(stream);
+							break;
+						}
+						free(stream);
+						tidalcache_write_sidecars_at(path, track->title, track->artist, track->album, track->album_id,
+												track->track_number, NULL);
+						tidalcache_note_played(path);
+						tidalcache_wait_idle();
+						if (!tidalcache_find(track->id, path, sizeof(path))) {
+							const char *why = tidalcache_last_error();
+							snprintf(result_error, sizeof(result_error), "%s",
+									 why && why[0] ? why : tr("download_failed"));
+							break;
+						}
+					}
+					if (!streamkeep_keep(path)) {
+						snprintf(result_error, sizeof(result_error), "%s", tr("stream_keep_failed"));
+						break;
+					}
+					while (streamkeep_busy()) {
+						usleep(100 * 1000);
+					}
+				}
+				break;
+
 			default:
 				break;
 			}
@@ -2581,7 +2667,7 @@ static void *worker_main(void *arg) {
 			snprintf(result_error, sizeof(result_error), "%s", tidal_last_error());
 			n = 0;
 		}
-		if (job.kind != JOB_PLAY) {
+		if (job.kind != JOB_PLAY && job.kind != JOB_BULK_DOWNLOAD) {
 			// A job that will draw nothing -- an error, or a vanished showcase
 			// -- restores what it saved: the list on screen is still the
 			// previous one, and these numbers must keep describing it. Zero
@@ -2646,7 +2732,8 @@ static bool inflight_valid;
 static bool inflight_is_back; // going back consumes a step instead of adding one
 
 static bool job_is_list(job_kind_t kind) {
-	return kind != JOB_PLAY && kind != JOB_LOGIN_BEGIN && kind != JOB_LOGIN_POLL && kind != JOB_NONE;
+	return kind != JOB_PLAY && kind != JOB_BULK_DOWNLOAD && kind != JOB_LOGIN_BEGIN && kind != JOB_LOGIN_POLL &&
+		   kind != JOB_NONE;
 }
 
 // The job put nothing on screen: navigation stays exactly as it was, and the
