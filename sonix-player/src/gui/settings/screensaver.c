@@ -85,9 +85,8 @@ static int strip_h;
 // down the strip now that the clock no longer sits at its foot.
 #define TITLE_SHIFT bp_pick(4, 5)
 
-// How far the artist is shifted DOWN out of its line. Left exactly where the
-// last round tuned it: the clock's lift alone closes the three-pixel gap the
-// two lines had, so the title and the artist do not need to move again.
+// The artist follows the general line spacing, with a one-pixel upward nudge
+// so the title/artist pair stays a little tighter than the gaps below it.
 #define ARTIST_SHIFT bp_pick(5, 6)
 
 // The Framed style's sleeve. It keeps at least this much of the panel free on
@@ -716,11 +715,11 @@ static void draw_framed(const lv_image_dsc_t *backdrop) {
 		lv_obj_set_hidden(cover_placeholder, false);
 	}
 
-	// The page: the blurred copy behind everything in Dark and Light when the
-	// player has one the size of the screen, the page colour otherwise -- and
-	// always the page colour in the palettes, whose page is a colour by design.
-	bool blur = !metadata_over_art() && backdrop && (int)backdrop->header.w == screen_w &&
-				(int)backdrop->header.h == screen_h;
+	// The page: the blurred copy behind the framed sleeve in every palette
+	// when the player has a screen-sized one. Monochrome themes still colour
+	// the words and the field themselves, but the space around the sleeve
+	// should show the record rather than a flat black page.
+	bool blur = backdrop && (int)backdrop->header.w == screen_w && (int)backdrop->header.h == screen_h;
 	set_page_backdrop(blur ? backdrop : NULL);
 	lv_obj_set_style_bg_opa(cover_box, blur ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
 	set_info_strip_backdrop(NULL); // framed: no strip of its own
@@ -1177,7 +1176,7 @@ void screensaver_init(gui_config_t *cfg) {
 	lv_obj_set_style_radius(info_strip, 0, 0);
 	lv_obj_set_style_pad_hor(info_strip, cfg->padding + 6, 0);
 	lv_obj_set_style_pad_ver(info_strip, bp_pick(8, 18), 0);
-	lv_obj_set_style_pad_gap(info_strip, 2, 0);
+	lv_obj_set_style_pad_gap(info_strip, 4, 0);
 	lv_obj_set_scrollable(info_strip, false);
 	lv_obj_set_event_bubble(info_strip, true);
 	lv_obj_set_clickable(info_strip, false);
@@ -1201,7 +1200,7 @@ void screensaver_init(gui_config_t *cfg) {
 	lv_obj_set_width(artist_label, lv_pct(100));
 	lv_obj_set_style_text_font(artist_label, &font_ui_22, 0);
 	lv_obj_set_style_text_align(artist_label, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_style_translate_y(artist_label, ARTIST_SHIFT, 0);
+	lv_obj_set_style_translate_y(artist_label, ARTIST_SHIFT - 1, 0);
 	scrolltext_apply(artist_label);
 
 	// The time, in the largest figures the screen has -- lifted clear of the
@@ -1217,7 +1216,7 @@ void screensaver_init(gui_config_t *cfg) {
 	// where the drag gesture lives.
 	lv_obj_t *chevron_btn = lv_obj_create(saver);
 	lv_obj_set_size(chevron_btn, bp_pick(48, 80), bp_pick(30, 52));
-	lv_obj_align(chevron_btn, LV_ALIGN_BOTTOM_MID, 0, -4);
+	lv_obj_align(chevron_btn, LV_ALIGN_BOTTOM_MID, 0, -8);
 	lv_obj_set_style_bg_opa(chevron_btn, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(chevron_btn, 0, 0);
 	lv_obj_set_style_shadow_width(chevron_btn, 0, 0);

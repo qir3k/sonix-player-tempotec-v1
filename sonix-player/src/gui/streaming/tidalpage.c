@@ -2209,10 +2209,8 @@ static void *prefetch_main(void *arg) {
 		// The list `queued_tracks` is filled by do_play(). A queue restored at
 		// boot, or extended from the player, has paths but no entries here --
 		// and an id is all the download itself needs. Falling back to a bare
-		// track (empty metadata) downloads it rather than refusing it every
-		// second for ever; the sidecars are then skipped, so an existing one is
-		// not overwritten with blanks, and the file name stands in as the title
-		// until a later session that knows the track writes the tags.
+		// track downloads the exact id requested by tidalpage_prepare_track;
+		// sidecars are skipped rather than overwritten with blank metadata.
 		tidal_track_t restored = {0};
 		tidal_track_t track;
 		if (index >= 0) {
@@ -4375,12 +4373,9 @@ void tidalpage_init(gui_config_t *cfg) {
 	// a Tidal one returns true immediately.
 	device_state_add_prepare_cb(tidalpage_prepare_track);
 
-	// The prefetch thread starts here, not only from do_play(). do_play() is
-	// what builds a queue from this page, but a queue can also come back from
-	// the saved state at boot, or be extended from the player: nothing called
-	// do_play() then, so nothing created the thread, and the first track the
-	// queue reached without a file had nobody to download it. It waits on its
-	// condition until the watchdog names a track.
+	// Start the worker while this page is initialised. It waits on its
+	// condition until do_play() or the queue watchdog names a track; restored
+	// queues can also submit their current track through tidalpage_prepare_track.
 	prefetch_submit(0);
 
 	// The queue watchdog: tells the prefetch thread how far the ready tracks
