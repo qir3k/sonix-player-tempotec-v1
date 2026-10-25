@@ -539,10 +539,10 @@ static void *capture_worker(void *arg) {
 	// a listen answers better than an argument does:
 	//
 	//   [bluetooth]
-	//   receiver_rt_priority = 10   below bluealsa's decoder (FIFO 12)
-	//                        = 13   above it
+	//   receiver_rt_priority = 13   above bluealsa's decoder (FIFO 12)
+	//                        = 10   below it
 	//                        = 0    no real-time at all
-	int rt = (int)config_get_int("bluetooth", "receiver_rt_priority", 10);
+	int rt = (int)config_get_int("bluetooth", "receiver_rt_priority", 13);
 	if (rt > 0) {
 		thread_be_realtime("btreceive", rt);
 	} else {

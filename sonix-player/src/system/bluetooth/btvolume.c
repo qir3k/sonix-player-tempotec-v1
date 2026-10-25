@@ -649,7 +649,11 @@ void btvolume_set_receiver(const char *mac) {
 				*p = '_';
 			}
 		}
-		snprintf(path, sizeof(path), "/org/bluealsa/hci0/dev_%s/a2dpsink/source", address);
+		// BlueALSA abbreviates the local A2DP sink profile as `a2dpsnk` in
+		// its PCM object paths (see btstack.c:pcm_path_dir). The full spelling
+		// names no object, so Properties.Set fails and receiver volume never
+		// reaches the phone or comes back from it.
+		snprintf(path, sizeof(path), "/org/bluealsa/hci0/dev_%s/a2dpsnk/source", address);
 	}
 
 	pthread_mutex_lock(&lock);

@@ -2542,9 +2542,9 @@ void radiopage_init(gui_config_t *cfg) {
 		settingsrow_add(hub_container, HUB_LABELS[HUB_FAVOURITES], NULL, favourites_cb, NULL);
 	hub_rows[HUB_RECOMMENDED] =
 		settingsrow_add(hub_container, HUB_LABELS[HUB_RECOMMENDED], NULL, recommended_cb, NULL);
-	// The heart leads this one row, the way the corner button wore it in the
-	// header: filled, because the list it opens is the starred ones.
-	settingsrow_add_icon(hub_rows[HUB_FAVOURITES], &icon_heart_filled, THEME_SEMANTIC_RED);
+	// No mark leads the Favourites row: the other rows in this list are words
+	// alone, and a red heart beside one of them made it read as a different
+	// kind of entry.
 
 	// The same notice as the Wi-Fi transfer page: a centred message, and below
 	// it the "Wi-Fi settings" row that leads to where it can be fixed.
