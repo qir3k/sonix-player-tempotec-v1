@@ -119,7 +119,35 @@ static unsigned job_serial;
 // What came back. Only the worker writes here, and only while the GUI is not
 // reading (it reads inside the async, which runs after the worker is done).
 static tidal_track_t result_tracks[TIDAL_MAX_HELD];
-static tidal_track_t bulk_download_tracks[TIDAL_MAX_HELD];
+// Bulk downloads do not need a track's cover URL or streaming metadata. Keep
+// only what the worker uses instead of duplicating the full (1 KB cover URL)
+// Tidal record for every selected track.
+typedef struct {
+	long id;
+	char title[TIDAL_TITLE_MAX];
+	char artist[TIDAL_NAME_MAX];
+	char album[TIDAL_TITLE_MAX];
+	char album_id[TIDAL_ID_MAX];
+	int duration;
+	int track_number;
+	bool streamable;
+} tidal_download_track_t;
+
+static tidal_download_track_t bulk_download_tracks[TIDAL_MAX_HELD];
+
+static void bulk_download_track_copy(int dst, const tidal_track_t *track) {
+	if (!track || dst < 0 || dst >= TIDAL_MAX_HELD) {
+		return;
+	}
+	bulk_download_tracks[dst] = (tidal_download_track_t){
+		.id = track->id, .duration = track->duration,
+		.track_number = track->track_number, .streamable = track->streamable,
+	};
+	snprintf(bulk_download_tracks[dst].title, sizeof(bulk_download_tracks[dst].title), "%s", track->title);
+	snprintf(bulk_download_tracks[dst].artist, sizeof(bulk_download_tracks[dst].artist), "%s", track->artist);
+	snprintf(bulk_download_tracks[dst].album, sizeof(bulk_download_tracks[dst].album), "%s", track->album);
+	snprintf(bulk_download_tracks[dst].album_id, sizeof(bulk_download_tracks[dst].album_id), "%s", track->album_id);
+}
 static tidal_album_t result_albums[TIDAL_MAX_HELD];
 static tidal_artist_t result_artists[TIDAL_MAX_HELD];
 static tidal_playlist_t result_playlists[TIDAL_MAX_HELD];
@@ -858,7 +886,7 @@ static void bulk_begin(bulk_kind_t kind) {
 			if (result_tracks[i].id > 0) {
 				bulk_track_ids[bulk_count] = result_tracks[i].id;
 				if (bulk_kind == BULK_TRACK_DOWNLOAD) {
-					bulk_download_tracks[bulk_count] = result_tracks[i];
+					bulk_download_track_copy(bulk_count, &result_tracks[i]);
 				}
 				bulk_count++;
 			}
@@ -998,6 +1026,31 @@ static void ask_playlist_delete(void *user) {
 	confirm_show("delete_the_playlist", message, "delete", do_playlist_delete, NULL);
 }
 
+static void download_one_track(void *user) {
+	(void)user;
+	if (menu_index < 0 || menu_index >= result_count || bulk_running) {
+		return;
+	}
+	const tidal_track_t *track = &result_tracks[menu_index];
+	if (!track->streamable) {
+		gui_notify_popup(tr("stream_not_in_subscription"));
+		return;
+	}
+
+	bulk_kind = BULK_TRACK_DOWNLOAD;
+	bulk_at = 0;
+	bulk_count = 1;
+	bulk_failed = false;
+	bulk_message[0] = '\0';
+	bulk_download_track_copy(0, track);
+	bulk_running = true;
+	start_worker();
+	busy_show("loading");
+	job_t job = {0};
+	job.kind = JOB_BULK_DOWNLOAD;
+	submit(&job);
+}
+
 static void row_menu_cb(lv_event_t *e) {
 	lv_event_stop_bubbling(e); // the tap belongs to the menu, not the row
 	if (switcher_back_drag_active() || player_sheet_drag_active()) {
@@ -1010,12 +1063,14 @@ static void row_menu_cb(lv_event_t *e) {
 	}
 	menu_index = index;
 
-	popover_item_t items[2];
+	popover_item_t items[3];
 	memset(items, 0, sizeof(items));
 	int count = 1;
+	bool track_row = false;
 
 	switch (row_menu_kind(list_kind)) {
 	case ROW_MENU_TRACK_ADD:
+		track_row = true;
 		// A track already in favourites is offered for removal, not for
 		// adding again.
 		if (tidalsync_is_favorite(result_tracks[index].id)) {
@@ -1027,10 +1082,12 @@ static void row_menu_cb(lv_event_t *e) {
 		}
 		break;
 	case ROW_MENU_TRACK_REMOVE:
+		track_row = true;
 		items[0].label = "remove_from_favourites";
 		items[0].action = ask_track_remove;
 		break;
 	case ROW_MENU_PLAYLIST_TRACK:
+		track_row = true;
 		// Both things one can do with a track that is in a playlist: favourite
 		// it, or take it out of this playlist.
 		if (tidalsync_is_favorite(result_tracks[index].id)) {
@@ -1078,6 +1135,11 @@ static void row_menu_cb(lv_event_t *e) {
 		break;
 	default:
 		return;
+	}
+	if (track_row && result_tracks[index].streamable) {
+		items[count].label = "trackmenu_keep_on_card";
+		items[count].action = download_one_track;
+		count++;
 	}
 
 	popover_show(lv_event_get_current_target(e), items, count);
@@ -2605,7 +2667,7 @@ static void *worker_main(void *arg) {
 
 			case JOB_BULK_DOWNLOAD:
 				for (int i = 0; i < bulk_count; i++) {
-					const tidal_track_t *track = &bulk_download_tracks[i];
+					const tidal_download_track_t *track = &bulk_download_tracks[i];
 					if (track->id <= 0 || !track->streamable) {
 						continue;
 					}
