@@ -456,25 +456,23 @@ static lv_obj_t *theme_preview_card(lv_obj_t *parent, const char *title, bool co
 }
 
 static void appearance_preview_refresh(void) {
-	bool tokyo = theme_is_tokyo_night();
 	bool amber = theme_is_amber_on_black();
 	bool oled = theme_is_oled();
-	bool show = bp_is_tempotec_v1() && (tokyo || amber || oled);
+	bool show = bp_is_tempotec_v1() && (amber || oled);
 	if (theme_palette_card) {
 		lv_obj_set_hidden(theme_palette_card, !show);
 	}
 	if (theme_palette_title) {
-		const char *title = amber ? "appearance_amber_palette" : oled ? "appearance_oled_palette" : "appearance_tokyo_palette";
+		const char *title = oled ? "appearance_oled_palette" : "appearance_amber_palette";
 		lv_label_set_text(theme_palette_title, tr(title));
 	}
 	if (function_glyph_card) {
 		lv_obj_set_hidden(function_glyph_card, !show);
 	}
 
-	// Tokyo Night keeps its semantic hues. Amber on Black shows the distinct
-	// dark track, subdued star, playback, artist and cream-title colors from
-	// the reference screen instead of looking like the Tokyo palette. OLED is
-	// its ramp of greys, black to white, ending on the accent: the page and the
+	// Amber on Black shows the distinct dark track, subdued star, playback,
+	// artist and cream-title colors from the reference screen. OLED is its
+	// ramp of greys, black to white, ending on the accent: the page and the
 	// cards, both black, then the track under the progress bar.
 	lv_color_t swatches[8];
 	if (oled) {
@@ -486,7 +484,7 @@ static void appearance_preview_refresh(void) {
 		swatches[5] = theme_player_chrome_color(THEME_PLAYER_CHROME_SECONDARY);
 		swatches[6] = theme_player_chrome_color(THEME_PLAYER_CHROME_PRIMARY);
 		swatches[7] = theme()->accent;
-	} else if (amber) {
+	} else {
 		swatches[0] = theme()->screen_bg;
 		swatches[1] = theme()->surface;
 		swatches[2] = theme()->surface_pressed;
@@ -495,30 +493,17 @@ static void appearance_preview_refresh(void) {
 		swatches[5] = theme_player_chrome_color(THEME_PLAYER_CHROME_PLAYBACK);
 		swatches[6] = theme_player_chrome_color(THEME_PLAYER_CHROME_SECONDARY);
 		swatches[7] = theme_player_chrome_color(THEME_PLAYER_CHROME_PRIMARY);
-	} else {
-		swatches[0] = theme()->screen_bg;
-		swatches[1] = theme()->surface;
-		swatches[2] = theme()->text_primary;
-		swatches[3] = theme()->accent;
-		swatches[4] = theme_semantic_color(THEME_SEMANTIC_CYAN);
-		swatches[5] = theme_semantic_color(THEME_SEMANTIC_PURPLE);
-		swatches[6] = theme_semantic_color(THEME_SEMANTIC_GREEN);
-		swatches[7] = theme_semantic_color(THEME_SEMANTIC_RED);
 	}
 	for (int i = 0; i < 8; i++) {
 		if (!theme_palette_swatches[i]) {
 			continue;
 		}
 		lv_obj_set_style_bg_color(theme_palette_swatches[i], swatches[i], 0);
-		if (amber || oled) {
-			// The near-black swatches otherwise disappear into the card and
-			// look like unpainted boxes on the low-contrast V1 panel.
-			lv_obj_set_style_border_width(theme_palette_swatches[i], 1, 0);
-			lv_obj_set_style_border_color(theme_palette_swatches[i], theme()->text_secondary, 0);
-			lv_obj_set_style_border_opa(theme_palette_swatches[i], LV_OPA_50, 0);
-		} else {
-			lv_obj_set_style_border_width(theme_palette_swatches[i], 0, 0);
-		}
+		// The near-black swatches otherwise disappear into the card and look
+		// like unpainted boxes on the low-contrast V1 panel.
+		lv_obj_set_style_border_width(theme_palette_swatches[i], 1, 0);
+		lv_obj_set_style_border_color(theme_palette_swatches[i], theme()->text_secondary, 0);
+		lv_obj_set_style_border_opa(theme_palette_swatches[i], LV_OPA_50, 0);
 	}
 
 	static const theme_semantic_t tones[4] = {
@@ -538,7 +523,7 @@ static void build_theme_previews(lv_obj_t *container, bool compact) {
 		return;
 	}
 
-	theme_palette_card = theme_preview_card(container, "appearance_tokyo_palette", compact);
+	theme_palette_card = theme_preview_card(container, "appearance_amber_palette", compact);
 	theme_palette_title = lv_obj_get_child(theme_palette_card, 0);
 	lv_obj_t *palette = lv_obj_create(theme_palette_card);
 	lv_obj_set_size(palette, lv_pct(100), 13);
@@ -623,15 +608,13 @@ void appearance_init(gui_config_t *cfg) {
 
 	theme_buttons[THEME_KIND_DARK] = make_theme_choice(row, "appearance_dark", THEME_KIND_DARK, compact);
 	theme_buttons[THEME_KIND_LIGHT] = make_theme_choice(row, "appearance_light", THEME_KIND_LIGHT, compact);
-	theme_buttons[THEME_KIND_TOKYO_NIGHT] =
-		make_theme_choice(row, "appearance_tokyo_night", THEME_KIND_TOKYO_NIGHT, compact);
 	theme_buttons[THEME_KIND_AMBER_ON_BLACK] = make_theme_choice(row,
 		compact ? "appearance_amber_short" : "appearance_amber_on_black", THEME_KIND_AMBER_ON_BLACK, compact);
 	theme_buttons[THEME_KIND_OLED] = make_theme_choice(row, "appearance_oled", THEME_KIND_OLED, compact);
 
-	// Compact palette and function-glyph examples for Tokyo Night, Amber on
-	// Black and OLED, immediately after the theme switch. Hidden for Dark/Light
-	// so their existing Appearance page remains unchanged.
+	// Compact palette and function-glyph examples for Amber on Black and OLED,
+	// immediately after the theme switch. Hidden for Dark/Light so their
+	// existing Appearance page remains unchanged.
 	build_theme_previews(container, compact);
 
 	settingsrow_toggle(container, "appearance_main_menu_icons_only", &main_menu_icons_toggle, main_menu_icons_cb);

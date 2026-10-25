@@ -59,11 +59,9 @@ static int strip_h;
 // FRAME_MARGIN_VERT) and six of the artwork's own box under the same rule.
 #define DEFAULT_STRIP_H bp_pick(126, 220)
 
-// How much of the sleeve still shows through that field, per palette. Amber's
-// cream and amber type is bright enough to read through half; Tokyo Night's
-// violet, cyan and blue are dimmer inks, so its film is a step heavier.
+// How much of the sleeve still shows through that field. Amber's cream and
+// amber type is bright enough to read through half.
 #define AMBER_STRIP_OPA LV_OPA_50
-#define TOKYO_STRIP_OPA LV_OPA_60
 
 // How far the clock is lifted out of its line in the strip. It is the strip's
 // last line and the swipe-up sign hangs over the strip's foot, and the room
@@ -208,7 +206,7 @@ static int cover_box_h;
 // own colour is laid over its foot. Dark and Light keep the blurred strip,
 // which is the artwork the player already made for that purpose.
 static bool metadata_over_art(void) {
-	return theme_is_monochrome() || theme_is_tokyo_night();
+	return theme_is_monochrome();
 }
 
 // The album, framed. In every theme the frame stands above the words rather
@@ -502,10 +500,10 @@ static void promote_next(void) {
 }
 
 // The V1 palettes replace the artwork-derived blur beneath their metadata with
-// a fixed translucent field: black for Amber and OLED, Tokyo Night's
-// blue-black panel. Either keeps the palette's ink legible over every sleeve while still
-// letting the cover show through behind it. The other themes keep the blurred
-// copy, or plain black when there is no artwork to blur.
+// a fixed translucent black field, which keeps the palette's ink legible over
+// every sleeve while still letting the cover show through behind it. The other
+// themes keep the blurred copy, or plain black when there is no artwork to
+// blur.
 //
 // The field is the flat translucent rectangle it has always been: one weight of
 // the palette's own colour over the foot of the sleeve, with the words on it.
@@ -527,13 +525,6 @@ static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
 		lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
 		lv_obj_set_style_bg_color(info_strip, lv_color_black(), 0);
 		lv_obj_set_style_bg_opa(info_strip, AMBER_STRIP_OPA, 0);
-		return;
-	}
-
-	if (theme_is_tokyo_night()) {
-		lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
-		lv_obj_set_style_bg_color(info_strip, theme()->panel, 0);
-		lv_obj_set_style_bg_opa(info_strip, TOKYO_STRIP_OPA, 0);
 		return;
 	}
 
@@ -561,19 +552,16 @@ static void set_page_backdrop(const lv_image_dsc_t *backdrop) {
 
 // The metadata field's ink, by palette. Amber takes the cream, amber and
 // signal-orange roles sampled from its reference Now Playing screen, and OLED
-// the white and grey steps of its own deck; Tokyo Night takes the violet it
-// gives the deck's track name, the cyan it gives the artist line and its own
-// accent blue for the time. Dark and Light have no
-// field of their own: they keep the light type they have always worn over the
-// blurred strip, whatever the page behind them is.
+// the white and grey steps of its own deck. Dark and Light have no field of
+// their own: they keep the light type they have always worn over the blurred
+// strip, whatever the page behind them is.
 static void screensaver_refresh_theme(void) {
 	if (!saver) {
 		return;
 	}
 
 	bool mono = theme_is_monochrome(); // Amber on Black and OLED
-	bool tokyo = theme_is_tokyo_night();
-	bool field = mono || tokyo;
+	bool field = mono;
 
 	// The page behind everything. Where there is a field it is the palette's own
 	// background -- both the ground the note sits on when a track has no artwork
@@ -588,7 +576,7 @@ static void screensaver_refresh_theme(void) {
 	// What the words and the marks are drawn in. Over a field they take the
 	// roles the palette's own Now Playing deck gives the same things: the
 	// track name's colour for the title, the artist line's for the artist --
-	// which is Amber's amber and Tokyo Night's cyan, the one place the two
+	// which is Amber's amber and OLED's grey, the one place the two
 	// palettes ask a different colour of the same role -- and the deck's quiet
 	// chevron for the way out. The time is white in every palette: it is the
 	// one thing here that should read the same whatever accent is chosen.
@@ -597,8 +585,7 @@ static void screensaver_refresh_theme(void) {
 	lv_color_t ink_chevron = lv_color_white();
 	if (field) {
 		ink_title = theme_player_chrome_color(THEME_PLAYER_CHROME_PRIMARY);
-		ink_artist = tokyo ? theme_semantic_color(THEME_SEMANTIC_CYAN)
-						   : theme_player_chrome_color(THEME_PLAYER_CHROME_SECONDARY);
+		ink_artist = theme_player_chrome_color(THEME_PLAYER_CHROME_SECONDARY);
 		ink_chevron = theme_player_chrome_color(THEME_PLAYER_CHROME_CHEVRON);
 	}
 
@@ -828,8 +815,8 @@ static void refresh_content(void) {
 		lv_obj_set_hidden(cover_placeholder, false);
 	}
 
-	// In Amber and Tokyo Night this clears the blurred artwork and puts the
-	// palette's translucent field in its place.
+	// In Amber and OLED this clears the blurred artwork and puts the palette's
+	// translucent field in its place.
 	set_info_strip_backdrop(backdrop);
 
 	refresh_clock();
@@ -1140,9 +1127,9 @@ void screensaver_init(gui_config_t *cfg) {
 	lv_obj_set_flex_align(info_strip, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
 	// None of the ink is set here. What the words and the marks are drawn in
-	// depends on the palette -- Amber's cream and signal orange, Tokyo Night's
-	// violet, cyan and blue, the light type Dark and Light have always worn over
-	// the blurred strip -- and it is all written in screensaver_refresh_theme(),
+	// depends on the palette -- Amber's cream and signal orange, OLED's white
+	// and grey, the light type Dark and Light have always worn over the blurred
+	// strip -- and it is all written in screensaver_refresh_theme(),
 	// which runs at the end of this function and again on every theme change.
 	// One place, so the two can never disagree.
 	title_label = lv_label_create(info_strip);

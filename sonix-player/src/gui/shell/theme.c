@@ -55,23 +55,9 @@ static theme_palette_t palette_light = {
 	.dark = false,
 };
 
-// Tokyo Night, matching the approved V1 mockup. There are no extra font or
-// bitmap packs: the menu glyphs reuse the existing generated icons.
-static theme_palette_t palette_tokyo = {
-	.screen_bg = LV_COLOR_MAKE(26, 27, 38),       // #1a1b26
-	.surface = LV_COLOR_MAKE(36, 40, 59),         // #24283b
-	.surface_pressed = LV_COLOR_MAKE(45, 53, 84), // #2d3554
-	.panel = LV_COLOR_MAKE(22, 22, 30),           // #16161e
-	.cover_bg = LV_COLOR_MAKE(22, 22, 30),
-	.text_primary = LV_COLOR_MAKE(192, 202, 245), // #c0caf5
-	.text_secondary = LV_COLOR_MAKE(169, 177, 214), // #a9b1d6
-	.accent = LV_COLOR_MAKE(122, 162, 247),       // #7aa2f7
-	.dark = true,
-};
-
-// Amber on Black follows the same V1 screen layouts as Tokyo Night, with the
-// distinct cream, golden-amber and dark-orange roles sampled from the
-// reference Now Playing screen.
+// Amber on Black follows the V1 screen layouts, with the distinct cream,
+// golden-amber and dark-orange roles sampled from the reference Now Playing
+// screen.
 static theme_palette_t palette_amber = {
 	.screen_bg = LV_COLOR_MAKE(10, 9, 7),          // #0a0907
 	.surface = LV_COLOR_MAKE(25, 19, 10),          // #19130a
@@ -122,15 +108,13 @@ bool theme_color_is_light(lv_color_t c) {
 }
 
 // The selected preset is kept apart from `active` because dynamic tint points
-// `active` at a derived copy rather than at any of the five presets.
+// `active` at a derived copy rather than at any of the four presets.
 static theme_kind_t selected_kind = THEME_KIND_DARK;
 
 static theme_palette_t *selected_palette(void) {
 	switch (selected_kind) {
 	case THEME_KIND_LIGHT:
 		return &palette_light;
-	case THEME_KIND_TOKYO_NIGHT:
-		return &palette_tokyo;
 	case THEME_KIND_AMBER_ON_BLACK:
 		return &palette_amber;
 	case THEME_KIND_OLED:
@@ -175,8 +159,6 @@ static int accent_index;
 
 static lv_color_t default_accent(theme_kind_t kind) {
 	switch (kind) {
-	case THEME_KIND_TOKYO_NIGHT:
-		return lv_color_make(122, 162, 247); // Tokyo Night blue
 	case THEME_KIND_AMBER_ON_BLACK:
 		return lv_color_make(255, 173, 46); // Amber on Black signal
 	case THEME_KIND_OLED:
@@ -436,7 +418,12 @@ void theme_init(void) {
 	if (saved_theme && strcmp(saved_theme, "light") == 0) {
 		selected_kind = THEME_KIND_LIGHT;
 	} else if (saved_theme && strcmp(saved_theme, "tokyo-night") == 0) {
-		selected_kind = THEME_KIND_TOKYO_NIGHT;
+		// A config from a build that had the Tokyo Night palette reads as the
+		// Dark one it was derived from, and the key is rewritten so the
+		// migration happens once.
+		selected_kind = THEME_KIND_DARK;
+		config_set("ui", "theme", "dark");
+		config_save();
 	} else if (saved_theme && strcmp(saved_theme, "amber-on-black") == 0) {
 		selected_kind = THEME_KIND_AMBER_ON_BLACK;
 	} else if (saved_theme && strcmp(saved_theme, "oled") == 0) {
@@ -476,7 +463,6 @@ void theme_init(void) {
 	}
 	palette_dark.accent = ACCENT_COLORS[accent_index];
 	palette_light.accent = ACCENT_COLORS[accent_index];
-	palette_tokyo.accent = accent_index == 0 ? default_accent(THEME_KIND_TOKYO_NIGHT) : ACCENT_COLORS[accent_index];
 	palette_amber.accent = accent_index == 0 ? default_accent(THEME_KIND_AMBER_ON_BLACK) : ACCENT_COLORS[accent_index];
 	palette_oled.accent = accent_index == 0 ? default_accent(THEME_KIND_OLED) : ACCENT_COLORS[accent_index];
 
@@ -543,8 +529,6 @@ lv_color_t theme_now_playing_fill(void) {
 
 bool theme_is_dark(void) { return active->dark; }
 
-bool theme_is_tokyo_night(void) { return selected_kind == THEME_KIND_TOKYO_NIGHT; }
-
 bool theme_is_amber_on_black(void) { return selected_kind == THEME_KIND_AMBER_ON_BLACK; }
 
 bool theme_is_oled(void) { return selected_kind == THEME_KIND_OLED; }
@@ -554,8 +538,7 @@ bool theme_is_monochrome(void) {
 }
 
 bool theme_uses_function_glyphs(void) {
-	return selected_kind == THEME_KIND_TOKYO_NIGHT || selected_kind == THEME_KIND_AMBER_ON_BLACK ||
-		   selected_kind == THEME_KIND_OLED;
+	return selected_kind == THEME_KIND_AMBER_ON_BLACK || selected_kind == THEME_KIND_OLED;
 }
 
 lv_color_t theme_ink_on(lv_color_t fill) { return theme_color_is_light(fill) ? lv_color_black() : lv_color_white(); }
@@ -573,41 +556,16 @@ lv_color_t theme_semantic_color(theme_semantic_t role) {
 	}
 	// Amber on Black and OLED are intentionally monochrome: blue, cyan,
 	// purple, green, amber and red roles all resolve to the chosen accent.
-	if (selected_kind != THEME_KIND_TOKYO_NIGHT) {
-		return active->accent;
-	}
-
-	switch (role) {
-	case THEME_SEMANTIC_BLUE:
-		return active->accent;
-	case THEME_SEMANTIC_CYAN:
-		return lv_color_make(125, 207, 255); // #7dcfff
-	case THEME_SEMANTIC_PURPLE:
-		return lv_color_make(187, 154, 247); // #bb9af7
-	case THEME_SEMANTIC_GREEN:
-		return lv_color_make(158, 206, 106); // #9ece6a
-	case THEME_SEMANTIC_AMBER:
-		return lv_color_make(224, 175, 104); // #e0af68
-	case THEME_SEMANTIC_RED:
-		return lv_color_make(247, 118, 142); // #f7768e
-	case THEME_SEMANTIC_MUTED:
-	default:
-		return active->text_secondary;
-	}
+	return active->accent;
 }
 
 // The file browser's folders are the one thing in the interface that does not
-// wear a shared colour: Tokyo Night gives them its violet -- the hue its Now
-// Playing deck already uses -- and nowhere else is it spent. Every other
-// palette answers with the colour it has always used here, so outside Tokyo
-// Night the page is unchanged.
+// wear a shared colour: the function-glyph palettes give them the signal
+// green, and every other palette the colour it has always used here.
 //
 // The names on the rows are not part of this: they read in the ordinary text
 // colour, the same one the library lists write theirs in.
 lv_color_t theme_browser_folder_color(void) {
-	if (selected_kind == THEME_KIND_TOKYO_NIGHT) {
-		return theme_semantic_color(THEME_SEMANTIC_PURPLE); // #bb9af7, the palette's violet
-	}
 	// Unchanged from before: the signal green a folder wears on the other
 	// function-glyph palettes (their accent), and the plain text colour
 	// everywhere else.
@@ -656,26 +614,6 @@ lv_color_t theme_player_chrome_color(theme_player_chrome_t role) {
 			return lv_color_make(48, 48, 48); // #303030
 		case THEME_PLAYER_CHROME_SHUFFLE_IDLE:
 			return lv_color_make(96, 96, 96); // #606060
-		}
-	}
-
-	// Tokyo Night's Now Playing deck is drawn from three of its own hues:
-	// the track name, the format line and the playback glyph wear the violet,
-	// while the idle shuffle and the overflow button take the comment grey --
-	// quiet controls, the way the palette uses #565f89 elsewhere. The artist
-	// name, favourite star and skip glyphs ask for the cyan semantic role
-	// themselves.
-	if (selected_kind == THEME_KIND_TOKYO_NIGHT) {
-		switch (role) {
-		case THEME_PLAYER_CHROME_PRIMARY:
-		case THEME_PLAYER_CHROME_SECONDARY:
-		case THEME_PLAYER_CHROME_PLAYBACK:
-			return lv_color_make(187, 154, 247); // #bb9af7
-		case THEME_PLAYER_CHROME_SHUFFLE_IDLE:
-		case THEME_PLAYER_CHROME_OVERFLOW:
-			return lv_color_make(86, 95, 137); // #565f89
-		default:
-			break;
 		}
 	}
 
@@ -790,8 +728,6 @@ static const char *theme_config_value(theme_kind_t kind) {
 	switch (kind) {
 	case THEME_KIND_LIGHT:
 		return "light";
-	case THEME_KIND_TOKYO_NIGHT:
-		return "tokyo-night";
 	case THEME_KIND_AMBER_ON_BLACK:
 		return "amber-on-black";
 	case THEME_KIND_OLED:
@@ -808,7 +744,6 @@ void theme_set_kind(theme_kind_t kind) {
 	}
 
 	selected_kind = kind;
-	palette_tokyo.accent = accent_index == 0 ? default_accent(THEME_KIND_TOKYO_NIGHT) : ACCENT_COLORS[accent_index];
 	palette_amber.accent = accent_index == 0 ? default_accent(THEME_KIND_AMBER_ON_BLACK) : ACCENT_COLORS[accent_index];
 	palette_oled.accent = accent_index == 0 ? default_accent(THEME_KIND_OLED) : ACCENT_COLORS[accent_index];
 	rebuild_active();
@@ -835,7 +770,6 @@ void theme_set_accent(int index) {
 	accent_index = index;
 	palette_dark.accent = ACCENT_COLORS[index];
 	palette_light.accent = ACCENT_COLORS[index];
-	palette_tokyo.accent = index == 0 ? default_accent(THEME_KIND_TOKYO_NIGHT) : ACCENT_COLORS[index];
 	palette_amber.accent = index == 0 ? default_accent(THEME_KIND_AMBER_ON_BLACK) : ACCENT_COLORS[index];
 	palette_oled.accent = index == 0 ? default_accent(THEME_KIND_OLED) : ACCENT_COLORS[index];
 	rebuild_active(); // the tint is drawn from the accent, so it moves with it

@@ -95,6 +95,44 @@ void radio_request_stations(radio_browse_t kind, const char *value, int offset);
 // radio_request_stations().
 void radio_request_search(const char *text, int offset);
 
+// The stations the listeners where you are play, most played first: the
+// directory's own popularity order, cut to the region and to the quality bar
+// below. With no region chosen it is the most played stations anywhere. Fills
+// the same result list as radio_request_stations().
+void radio_request_recommended(int offset);
+
+// ---------------------------------------------------------------------------
+// Where the lists are kept to
+//
+// Two cuts, both saved in [radio] so they survive a restart, and both applied
+// by every request this file makes rather than by the page: the directory is
+// asked for them (`country=`, `bitrateMin=`) and the answer is checked against
+// them again, since a mirror whose search endpoint ignores a parameter would
+// otherwise put back exactly what the setting is for. The country is the
+// directory's own name for it -- "poland", not "Poland", not "PL" -- because
+// that is the term its search endpoint matches.
+//
+// The region is not applied to a search by name: somebody typing a station's
+// name is asking for that station, wherever it is. The quality bar is applied
+// to everything, searches included: that is a statement about what this player
+// is willing to list, not about where in the world it is.
+// ---------------------------------------------------------------------------
+
+// The country the browse lists are kept to, or "" for every country.
+const char *radio_region(void);
+void radio_set_region(const char *name);
+
+// The lowest bitrate a list may hold, in kbps; 0 accepts anything. A station
+// whose bitrate the directory does not know counts as below any bar above 0.
+int radio_min_bitrate(void);
+void radio_set_min_bitrate(int kbps);
+
+// Whether two directory entries are the same station: the same uuid, the same
+// stream, or the same name in the same country. For a page that appends one
+// page of a list to the one before it and must not show a station twice -- the
+// directory holds duplicates its owners never merged.
+bool radio_station_same(const radio_station_t *a, const radio_station_t *b);
+
 // Where the current job is. Reading OK or FAILED leaves it there until the
 // next request, so a page that redraws twice sees the same answer twice.
 radio_job_t radio_job_state(void);

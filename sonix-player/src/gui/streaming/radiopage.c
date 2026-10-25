@@ -119,18 +119,28 @@ static gui_config_t *g_cfg;
 // user chooses in Radio settings. Recently played used to be a corner button
 // beside the heart and the search; it is a row among the categories now, where
 // it belongs -- it is a list of stations, like the others.
-#define HUB_ROWS 5
+#define HUB_ROWS 6
 enum {
 	HUB_RECENT = 0,
 	HUB_LANGUAGE,
 	HUB_COUNTRY,
 	HUB_GENRE,
 	HUB_CUSTOM,
+	// Last, and not beside Recent: the ids are what the saved hidden mask is
+	// indexed by, so a row added in the middle would move every bit after it
+	// and switch somebody's hidden row back on. The order the page shows them in
+	// is hub_order[] and is set below.
+	HUB_RECOMMENDED,
 };
 
-static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom"};
+static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom", "recommended"};
 static const char *const HUB_LABELS[HUB_ROWS] = {"radio_recently_played", "language", "radio_country", "genre",
-												  "radio_custom"};
+												  "radio_custom", "radio_recommended"};
+
+// The order a page that has never been arranged starts in: Recommended is the
+// second thing offered, right under what was played last.
+static const int HUB_DEFAULT_ORDER[HUB_ROWS] = {HUB_RECENT, HUB_RECOMMENDED, HUB_LANGUAGE,
+											  HUB_COUNTRY, HUB_GENRE, HUB_CUSTOM};
 
 static lv_obj_t *hub_container;
 static lv_obj_t *hub_wifi_warning;
@@ -145,10 +155,29 @@ static bool hub_hidden[HUB_ROWS];
 
 // --- Radio settings ---
 static lv_obj_t *radio_settings_screen;
-static lv_obj_t *radio_settings_rows;
 static settingsrow_duration_t radio_sleep_row;
-static lv_obj_t *radio_arrange_rows[HUB_ROWS];
-static lv_obj_t *radio_arrange_switches[HUB_ROWS];
+static lv_obj_t *radio_region_value;	 // the row that shows the chosen country
+static lv_obj_t *radio_quality_pills[2]; // 0 = any bitrate, 1 = the good ones
+
+// The arrangement of the hub's rows, on a page of its own (Radio settings >
+// List reorder).
+static lv_obj_t *radio_order_screen;
+static lv_obj_t *radio_order_rows;
+
+// --- The region ---
+//
+// The country the lists are kept to, chosen from the directory's own list, the
+// way the podcast page picks its chart's language: one page of rows, the chosen
+// one ticked. What it costs is a list of countries to scroll, and what it buys
+// is that a Polish listener is not offered a station in Texas unless they ask
+// for one.
+static lv_obj_t *region_screen;
+static lv_obj_t *region_container;
+static radio_term_t region_terms[250];
+static int region_term_count;
+static bool region_terms_ready;
+static lv_timer_t *region_timer;
+static unsigned region_job_serial;
 
 // --- the search page ---
 static lv_obj_t *search_field;
@@ -187,51 +216,6 @@ static unsigned last_job_serial;
 static radio_term_t terms[300];
 static int term_count;
 
-// Which of the directory's languages the language list keeps. The directory
-// answers with a couple of hundred of them, sorted by how many stations stand
-// behind each, and nobody reads past the handful they actually speak: this is
-// the handful, chosen once in Radio settings.
-enum {
-	LANGS_ALL = 0,
-	LANGS_POLISH_ENGLISH,
-	LANGS_POLISH,
-	LANGS_ENGLISH,
-	LANGS_COUNT,
-};
-
-static lv_obj_t *radio_lang_pills[LANGS_COUNT];
-
-// The directory names its languages in lower-case English ("polish",
-// "english"), which is also the term it expects back, so the filter compares
-// against those names rather than against anything translated.
-static long radio_langs(void) {
-	long value = config_get_int("radio", "languages", LANGS_ALL);
-	return (value < LANGS_ALL || value >= LANGS_COUNT) ? LANGS_ALL : value;
-}
-
-static bool language_kept(long which, const char *name) {
-	bool polish = strcasecmp(name, "polish") == 0;
-	bool english = strcasecmp(name, "english") == 0;
-	if (which == LANGS_POLISH_ENGLISH) {
-		return polish || english;
-	}
-	return which == LANGS_POLISH ? polish : english;
-}
-
-// Keeps the wanted languages, in place, and answers with the new count.
-static int languages_filter(radio_term_t *list, int count) {
-	long which = radio_langs();
-	if (which == LANGS_ALL) {
-		return count;
-	}
-	int kept = 0;
-	for (int i = 0; i < count; i++) {
-		if (language_kept(which, list[i].name)) {
-			list[kept++] = list[i];
-		}
-	}
-	return kept;
-}
 
 // Four pages held at once. A country can hold thousands of stations, so the
 // list is paged rather than capped: the next hundred are asked for when the
@@ -244,6 +228,7 @@ static int station_count;
 // What the current station list is, so the next page can be asked for.
 static char page_value[128];	  // the term, or the search text
 static bool page_is_search;
+static bool page_is_recommended; // the list is the region's most played
 static int page_offset;			  // where the next page starts, in the server's terms
 static bool page_more;			  // the last page came back full: there may be more
 static bool page_loading;		  // a page is in flight
@@ -291,6 +276,15 @@ static int list_count(void) {
 	default:
 		return station_count;
 	}
+}
+
+// What an empty list of stations should say.
+//
+// "Nothing found" is the wrong answer when the list is empty because of a cut
+// the user chose in Radio settings: the directory answered, the answer was
+// thrown away. The filtered sentence says which two settings to look at.
+static const char *empty_stations_message(void) {
+	return (radio_region()[0] || radio_min_bitrate() > 0) ? "radio_no_stations_filtered" : "radio_no_stations_found";
 }
 
 static void set_message(const char *text) {
@@ -686,10 +680,13 @@ static void list_load_more(void) {
 	last_job_serial = radio_job_serial();
 
 	// page_offset, not station_count: the two drift apart as soon as one
-	// station is dropped for being https-only, and asking from the wrong place
-	// means rows repeated or skipped.
+	// station is dropped -- for being https-only, for being below the quality
+	// bar, for being a duplicate -- and asking from the wrong place means rows
+	// repeated or skipped.
 	if (page_is_search) {
 		radio_request_search(page_value, page_offset);
+	} else if (page_is_recommended) {
+		radio_request_recommended(page_offset);
 	} else {
 		radio_request_stations(list_browse, page_value, page_offset);
 	}
@@ -752,6 +749,7 @@ static void row_clicked_cb(lv_event_t *e) {
 		station_count = 0;
 		term_count = 0;
 		page_is_search = false;
+		page_is_recommended = false;
 		page_offset = 0;
 		page_more = false;
 		page_append = false;
@@ -965,9 +963,6 @@ static void list_poll_cb(lv_timer_t *timer) {
 
 	if (list_mode == LIST_TERMS) {
 		term_count = radio_get_terms(terms, (int)(sizeof(terms) / sizeof(terms[0])));
-		if (list_browse == RADIO_BROWSE_LANGUAGES) {
-			term_count = languages_filter(terms, term_count);
-		}
 		station_count = 0;
 		page_more = false;
 		terms_sort();
@@ -985,6 +980,30 @@ static void list_poll_cb(lv_timer_t *timer) {
 	if (room > 0) {
 		got = radio_get_stations(appending ? &stations[station_count] : stations, room);
 	}
+	if (appending && got > 0) {
+		// A station that is already on the list stays where it is. The
+		// directory holds duplicates nobody merged, and its paging can hand the
+		// same stream back at the top of the next page -- either way a second
+		// copy under the first is a bug the user sees as rows that go nowhere.
+		radio_station_t *fresh = &stations[station_count];
+		int kept = 0;
+		for (int i = 0; i < got; i++) {
+			bool listed = false;
+			for (int j = 0; j < station_count && !listed; j++) {
+				listed = radio_station_same(&stations[j], &fresh[i]);
+			}
+			for (int j = 0; j < kept && !listed; j++) {
+				listed = radio_station_same(&fresh[j], &fresh[i]);
+			}
+			if (!listed) {
+				if (kept != i) {
+					fresh[kept] = fresh[i];
+				}
+				kept++;
+			}
+		}
+		got = kept;
+	}
 
 	// Whether there is more is about what the server sent, not what survived
 	// the filter: a full page with one https-only station in it comes back as
@@ -997,7 +1016,7 @@ static void list_poll_cb(lv_timer_t *timer) {
 	term_count = 0;
 
 	list_rebuild_keep(appending);
-	set_message(station_count ? NULL : "radio_no_stations_found");
+	set_message(station_count ? NULL : empty_stations_message());
 }
 
 static void list_loaded_cb(lv_event_t *e) {
@@ -1254,6 +1273,8 @@ static bool list_back_guard(void) {
 	list_mode = LIST_TERMS;
 	term_count = 0;
 	station_count = 0;
+	page_is_search = false;
+	page_is_recommended = false;
 	page_more = false;
 	page_loading = false;
 	page_append = false;
@@ -1272,6 +1293,8 @@ static void open_browse(radio_browse_t kind, const char *title) {
 	list_mode = LIST_TERMS;
 	term_count = 0;
 	station_count = 0;
+	page_is_search = false;
+	page_is_recommended = false;
 	page_more = false;
 	page_loading = false;
 	page_append = false;
@@ -1302,9 +1325,43 @@ static void genre_cb(lv_event_t *e) {
 	open_browse(RADIO_BROWSE_GENRES, "genre");
 }
 
+// The region's most played stations: the recommendation list. It is a station
+// list like any other once it is asked for, paged the same way and stepped
+// along by previous and next the same way.
+static void open_recommended(void) {
+	stations_from_terms = false;
+	list_mode = LIST_STATIONS;
+	term_count = 0;
+	station_count = 0;
+	page_is_search = false;
+	page_is_recommended = true;
+	page_value[0] = '\0';
+	page_offset = 0;
+	page_more = false;
+	page_loading = true;
+	page_append = false;
+
+	lv_label_set_text(list_title, tr("radio_recommended"));
+	sort_button_update();
+	list_rebuild();
+	set_message("loading");
+
+	last_job_serial = radio_job_serial();
+	radio_request_recommended(0);
+
+	switch_screen(radiolist_screen);
+}
+
+static void recommended_cb(lv_event_t *e) {
+	(void)e;
+	open_recommended();
+}
+
 static void open_stored(list_mode_t mode, const char *title) {
 	stations_from_terms = false;
 	list_mode = mode;
+	page_is_search = false;
+	page_is_recommended = false;
 	page_more = false;
 	page_loading = false;
 	page_append = false;
@@ -1369,11 +1426,19 @@ static void wifi_row_cb(lv_event_t *e) {
 
 static void hub_layout_load(void) {
 	for (int i = 0; i < HUB_ROWS; i++) {
-		hub_order[i] = i;
+		hub_order[i] = HUB_DEFAULT_ORDER[i];
 		hub_hidden[i] = false;
 	}
 
 	const char *saved = config_get("radio", "hub_order", "");
+	if (!saved || !saved[0]) {
+		// Never arranged: the default order, already in place.
+		long mask = config_get_int("radio", "hub_hidden", 0);
+		for (int i = 0; i < HUB_ROWS; i++) {
+			hub_hidden[i] = ((mask >> i) & 1) != 0;
+		}
+		return;
+	}
 	bool seen[HUB_ROWS] = {false};
 	int at = 0;
 	const char *p = saved ? saved : "";
@@ -1498,26 +1563,46 @@ static void hub_loaded_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 // Radio settings
 //
-// Three things, and all of them are about this page rather than about the
+// Five things, and all of them are about this page rather than about the
 // stations: a sleep timer of its own (a stretch set for a station should not be
-// counting over an album in the morning), which languages the language list
-// offers, and the list on the page -- which rows there are, and in what order.
-// The arrangement is the same idea as the main menu's editor, with the same
-// pair of arrows and a switch.
+// counting over an album in the morning), where in the world the lists are kept
+// to, how good a stream has to be before it is worth listing, and -- on a page
+// of its own, behind one row -- the list on the page: which rows there are, and
+// in what order.
+//
+// The arrangement used to be here, under these rows: five switches and ten
+// arrows in the middle of a settings page, with the two things somebody
+// actually changes (the timer, the region) above them and the list they were
+// arranging nowhere in sight. It is a page of its own now, with a row that says
+// so, and this page is four rows long again.
 // ---------------------------------------------------------------------------
 
-static void radio_lang_refresh(void) {
-	long which = radio_langs();
-	for (int i = 0; i < LANGS_COUNT; i++) {
-		if (radio_lang_pills[i]) {
-			settingsrow_pill_active(radio_lang_pills[i], i == (int)which);
-		}
+static void region_label(const char *name, char *out, size_t size);
+
+static void radio_region_refresh(void) {
+	if (!radio_region_value) {
+		return;
+	}
+	char label[96];
+	region_label(radio_region(), label, sizeof(label));
+	lv_label_set_text(radio_region_value, label);
+	lv_obj_set_style_text_align(radio_region_value, LV_TEXT_ALIGN_RIGHT, 0);
+	lv_obj_align(radio_region_value, LV_ALIGN_RIGHT_MID, 0, 0);
+}
+
+static void radio_quality_refresh(void) {
+	int min = radio_min_bitrate();
+	if (radio_quality_pills[0]) {
+		settingsrow_pill_active(radio_quality_pills[0], min <= 0);
+	}
+	if (radio_quality_pills[1]) {
+		settingsrow_pill_active(radio_quality_pills[1], min > 0);
 	}
 }
 
-static void radio_lang_pick_cb(lv_event_t *e) {
-	config_set_int("radio", "languages", (long)(intptr_t)lv_event_get_user_data(e));
-	radio_lang_refresh();
+static void radio_quality_pick_cb(lv_event_t *e) {
+	radio_set_min_bitrate((int)(intptr_t)lv_event_get_user_data(e));
+	radio_quality_refresh();
 }
 
 static void radio_sleep_refresh(void) {
@@ -1541,13 +1626,13 @@ static void radio_sleep_wheel_cb(lv_event_t *e) {
 }
 
 static void radio_arrange_rebuild(void) {
-	if (!radio_settings_rows) {
+	if (!radio_order_rows) {
 		return;
 	}
-	lv_obj_clean(radio_settings_rows);
+	lv_obj_clean(radio_order_rows);
 	for (int pos = 0; pos < HUB_ROWS; pos++) {
 		int id = hub_order[pos];
-		lv_obj_t *row = lv_obj_create(radio_settings_rows);
+		lv_obj_t *row = lv_obj_create(radio_order_rows);
 		lv_obj_set_size(row, lv_pct(100), bp_pick(40, 56));
 		lv_obj_add_style(row, &theme_style_card, 0);
 		lv_obj_set_style_radius(row, bp_tile_radius(), 0);
@@ -1592,7 +1677,7 @@ static void radio_arrange_rebuild(void) {
 		}
 		lv_obj_add_event_cb(toggle, radio_arrange_toggle_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)id);
 	}
-	lv_obj_update_layout(radio_settings_rows);
+	lv_obj_update_layout(radio_order_rows);
 }
 
 static void radio_arrange_move_cb(lv_event_t *e) {
@@ -1621,14 +1706,228 @@ static void radio_arrange_toggle_cb(lv_event_t *e) {
 	hub_layout_apply(wifi_is_connected());
 }
 
-static void radio_settings_loaded_cb(lv_event_t *e) {
+// ---------------------------------------------------------------------------
+// The region page
+//
+// The directory's countries, alphabetically, with "Any country" first and the
+// chosen one ticked -- the shape the podcast page gives its chart's language.
+// Choosing one is what keeps every browse list in that country (see radio.h);
+// it does not touch the stations the user starred or played, which are theirs
+// wherever they were found.
+//
+// Sixty of them, and not the two hundred and fifty the directory holds: those
+// are one row each down a page that shows five, and the sixty with the most
+// stations behind them cover every country somebody is likely to pick. A
+// country further down is still reachable -- "Any country" with a search.
+// ---------------------------------------------------------------------------
+#define REGION_MAX_COUNTRIES 60
+
+static radio_term_t region_countries[REGION_MAX_COUNTRIES];
+static int region_country_count;
+
+static void region_rows_build(void);
+static void region_rows_build_async(void *user) {
+	(void)user;
+	region_rows_build();
+}
+
+static int region_index_of(const char *name) {
+	for (int i = 0; i < region_country_count; i++) {
+		if (strcasecmp(region_countries[i].name, name ? name : "") == 0) {
+			return i;
+		}
+	}
+	return -1;
+}// The row on the settings page, and a country's name as the page writes it.
+static void region_label(const char *name, char *out, size_t size) {
+	if (!name || !name[0]) {
+		snprintf(out, size, "%s", tr("radio_region_all"));
+		return;
+	}
+	int index = region_index_of(name);
+	if (index >= 0) {
+		snprintf(out, size, "%s", region_countries[index].label);
+		return;
+	}
+	snprintf(out, size, "%s", name);
+	if (out[0] >= 'a' && out[0] <= 'z') {
+		out[0] = (char)(out[0] - 'a' + 'A');
+	}
+}
+
+static void region_pick_cb(lv_event_t *e) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	radio_set_region(index < 0 ? "" : region_countries[index].name);
+	radio_region_refresh();
+	// The rows are rebuilt a pass later: the row that was tapped is one of them,
+	// and deleting it from inside its own click is how a page goes down with the
+	// finger still on it.
+	gui_post(region_rows_build_async, NULL);
+}
+
+static void region_rows_build(void) {
+	if (!region_container) {
+		return;
+	}
+	int keep_scroll = (int)lv_obj_get_scroll_y(region_container);
+	lv_obj_clean(region_container);
+
+	int active = region_index_of(radio_region());
+	bool any = radio_region()[0] == '\0';
+
+	lv_obj_t *value = NULL;
+	lv_obj_t *row = settingsrow_add(region_container, "radio_region_all", &value, region_pick_cb, (void *)(intptr_t)-1);
+	if (any) {
+		settingsrow_add_icon(row, &icon_check, THEME_SEMANTIC_GREEN);
+	}
+	for (int i = 0; i < region_country_count; i++) {
+		char label[96];
+		snprintf(label, sizeof(label), "%s", region_countries[i].label);
+		value = NULL;
+		row = settingsrow_add(region_container, label, &value, region_pick_cb, (void *)(intptr_t)i);
+		if (i == active) {
+			settingsrow_add_icon(row, &icon_check, THEME_SEMANTIC_GREEN);
+		}
+	}
+	lv_obj_update_layout(region_container);
+	lv_obj_scroll_to_y(region_container, keep_scroll, LV_ANIM_OFF);
+}
+
+// The sixty countries with the most stations behind them, alphabetically.
+static int term_station_count_order(const void *a, const void *b) {
+	const radio_term_t *x = a;
+	const radio_term_t *y = b;
+	return y->stationcount - x->stationcount;
+}
+
+static int term_label_order(const void *a, const void *b) {
+	const radio_term_t *x = a;
+	const radio_term_t *y = b;
+	int order = strcasecmp(x->label, y->label);
+	return order ? order : strcmp(x->name, y->name);
+}
+
+static void region_terms_take(void) {
+	radio_term_t *all = malloc(sizeof(*all) * (size_t)region_term_count);
+	if (!all) {
+		return;
+	}
+	memcpy(all, region_terms, sizeof(*all) * (size_t)region_term_count);
+	qsort(all, (size_t)region_term_count, sizeof(*all), term_station_count_order);
+	int keep = region_term_count < REGION_MAX_COUNTRIES ? region_term_count : REGION_MAX_COUNTRIES;
+	memcpy(region_countries, all, sizeof(*region_countries) * (size_t)keep);
+	region_country_count = keep;
+	free(all);
+	qsort(region_countries, (size_t)region_country_count, sizeof(*region_countries), term_label_order);
+}
+
+static void region_poll_cb(lv_timer_t *timer) {
+	(void)timer;
+	if (lv_screen_active() != region_screen) {
+		return;
+	}
+	unsigned serial = radio_job_serial();
+	if (serial == region_job_serial) {
+		return;
+	}
+	region_job_serial = serial;
+
+	if (radio_job_state() != RADIO_JOB_OK) {
+		gui_notify_popup("radio_directory_unreachable");
+		return;
+	}
+	region_term_count = radio_get_terms(region_terms, (int)(sizeof(region_terms) / sizeof(region_terms[0])));
+	region_terms_ready = region_term_count > 0;
+	region_terms_take();
+	region_rows_build();
+}
+
+static void region_loaded_cb(lv_event_t *e) {
 	(void)e;
-	radio_sleep_refresh();
-	radio_lang_refresh();
+	// Asked again on every visit: a country can be added or removed, and the
+	// answer is small. A page that has never had an answer shows the one row it
+	// can be sure of, so the choice can always be cleared.
+	region_job_serial = radio_job_serial();
+	if (!region_terms_ready && region_country_count == 0) {
+		radio_request_terms(RADIO_BROWSE_COUNTRIES);
+	}
+	region_rows_build();
+}
+
+static void open_region_cb(lv_event_t *e) {
+	(void)e;
+	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
+		return;
+	}
+	switch_screen(region_screen);
+}
+
+static void build_region_page(gui_config_t *cfg) {
+	region_screen = lv_obj_create(NULL);
+	region_container = settingsrow_page(region_screen, cfg, "radio_region");
+	lv_obj_add_event_cb(region_screen, region_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	switcher_attach_back_gesture(region_screen);
+	region_timer = lv_timer_create(region_poll_cb, POLL_MS, NULL);
+}
+
+// ---------------------------------------------------------------------------
+// The reorder page
+//
+// The hub's five... six rows, in the order they are shown, each with the pair of
+// arrows that moves it and the switch that keeps it. It used to sit inline in
+// Radio settings; it is a page of its own now, because it is a different job
+// from the three settings above it and it is taller than the rest of them put
+// together.
+// ---------------------------------------------------------------------------
+static void radio_order_loaded_cb(lv_event_t *e) {
+	(void)e;
+	hub_layout_load();
 	radio_arrange_rebuild();
 }
 
+static void open_order_cb(lv_event_t *e) {
+	(void)e;
+	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
+		return;
+	}
+	switch_screen(radio_order_screen);
+}
+
+static void build_radio_order_page(gui_config_t *cfg) {
+	radio_order_screen = lv_obj_create(NULL);
+	lv_obj_t *container = settingsrow_page(radio_order_screen, cfg, "radio_reorder");
+
+	radio_order_rows = lv_obj_create(container);
+	lv_obj_set_width(radio_order_rows, lv_pct(100));
+	lv_obj_set_height(radio_order_rows, LV_SIZE_CONTENT);
+	lv_obj_set_style_bg_opa(radio_order_rows, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(radio_order_rows, 0, 0);
+	lv_obj_set_style_pad_all(radio_order_rows, 0, 0);
+	lv_obj_set_style_pad_gap(radio_order_rows, bp_pick(4, 8), 0);
+	lv_obj_set_scrollable(radio_order_rows, false);
+	lv_obj_set_flex_flow(radio_order_rows, LV_FLEX_FLOW_COLUMN);
+
+	radio_arrange_rebuild();
+	lv_obj_add_event_cb(radio_order_screen, radio_order_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	switcher_attach_back_gesture(radio_order_screen);
+	player_sheet_attach_drag(container, true);
+	player_sheet_attach_drag(radio_order_screen, true);
+}
+
+static void radio_settings_loaded_cb(lv_event_t *e) {
+	(void)e;
+	radio_sleep_refresh();
+	radio_region_refresh();
+	radio_quality_refresh();
+}
+
 static void build_radio_settings_page(gui_config_t *cfg) {
+	build_region_page(cfg);
+	build_radio_order_page(cfg);
+
 	radio_settings_screen = lv_obj_create(NULL);
 	lv_obj_t *container = settingsrow_page(radio_settings_screen, cfg, "radio_settings");
 
@@ -1637,36 +1936,27 @@ static void build_radio_settings_page(gui_config_t *cfg) {
 	settingsrow_toggle_duration(container, "sleep_timer", radio_sleep_toggle_cb, radio_sleep_wheel_cb,
 								&radio_sleep_row);
 
-	// A shortlist of the directory's languages, because the full one is two
-	// hundred entries long and sorted by popularity rather than by anything a
-	// reader can scan. "Polski" and "English" are written as they are rather
-	// than translated: a language names itself, and the app's own Language page
-	// makes the same point.
-	lv_obj_t *lang_pills = NULL;
-	settingsrow_pills(container, "radio_languages_shown", &lang_pills);
-	radio_lang_pills[LANGS_ALL] = settingsrow_pill(lang_pills, "radio_languages_all", LANGS_ALL, radio_lang_pick_cb);
-	radio_lang_pills[LANGS_POLISH_ENGLISH] = settingsrow_pill(lang_pills, "radio_languages_polish_english",
-														  LANGS_POLISH_ENGLISH, radio_lang_pick_cb);
-	radio_lang_pills[LANGS_POLISH] = settingsrow_pill_text(lang_pills, "Polski", LANGS_POLISH, radio_lang_pick_cb);
-	radio_lang_pills[LANGS_ENGLISH] = settingsrow_pill_text(lang_pills, "English", LANGS_ENGLISH, radio_lang_pick_cb);
-	radio_lang_refresh();
-	theme_register_refresh(radio_lang_refresh);
+	// Where in the world the lists are: the country list's own picker, rather
+	// than a row of pills for two or three of them.
+	settingsrow_add(container, "radio_region", &radio_region_value, open_region_cb, NULL);
 
-	radio_settings_rows = lv_obj_create(container);
-	lv_obj_set_width(radio_settings_rows, lv_pct(100));
-	lv_obj_set_height(radio_settings_rows, LV_SIZE_CONTENT);
-	lv_obj_set_style_bg_opa(radio_settings_rows, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(radio_settings_rows, 0, 0);
-	lv_obj_set_style_pad_all(radio_settings_rows, 0, 0);
-	lv_obj_set_style_pad_gap(radio_settings_rows, bp_pick(4, 8), 0);
-	lv_obj_set_scrollable(radio_settings_rows, false);
-	lv_obj_set_flex_flow(radio_settings_rows, LV_FLEX_FLOW_COLUMN);
+	// How good a stream has to be before it is worth listing. 320 and up is the
+	// default (see radio.c); "Any bitrate" is there for a country where nothing
+	// that high exists.
+	lv_obj_t *quality_pills = NULL;
+	settingsrow_pills(container, "radio_quality", &quality_pills);
+	radio_quality_pills[0] = settingsrow_pill(quality_pills, "radio_quality_any", 0, radio_quality_pick_cb);
+	radio_quality_pills[1] = settingsrow_pill(quality_pills, "radio_quality_320", 320, radio_quality_pick_cb);
+
+	settingsrow_add(container, "radio_reorder", NULL, open_order_cb, NULL);
 
 	hub_layout_load();
 	radio_sleep_refresh();
-	radio_lang_refresh();
-	radio_arrange_rebuild();
+	radio_region_refresh();
+	radio_quality_refresh();
 	lv_obj_add_event_cb(radio_settings_screen, radio_settings_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	theme_register_refresh(radio_region_refresh);
+	theme_register_refresh(radio_quality_refresh);
 	theme_register_refresh(radio_sleep_refresh);
 	switcher_attach_back_gesture(radio_settings_screen);
 	player_sheet_attach_drag(container, true);
@@ -1897,6 +2187,7 @@ static void run_search(void) {
 	term_count = 0;
 	station_count = 0;
 	page_is_search = true;
+	page_is_recommended = false;
 	page_offset = 0;
 	page_more = false;
 	page_append = false;
@@ -1994,6 +2285,8 @@ static void build_search_page(gui_config_t *cfg) {
 
 static void build_radio_settings_page(gui_config_t *cfg);
 
+lv_obj_t *radiopage_settings_screen(void) { return radio_settings_screen; }
+
 void radiopage_init(gui_config_t *cfg) {
 	g_cfg = cfg;
 
@@ -2036,6 +2329,7 @@ void radiopage_init(gui_config_t *cfg) {
 	hub_rows[HUB_COUNTRY] = settingsrow_add(hub_container, HUB_LABELS[HUB_COUNTRY], NULL, country_cb, NULL);
 	hub_rows[HUB_GENRE] = settingsrow_add(hub_container, HUB_LABELS[HUB_GENRE], NULL, genre_cb, NULL);
 	hub_rows[HUB_CUSTOM] = settingsrow_add(hub_container, HUB_LABELS[HUB_CUSTOM], NULL, custom_cb, NULL);
+	hub_rows[HUB_RECOMMENDED] = settingsrow_add(hub_container, HUB_LABELS[HUB_RECOMMENDED], NULL, recommended_cb, NULL);
 
 	// The same notice as the Wi-Fi transfer page: a centred message, and below
 	// it the "Wi-Fi settings" row that leads to where it can be fixed.

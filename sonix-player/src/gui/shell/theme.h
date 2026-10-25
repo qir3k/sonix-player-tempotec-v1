@@ -6,21 +6,20 @@
 #include "lvgl/lvgl.h"
 
 // The built-in appearances. Dark and Light keep their existing palettes;
-// Tokyo Night, Amber on Black and OLED add three dark palettes designed for
-// the V1. OLED is true black with white as its accent.
+// Amber on Black and OLED add two dark palettes designed for the V1. OLED is
+// true black with white as its accent.
 typedef enum {
 	THEME_KIND_DARK = 0,
 	THEME_KIND_LIGHT = 1,
-	THEME_KIND_TOKYO_NIGHT = 2,
-	THEME_KIND_AMBER_ON_BLACK = 3,
-	THEME_KIND_OLED = 4,
+	THEME_KIND_AMBER_ON_BLACK = 2,
+	THEME_KIND_OLED = 3,
 } theme_kind_t;
 
-#define THEME_KIND_COUNT 5
+#define THEME_KIND_COUNT 4
 
-// Fixed semantic accents used by Tokyo Night's function-matched glyphs.
-// Amber on Black and OLED map every icon role to their accent (signal amber,
-// white); Dark and Light continue to use their existing single accent.
+// Fixed semantic accents used by the function-matched glyphs. Amber on Black
+// and OLED map every icon role to their accent (signal amber, white); Dark and
+// Light continue to use their existing single accent.
 typedef enum {
 	THEME_SEMANTIC_BLUE,
 	THEME_SEMANTIC_CYAN,
@@ -46,8 +45,8 @@ typedef enum {
 } theme_player_chrome_t;
 
 // The handful of colours the whole UI is built from. Everything on screen
-// pulls from the active one; Tokyo Night, Amber on Black and OLED remain dark
-// palettes for the existing dark/light-specific layout decisions.
+// pulls from the active one; Amber on Black and OLED remain dark palettes for
+// the existing dark/light-specific layout decisions.
 typedef struct {
 	lv_color_t screen_bg;	   // page background
 	lv_color_t surface;		   // list rows, cards
@@ -129,7 +128,6 @@ const theme_palette_t *theme(void);
 // and Music browse tiles. OLED's is plain black, like the rest of its cards.
 lv_color_t theme_now_playing_fill(void);
 bool theme_is_dark(void);
-bool theme_is_tokyo_night(void);
 bool theme_is_amber_on_black(void);
 bool theme_is_oled(void);
 // The single-hue palettes, Amber on Black and OLED: every glyph and status
@@ -137,14 +135,14 @@ bool theme_is_oled(void);
 // codec colours or balanced-output gold). The roles still come from the
 // active palette, so each keeps its own colours.
 bool theme_is_monochrome(void);
-// Tokyo Night, Amber on Black and OLED use the same function-matched icon and
-// compact V1 layouts. Their palettes and semantic hues remain distinct.
+// Amber on Black and OLED use the same function-matched icon and compact V1
+// layouts, each in its own palette.
 bool theme_uses_function_glyphs(void);
 theme_kind_t theme_get_kind(void);
 
-// Tokyo Night's blue, cyan, violet, green, amber, red and muted roles. Amber
-// on Black and OLED map every icon role to their accent; in Dark/Light they
-// resolve to the chosen accent (or secondary text for muted).
+// The blue, cyan, violet, green, amber, red and muted roles. Amber on Black
+// and OLED map every icon role to their accent; in Dark/Light they resolve to
+// the chosen accent (or secondary text for muted).
 lv_color_t theme_semantic_color(theme_semantic_t role);
 lv_color_t theme_player_chrome_color(theme_player_chrome_t role);
 
@@ -159,9 +157,8 @@ lv_color_t theme_ink_on(lv_color_t fill);
 bool theme_color_is_light(lv_color_t c);
 
 // What the file browser recolours its folder glyphs to, and nothing else on
-// the page. Tokyo Night answers with the violet of its own palette; every
-// other theme with the shared icon colour it has always used, so the page is
-// unchanged outside Tokyo Night.
+// the page: the shared icon colour the function-glyph palettes have always
+// used, the plain text colour everywhere else.
 //
 // Read at paint time: a hand-set colour is a snapshot, so the page asks again
 // whenever the palette moves.
@@ -174,9 +171,8 @@ void theme_toggle(void);
 // The accent colour, chosen from a fixed set of presets (Appearance > Accent
 // colour): 0 blue (default), 1 red, 2 orange, 3 yellow, 4 lime, 5 green,
 // 6 cyan, 7 indigo, 8 purple, 9 pink, 10 brown, 11 slate. Dark and Light
-// retain the same presets; Tokyo Night defaults to its own blue (#7aa2f7),
-// Amber on Black to amber (#ffad2e), OLED to white (#ffffff), and all three
-// honor any explicitly selected non-default accent.
+// retain the same presets; Amber on Black defaults to amber (#ffad2e), OLED to
+// white (#ffffff), and both honor any explicitly selected non-default accent.
 // Persists in the config.
 #define THEME_ACCENT_COUNT 12
 lv_color_t theme_accent_preset(int index);

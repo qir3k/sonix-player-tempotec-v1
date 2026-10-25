@@ -889,6 +889,70 @@ static void park_radios_if_idle(uint32_t now) {
 	park_wifi_now();
 }
 
+// ---------------------------------------------------------------------------
+// Bringing a parked radio back
+//
+// Parking is cheap to undo in the abstract and expensive on this board: the
+// Wi-Fi radio comes back with a firmware download over SDIO, and the Bluetooth
+// one with a whole stack rebuild, both of them seconds long, both of them
+// taking memory the decoder needs and the card the music is being read from.
+//
+// Done as part of the wake -- which already has the panel's init, a full
+// repaint and a cover to decode in it -- that burst is what an underrun is made
+// of: the playback thread page-faults on a slot the radio work evicted, its
+// buffer runs dry, and the music stops for a second or two just as the screen
+// comes up. It picks itself up again when the burst is over, which is exactly
+// the shape of the complaint ("it stutters and pauses while it wakes, and then
+// plays normally").
+//
+// So the wake brings the screen back and nothing else. The radios follow from
+// the tick, a beat after the panel work is done, and not while a track is
+// playing unless a radio is actually wanted or the user has touched the device
+// since -- a touch is the moment they can be asking for the network, and it is
+// the only honest "wanted" signal a Wi-Fi page has while the radio is off.
+#define WAKE_RADIO_RESTORE_MS 1200
+
+static bool g_radio_restore_pending;        // parked radios owed back after a wake
+static uint32_t g_radio_restore_at;         // monotonic ms the restore first considers
+static volatile bool g_radio_restore_wanted; // a touch or a key since the wake
+
+static void unpark_radios(void);
+
+// Whether the player has its hands full: a track, a station, a phone feeding
+// the DAC. The restore waits for a quiet moment rather than landing in one.
+static bool playback_in_progress(void) {
+	return audio_get_status() == AUDIO_STATUS_PLAYING || radio_is_playing() || btreceiver_is_streaming() ||
+		   usbdac_is_active();
+}
+
+// Called once a tick while the screen is up. Nothing here runs during the wake
+// itself: g_radio_restore_at is the end of the window the panel and the repaint
+// own.
+static void restore_radios_if_due(void) {
+	if (!g_radio_restore_pending) {
+		return;
+	}
+	if (!g_screen_on) {
+		// The screen went dark again: the radios stay parked, and the next wake
+		// starts the wait over.
+		g_radio_restore_pending = false;
+		g_radio_restore_wanted = false;
+		return;
+	}
+	if ((int32_t)(monotonic_ms() - g_radio_restore_at) < 0) {
+		return;
+	}
+
+	bool wanted = g_radio_restore_wanted || wifi_wanted() || bluetooth_in_use();
+	if (!wanted && playback_in_progress()) {
+		return; // ask again on the next tick, once the music has stopped
+	}
+
+	g_radio_restore_pending = false;
+	g_radio_restore_wanted = false;
+	unpark_radios();
+}
+
 static void unpark_radios(void) {
 	if (g_wifi_parked) {
 		g_wifi_parked = false;
@@ -1537,6 +1601,10 @@ void power_screen_off(void) {
 	if (!g_screen_on) {
 		return;
 	}
+	// Whatever a wake still owed the radios is dropped with the screen: they
+	// are parked, they stay parked, and the next wake starts the wait over.
+	g_radio_restore_pending = false;
+	g_radio_restore_wanted = false;
 	g_screen_on = false;
 	g_screen_off_at = lv_tick_get();
 	// The screen going dark opens a new idle window: the standby countdown
@@ -1649,10 +1717,16 @@ void power_screen_on(void) {
 	g_mem_instant_wakes = 0;
 
 	// Whatever the screen coming back is for, the radios are probably part of
-	// it. Asked for first, because associating and rebuilding a Bluetooth
-	// stack take seconds, and they may as well be the seconds the panel spends
-	// waking up.
-	unpark_radios();
+	// it -- but not here. A restore is a firmware download or a stack rebuild
+	// and it would land on top of the panel's init and the repaint below, which
+	// is the one moment in the day when the playback thread cannot afford to
+	// lose the core or the card (see restore_radios_if_due). Marked and left to
+	// the tick, which brings them back once the picture is up and the music has
+	// a quiet moment.
+	if (g_wifi_parked || g_bt_parked) {
+		g_radio_restore_pending = true;
+		g_radio_restore_at = monotonic_ms() + WAKE_RADIO_RESTORE_MS;
+	}
 
 	// The level the screen comes back at is the one the user chose, however dim.
 	// No too-dim floor is applied here: that guess belongs at init, where the
@@ -1851,6 +1925,9 @@ static void power_timer_cb(lv_timer_t *timer) {
 		power_auto_off_now(why);
 	}
 
+	// 4a-bis-1. the radios a wake owed back, once the wake has settled
+	restore_radios_if_due();
+
 	// 4a-bis-2. the radios, a minute after the screen goes dark
 	park_radios_if_idle(now);
 
@@ -1870,6 +1947,16 @@ void power_notify_activity(void) {
 	pthread_mutex_lock(&g_lock);
 	g_last_button_activity_ms = lv_tick_get();
 	pthread_mutex_unlock(&g_lock);
+
+	// A touch or a key after a wake is the user asking the device to do
+	// something, and very often that something is the network. It brings a
+	// parked radio back at the next tick instead of waiting for the music to
+	// stop (see restore_radios_if_due). The press that woke the screen is not
+	// one of them: it arrives before the restore window opens, and on a device
+	// woken to check the time the radios can wait the second they are given.
+	if (g_screen_on && g_radio_restore_pending && (int32_t)(monotonic_ms() - g_radio_restore_at) >= 0) {
+		g_radio_restore_wanted = true;
+	}
 }
 
 // On the UI thread: the press is taken now rather than at the timer's next

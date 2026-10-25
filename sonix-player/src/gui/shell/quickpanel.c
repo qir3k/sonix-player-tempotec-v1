@@ -18,6 +18,7 @@
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/scrolltext.h"
 #include "src/gui/streaming/podcastpage.h"
+#include "src/gui/streaming/radiopage.h"
 #include "src/gui/wireless/dlna.h"
 #include "src/gui/wireless/sonixlink.h"
 #include "src/gui/wireless/wifitransfer.h"
@@ -118,6 +119,7 @@ static lv_obj_t *dlna_btn;
 static lv_obj_t *sleep_music_btn;
 static lv_obj_t *sleep_audiobook_btn;
 static lv_obj_t *sleep_podcast_btn;
+static lv_obj_t *sleep_radio_btn;
 static lv_obj_t *wifi_transfer_btn;
 static lv_obj_t *gapless_btn;
 
@@ -152,6 +154,7 @@ static const char *const button_key[QP_BTN_COUNT] = {
 	[QP_BTN_SLEEP_MUSIC] = "sleep_music",
 	[QP_BTN_SLEEP_AUDIOBOOK] = "sleep_audiobook",
 	[QP_BTN_SLEEP_PODCAST] = "sleep_podcast",
+	[QP_BTN_SLEEP_RADIO] = "sleep_radio",
 	[QP_BTN_WIFI_TRANSFER] = "wifi_transfer",
 	[QP_BTN_GAPLESS] = "gapless",
 };
@@ -171,6 +174,7 @@ static const char *const button_tag[QP_BTN_COUNT] = {
 	[QP_BTN_SLEEP_MUSIC] = "quickpanel_sleep_music",
 	[QP_BTN_SLEEP_AUDIOBOOK] = "quickpanel_sleep_audiobook",
 	[QP_BTN_SLEEP_PODCAST] = "quickpanel_sleep_podcast",
+	[QP_BTN_SLEEP_RADIO] = "quickpanel_sleep_radio",
 	[QP_BTN_WIFI_TRANSFER] = "wifitransfer_title",
 	[QP_BTN_GAPLESS] = "musicsettings_gapless_playback",
 };
@@ -479,14 +483,12 @@ static void refresh_now_playing_card(void) {
 	}
 	lv_image_set_src(np_star_icon, fav ? &icon_heart_filled : &icon_heart_outline);
 	// The same colours the player's own heart takes, so the two cannot disagree:
-	// Adwaita's yellow on the light and dark themes, Tokyo Night's cyan, and on
-	// the two V1 monochrome palettes the accent the whole page is drawn in --
-	// the yellow was the one warm mark on an OLED screen that is white on black.
+	// Adwaita's yellow on the light and dark themes, and on the two V1
+	// monochrome palettes the accent the whole page is drawn in -- the yellow
+	// was the one warm mark on an OLED screen that is white on black.
 	lv_color_t filled = lv_color_make(246, 211, 45);
 	lv_color_t empty = lv_color_make(150, 150, 150);
-	if (theme_is_tokyo_night()) {
-		filled = theme_semantic_color(THEME_SEMANTIC_CYAN);
-	} else if (theme_is_monochrome()) {
+	if (theme_is_monochrome()) {
 		filled = theme()->accent;
 		empty = theme()->text_secondary;
 	}
@@ -1316,7 +1318,8 @@ static void order_load(void) {
 		// panel nobody asked to change, so they wait among the unused ones, where
 		// the settings page shows them.
 		bool waits = i == QP_BTN_DLNA || i == QP_BTN_SLEEP_MUSIC || i == QP_BTN_SLEEP_AUDIOBOOK ||
-					 i == QP_BTN_SLEEP_PODCAST || i == QP_BTN_WIFI_TRANSFER || i == QP_BTN_GAPLESS;
+					 i == QP_BTN_SLEEP_PODCAST || i == QP_BTN_SLEEP_RADIO || i == QP_BTN_WIFI_TRANSFER ||
+					 i == QP_BTN_GAPLESS;
 		if ((saved_version < 2 && i == QP_BTN_FADE) || waits) {
 			hidden[hidden_n++] = (uint8_t)i;
 		} else {
@@ -1431,6 +1434,8 @@ static lv_obj_t *button_widget(quickpanel_button_t which) {
 		return sleep_audiobook_btn;
 	case QP_BTN_SLEEP_PODCAST:
 		return sleep_podcast_btn;
+	case QP_BTN_SLEEP_RADIO:
+		return sleep_radio_btn;
 	case QP_BTN_WIFI_TRANSFER:
 		return wifi_transfer_btn;
 	case QP_BTN_GAPLESS:
@@ -1645,6 +1650,8 @@ const lv_image_dsc_t *quickpanel_button_icon(quickpanel_button_t button) {
 		return &icon_sleep_audiobook_quick;
 	case QP_BTN_SLEEP_PODCAST:
 		return &icon_sleep_podcast_quick;
+	case QP_BTN_SLEEP_RADIO:
+		return &icon_sleep_radio_quick;
 	case QP_BTN_WIFI_TRANSFER:
 		return &icon_wifi_transfer_quick;
 	case QP_BTN_GAPLESS:
@@ -1741,6 +1748,7 @@ static void refresh_audio_buttons(void) {
 	circle_button_set_on(sleep_music_btn, sleep_timer_armed(SLEEPTIMER_MUSIC));
 	circle_button_set_on(sleep_audiobook_btn, sleep_timer_armed(SLEEPTIMER_AUDIOBOOK));
 	circle_button_set_on(sleep_podcast_btn, sleep_timer_armed(SLEEPTIMER_PODCAST));
+	circle_button_set_on(sleep_radio_btn, sleep_timer_armed(SLEEPTIMER_RADIO));
 	circle_button_set_on(wifi_transfer_btn, wifitransfer_get_enabled());
 
 	bool high = musicsettings_high_gain();
@@ -2004,16 +2012,22 @@ static void sleep_podcast_clicked_cb(lv_event_t *e) {
 	sleep_timer_clicked(SLEEPTIMER_PODCAST);
 }
 
+static void sleep_radio_clicked_cb(lv_event_t *e) {
+	(void)e;
+	sleep_timer_clicked(SLEEPTIMER_RADIO);
+}
+
 static void open_page(lv_obj_t *screen);
 
 // A hold opens the page that sets the length: the playback options for music,
-// the audiobook options, the podcast settings. Looked up at the press rather
-// than when the buttons are made, since not every one of those pages exists
-// by then.
+// the audiobook options, the podcast settings, the radio settings. Looked up at
+// the press rather than when the buttons are made, since not every one of those
+// pages exists by then.
 static void sleep_page_cb(lv_event_t *e) {
 	sleeptimer_kind_t kind = (sleeptimer_kind_t)(intptr_t)lv_event_get_user_data(e);
 	lv_obj_t *screen = kind == SLEEPTIMER_MUSIC		 ? musicsettings_playback_screen()
 					   : kind == SLEEPTIMER_AUDIOBOOK ? audiobooksettings_screen
+					   : kind == SLEEPTIMER_RADIO	 ? radiopage_settings_screen()
 													  : podcastpage_settings_screen();
 	open_page(screen);
 }
@@ -2367,6 +2381,13 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_add_event_cb(sleep_podcast_btn, sleep_podcast_clicked_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_add_event_cb(sleep_podcast_btn, sleep_page_cb, LV_EVENT_LONG_PRESSED,
 						(void *)(intptr_t)SLEEPTIMER_PODCAST);
+
+	// The fourth, and the newest: a stretch set for a station is its own, like
+	// the other three (see sleeptimer.h).
+	sleep_radio_btn = make_circle_button(row, &icon_sleep_radio_quick);
+	lv_obj_add_event_cb(sleep_radio_btn, sleep_radio_clicked_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_add_event_cb(sleep_radio_btn, sleep_page_cb, LV_EVENT_LONG_PRESSED,
+						(void *)(intptr_t)SLEEPTIMER_RADIO);
 
 	// A tap opens the page with the server starting; a hold opens it as it is.
 	wifi_transfer_btn = make_circle_button(row, &icon_wifi_transfer_quick);

@@ -121,6 +121,7 @@ extern const lv_image_dsc_t icon_wifi_transfer_quick;
 extern const lv_image_dsc_t icon_sleep_music_quick;
 extern const lv_image_dsc_t icon_sleep_audiobook_quick;
 extern const lv_image_dsc_t icon_sleep_podcast_quick;
+extern const lv_image_dsc_t icon_sleep_radio_quick;
 extern const lv_image_dsc_t icon_gapless_on_quick;
 extern const lv_image_dsc_t icon_gapless_off_quick;
 extern const lv_image_dsc_t icon_files_audiobook;
