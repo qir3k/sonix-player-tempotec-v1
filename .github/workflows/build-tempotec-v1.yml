@@ -57,9 +57,6 @@ on:
       - dev
       - personal
       - arena/**
-      # This fork's trimmed personal build. It is its own branch so that main
-      # keeps the complete asset tree for upstream.
-      - personal
     tags:
       - '*'
 
