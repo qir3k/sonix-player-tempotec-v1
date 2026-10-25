@@ -11,6 +11,7 @@
 #include "src/gui/shell/morepage.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/theme.h"
+#include "src/gui/streaming/streaming.h"
 #include "src/system/core/lang.h"
 
 lv_obj_t *menuarrange_screen;
@@ -19,19 +20,24 @@ extern void morepage_refresh_layout(void) __attribute__((weak));
 static lv_obj_t *rows;
 static lv_obj_t *home_tab;
 static lv_obj_t *more_tab;
+static lv_obj_t *streaming_tab;
 static menuorder_section_t shown_section;
 
 static void paint_tabs(void) {
-	if (!home_tab || !more_tab) {
+	if (!home_tab || !more_tab || !streaming_tab) {
 		return;
 	}
 	lv_obj_t *home_label = lv_obj_get_child(home_tab, 0);
 	lv_obj_t *more_label = lv_obj_get_child(more_tab, 0);
+	lv_obj_t *streaming_label = lv_obj_get_child(streaming_tab, 0);
 	bool home = shown_section == MENUORDER_HOME;
+	bool more = shown_section == MENUORDER_MORE;
 	lv_obj_set_style_bg_color(home_tab, home ? theme()->accent : theme()->surface_pressed, 0);
-	lv_obj_set_style_bg_color(more_tab, home ? theme()->surface_pressed : theme()->accent, 0);
+	lv_obj_set_style_bg_color(more_tab, more ? theme()->accent : theme()->surface_pressed, 0);
+	lv_obj_set_style_bg_color(streaming_tab, shown_section == MENUORDER_STREAMING ? theme()->accent : theme()->surface_pressed, 0);
 	lv_obj_set_style_text_color(home_label, home ? theme_on_accent() : theme()->text_primary, 0);
-	lv_obj_set_style_text_color(more_label, home ? theme()->text_primary : theme_on_accent(), 0);
+	lv_obj_set_style_text_color(more_label, more ? theme_on_accent() : theme()->text_primary, 0);
+	lv_obj_set_style_text_color(streaming_label, shown_section == MENUORDER_STREAMING ? theme_on_accent() : theme()->text_primary, 0);
 }
 
 static void repaint(void);
@@ -42,6 +48,7 @@ static void save_and_refresh(int *order, int count, bool *visible) {
 	if (morepage_refresh_layout) {
 		morepage_refresh_layout();
 	}
+	streaming_refresh_layout();
 	repaint();
 }
 
@@ -163,7 +170,7 @@ static lv_obj_t *make_tab(lv_obj_t *parent, const char *label, menuorder_section
 	lv_obj_add_event_cb(button, tab_cb, LV_EVENT_CLICKED, (void *)(intptr_t)section);
 	lv_obj_t *text = lv_label_create(button);
 	lv_label_set_text(text, tr(label));
-	lv_obj_set_style_text_font(text, bp_is_tempotec_v1() ? &font_ui_16 : &font_ui_20, 0);
+	lv_obj_set_style_text_font(text, bp_is_tempotec_v1() ? &font_ui_14 : &font_ui_20, 0);
 	lv_obj_center(text);
 	return button;
 }
@@ -185,6 +192,7 @@ void menuarrange_init(gui_config_t *cfg) {
 	lv_obj_set_flex_flow(tabs, LV_FLEX_FLOW_ROW);
 	home_tab = make_tab(tabs, "menu_section_home", MENUORDER_HOME);
 	more_tab = make_tab(tabs, "more", MENUORDER_MORE);
+	streaming_tab = make_tab(tabs, "streaming", MENUORDER_STREAMING);
 	rows = lv_obj_create(container);
 	lv_obj_set_width(rows, lv_pct(100));
 	lv_obj_set_flex_grow(rows, 1);

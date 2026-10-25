@@ -76,10 +76,9 @@ static int strip_h;
 // air the last round asked for between the figures and the sign. It is not a
 // design choice to fly the clock up the strip -- at ten the figures stood
 // fourteen rows clear, which is what an earlier version did. It also lands the
-// two gaps between the three lines even: with the clock at its foot they read
-// three pixels apart, and four of lift takes the lower one down to within a
-// pixel of the upper (test_screensaver.c measures both, on the rendered rows).
-#define CLOCK_LIFT bp_pick(4, 5)
+// two gaps between the three lines even: the clock is raised enough to leave
+// visible air above the swipe-up sign at the bottom of the screen.
+#define CLOCK_LIFT bp_pick(9, 9)
 
 // How far the title is shifted DOWN out of its line, so the words do not slide
 // down the strip now that the clock no longer sits at its foot.
@@ -553,7 +552,9 @@ static void set_info_strip_backdrop(const lv_image_dsc_t *backdrop) {
 		}
 		lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
 		lv_obj_set_style_bg_color(info_strip, lv_color_black(), 0);
-		lv_obj_set_style_bg_opa(info_strip, LV_OPA_COVER, 0);
+		// With no reusable blurred image, let the cover show through a dim
+		// field instead of replacing the whole bottom of the screen with black.
+		lv_obj_set_style_bg_opa(info_strip, LV_OPA_60, 0);
 		return;
 	}
 

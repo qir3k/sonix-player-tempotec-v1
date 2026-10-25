@@ -10,5 +10,6 @@
 extern lv_obj_t *streaming_screen;
 
 void streaming_init(gui_config_t *cfg);
+void streaming_refresh_layout(void);
 
 #endif /* STREAMING_H */

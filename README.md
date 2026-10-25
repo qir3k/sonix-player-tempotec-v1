@@ -1,25 +1,24 @@
-![Sonix Player for TempoTec Variations V1 with the Tokyo Night main menu](screenshots/readme-banner.png)
+![Sonix Player for the TempoTec Variations V1](screenshots/main-menu.png)
 
-**Sonix Player for the TempoTec Variations V1.** This repository is **[qir3k](https://github.com/qir3k)'s fork** of the V1 port by **[mr-f0xx](https://github.com/mr-f0xx/sonix-player-tempotec-v1)**, which carried **[Jepl4r](https://github.com/Jepl4r)'s Sonix Player** — a replacement music player for the HiBy R3 Pro II and HiBy R1 — to the **TempoTec Variations V1**. The player, the packer and the interface are that work; this fork follows it upstream and adds what its owner wanted on the device.
+**Sonix Player for the TempoTec Variations V1** follows a clear lineage: **[Jepl4r's Sonix Player](https://github.com/Jepl4r/sonix-player)**, then **[MrFox's V1 fork](https://github.com/mr-f0xx/sonix-player-tempotec-v1)**, which ported the player to the TempoTec Variations V1, and then this fork. The V1 target and firmware packaging build on MrFox's work; the additions below are maintained here. Credit for inherited player, packer and porting work remains with their original authors.
 
-**What this fork adds on top of the port:**
+**Additions and V1-focused work maintained in this fork:**
 
-- **The equalisers on the DAC page** — EQ, PEQ and MSEB as one card of pills, reachable while DAC mode holds the screen.
-- **Podcasts: heard marks and the order of the list** — an episode played to its end is ticked and dimmed, kept by episode id in `podcast.db`; a long press marks one by hand; the heading's order button turns the list round, and both episode lists share the setting.
-- **The Tidal tab and the Podcasts tab, rebuilt for the 240 px panel** — the V1's rows and pills, a search page with history, the status bar kept clear, and both lists read back from a cache on the card instead of rebuilt from the network on every visit.
-- **The podcast chart from your own region** — Podcast settings → Region picks the language the trending list is asked for, so the pill shows what is trending where you are rather than worldwide.
-- **An interface that says when it hesitates** — a pass of the event loop that takes over 120 ms writes down what ran in it, so a report of "it lags for a while" comes with the screen, the timer period and the callback that caused it ([how to read it](docs/collecting-logs.md#the-interfaces-own-timing-ui-lines)).
-- **One favourite mark** — the heart, everywhere: the player in every layout, the control centre, the Music page and selection mode.
-- **A trimmed personal build** — a branch that ships English and Polish with MiSans only, and builds its own image. [How it is kept apart from the upstream tree](https://github.com/qir3k/sonix-player-tempotec-v1/blob/personal/docs/PERSONAL-BUILD.md).
+- **Multilingual interface** — the full build includes eight selectable language packs. The language can be changed in Settings, and MiSans fills in glyphs missing from the selected font; additional TTF/OTF fonts can be added from the card.
+- **V1-focused Tidal and Podcasts screens** — layouts, search and navigation tailored to the V1's 240 × 320 display, with list caching to make previously loaded names available without another network fetch.
+- **Podcast listening state and organization** — listened marks, manual marking, regional trending charts, followed-show ordering, and downloaded episodes stored on the card.
+- **Audio controls where they are needed** — EQ, PEQ and MSEB controls are available on the USB DAC and Bluetooth receiver pages as well as in the usual player controls.
+- **Consistent favourites** — the same favourite state and heart control across the player, Music page, selection mode and control centre.
+- **Useful diagnostics** — slow GUI event-loop passes are logged with timing and callback context to help investigate pauses and lag ([log details](docs/collecting-logs.md#the-interfaces-own-timing-ui-lines)).
 
-The firmware builder starts with an official V1 update package, replaces the stock music player and its interface with Sonix, then repackages the update as `v1.upt`.
+The firmware builder starts with an official V1 update package, replaces the stock music player and interface with Sonix, then repackages the update as `v1.upt`.
 
 This is not an official TempoTec or HiBy release. **It has been tested on physical TempoTec Variations V1 hardware and works on the tested device.** It targets the **TempoTec Variations V1 only**; compatibility with the V1-A or other players in the Variations family is not established.
 
 
 ## Previews
 
-Interface previews of the stock UI of Sonix, rendered at the V1's native 240 × 320 resolution. Click any picture to open it full size. The font and the colours shown are not the defaults.
+Interface previews of Sonix, rendered at the V1's native 240 × 320 resolution. Click any picture to open it full size. The font and the colours shown are not the defaults.
 
 <table>
   <tr>
@@ -55,49 +54,6 @@ Interface previews of the stock UI of Sonix, rendered at the V1's native 240 × 
     </td>
     <td align="center">
       <a href="screenshots/streaming.png"><img src="screenshots/streaming.png" width="180" alt="Streaming"></a>
-      <br><sub><b>Streaming</b></sub>
-    </td>
-  </tr>
-</table>
-
-### Tokyo Night theme
-
-Showcase of **Tokyo Night** appearance: a blue-black palette with function-matched icons, chosen in Settings → Appearance → Theme. It is available on the V1 alongside Dark and Light.
-
-<table>
-  <tr>
-    <td align="center">
-      <a href="screenshots/tokyonight/main-menu.png"><img src="screenshots/tokyonight/main-menu.png" width="180" alt="Tokyo Night main menu"></a>
-      <br><sub><b>Main menu</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/tokyonight/music.png"><img src="screenshots/tokyonight/music.png" width="180" alt="Tokyo Night music"></a>
-      <br><sub><b>Music</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/tokyonight/more.png"><img src="screenshots/tokyonight/more.png" width="180" alt="Tokyo Night more"></a>
-      <br><sub><b>More</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/tokyonight/wireless.png"><img src="screenshots/tokyonight/wireless.png" width="180" alt="Tokyo Night wireless"></a>
-      <br><sub><b>Wireless</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="screenshots/tokyonight/settings.png"><img src="screenshots/tokyonight/settings.png" width="180" alt="Tokyo Night settings"></a>
-      <br><sub><b>Settings</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/tokyonight/now-playing.png"><img src="screenshots/tokyonight/now-playing.png" width="180" alt="Tokyo Night now playing"></a>
-      <br><sub><b>Now Playing</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/tokyonight/file-browser.png"><img src="screenshots/tokyonight/file-browser.png" width="180" alt="Tokyo Night file browser"></a>
-      <br><sub><b>File Browser</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/tokyonight/streaming.png"><img src="screenshots/tokyonight/streaming.png" width="180" alt="Tokyo Night streaming"></a>
       <br><sub><b>Streaming</b></sub>
     </td>
   </tr>
@@ -148,7 +104,7 @@ Showcase of **Amber** appearance: fiery orange accents on a pure black backgroun
 
 ### OLED theme
 
-Showcase of **OLED** appearance: true black backgrounds with white as the accent, on the same V1 layouts as Tokyo Night and Amber. Nothing is filled grey: cards, rows and buttons are as black as the page, and Now Playing sets the sleeve on black instead of on a blurred copy of it. The main menu leaves out the title and tagline, so its six tiles start right under the status bar. Rendered by the host simulator with the V1 profile.
+Showcase of **OLED** appearance: true black backgrounds with white as the accent, on the V1 layouts. Nothing is filled grey: cards, rows and buttons are as black as the page, and Now Playing sets the sleeve on black instead of on a blurred copy of it. The main menu leaves out the title and tagline, so its six tiles start right under the status bar. Rendered by the host simulator with the V1 profile.
 
 <table>
   <tr>
@@ -194,7 +150,6 @@ Showcase of **OLED** appearance: true black backgrounds with white as the accent
 - [Target device](#target-device)
 - [Features](#features)
 - [Previews](#previews)
-  - [Tokyo Night theme](#tokyo-night-theme)
   - [Amber on black theme](#amber-on-black-theme)
   - [OLED theme](#oled-theme)
 - [Build a firmware image](#build-a-firmware-image)
@@ -225,21 +180,23 @@ The player UI is built with LVGL 9.6 and adapted for the V1's small display. The
 
 ## Features
 
-It is a local music library and file browser with album artwork, playlists, lyrics, audiobooks, **podcasts** (the Podcast Index catalogue and the episodes kept on the card), DSP controls, an EPUB reader and a Gearboy Game Boy / Game Boy Color emulator. It also runs as a **USB DAC** for a computer, with the graphic EQ, PEQ and MSEB applied to what the computer sends, and carries the streaming and network side: Tidal, Qobuz, Subsonic/Gonic, internet radio, Bluetooth audio in and out, AirPlay, DLNA and Wi-Fi file transfer.
+The V1 build includes a local library and file browser, streaming services, wireless audio, and several non-music apps. Highlights include:
 
-Local audio decoder inputs include WAV, FLAC, MP3, Ogg Vorbis, Opus, M4A/M4B/MP4, AAC, ALAC, WavPack, APE, AIFF/AIFC, CAF and DSD (DSF/DFF) files. DSP features include a 10-band graphic equalizer, parametric EQ, MSEB, crossfeed, channel balance and ReplayGain. The graphic EQ, PEQ and MSEB also run on internet radio stations.
+- **Eight selectable interface languages** in the full build, with live language switching and font fallback for scripts missing from the selected face. MiSans, Neon 80s, Roboto and user-installed TTF/OTF fonts are supported; see [`sonix-player/assets/fonts/FONT-LICENSES.txt`](sonix-player/assets/fonts/FONT-LICENSES.txt) for font credits and licenses.
+- **Local playback** with playlists, favourites, lyrics, artwork, search, play counts, audiobooks and a broad set of formats: WAV, FLAC, MP3, Ogg Vorbis, Opus, M4A/M4B/MP4, AAC, ALAC, WavPack, APE, AIFF/AIFC, CAF and DSD (DSF/DFF).
+- **Streaming and network audio:** Tidal, Qobuz, Subsonic/Gonic, internet radio, Bluetooth audio in and out, AirPlay and DLNA. Streaming features need working service credentials or a compatible server and may depend on third-party availability.
+- **Audio processing:** 10-band graphic EQ, parametric EQ, MSEB, crossfeed, channel balance and ReplayGain. The EQ, PEQ and MSEB can also process internet radio and USB DAC input.
+- **USB audio:** use the V1 as a USB DAC for a computer or as a USB audio host for compatible DACs and headphones.
+- **More built-in apps:** the Podcast Index catalogue and downloaded episodes, an EPUB reader, and a Gearboy Game Boy / Game Boy Color emulator.
+- **Appearance options:** Dark and Light palettes, Amber on Black and OLED themes, player layouts, optional rounded screen corners, and configurable boot screens including custom images from the card.
 
-The interface font is a setting (Settings → Appearance → Font): MiSans, Neon 80s and Roboto, plus any `.ttf`/`.otf` file put in the `Fonts` folder on the card. Whatever a face is missing — Cyrillic, Greek, Hangul, kanji, Arabic — is drawn by MiSans behind it, so the whole interface stays legible in every language. The added family is under the SIL Open Font License; see [`sonix-player/assets/fonts/FONT-LICENSES.txt`](sonix-player/assets/fonts/FONT-LICENSES.txt) for the copyright notices and the exact files.
-
-The boot screen is a setting too (Settings → Appearance → Boot screen): **Retrospace**, the default, **Space**, **Travelling in space**, **Stock**, the firmware's own light and dark pictures, or **Custom** — a JPEG or PNG of your own from the `Bootlogo` folder at the root of the card, chosen from the list under **Custom picture**. It is scaled to fill the panel and cropped where it overflows, and copied into the player, so it boots even with the card out. The choice cannot live in the config — the script that draws the logo runs before any filesystem holding a config is mounted — so it is written to the same flash marker the theme uses, and appears from the next power-on.
-
-Rounded screen corners are optional (Settings → Appearance → Rounded corners), off by default. On the V1 the arc is 16 px, sized to the 2" 240×320 panel's glass.
+The boot screen can be set to **Retrospace**, **Space**, **Travelling in space**, the stock light or dark image, or a custom JPEG/PNG in the card's `Bootlogo` folder. Custom images are copied into the player so the selected boot screen remains available without the card. Rounded screen corners are also optional and off by default.
 
 See [FEATURES.md](FEATURES.md) for a longer feature list. Streaming services also require valid credentials and may depend on third-party service availability.
 
 ## Build a firmware image
 
-The image is built by GitHub Actions, not on the machine holding this checkout: the device binary needs a MIPS toolchain this repository builds from `sonix-player/rockboxdev/`, plus `7z`, `squashfs-tools` and `genisoimage`.
+The image is built by GitHub Actions: the device binary needs a MIPS toolchain this repository builds from `sonix-player/rockboxdev/`, plus `7z`, `squashfs-tools` and `genisoimage`. A push to `main` starts a firmware build automatically; development pushes to `dev` do not. The main-branch build is uploaded as an Actions artifact that can be downloaded and shared.
 
 1. **Actions → Build TempoTec V1 firmware → Run workflow.**
 2. Fill it in:
@@ -249,11 +206,9 @@ The image is built by GitHub Actions, not on the machine holding this checkout: 
    - `publish_release_tag` — empty unless a release is being cut; it uploads `v1.upt` and `v1_md5.txt` onto that release.
 3. The first run compiles and caches the toolchain and takes 30–90 minutes; later runs are far quicker.
 
-The workflow downloads the stock image, checks that its kernel is untouched, builds the player with `make target`, packs the image with `sonix-packer/sonix_firmware_packer.sh`, validates the result, and uploads an artifact named after the commit it really holds — `sonix-tempotec-v1-<sha>`, kept for 14 days. Inside are `v1.upt` and `v1_md5.txt`, `BUILD-REPORT.txt` (the commit and both checksums), `OUTPUT-VALIDATION.txt`, `STOCK-VALIDATION.txt`, `BOOT-SCRIPT-REPORT.txt` when the packer wrote one, and the three binaries.
+The workflow downloads the stock image, checks that its kernel is untouched, builds the player with `make target`, packs the image with `sonix-packer/sonix_firmware_packer.sh`, validates the result, and uploads an artifact named after the commit it built — `sonix-tempotec-v1-<sha>`, kept for 14 days. The artifact contains `v1.upt`, `v1_md5.txt`, a build report with the revision and checksums, validation reports, and the player binaries. A main-branch build is an Actions artifact; publishing it as a GitHub release is a separate, deliberate action.
 
-Pushes to `main`, to `arena/**` and to tags build by themselves; any other branch is built from the dialog with `build_ref` naming it.
-
-The trimmed image is built from this fork's `personal` branch, and none of it is in `main` or `dev`: that branch carries `sonix-packer/personal_trim.sh`, names itself in its own copy of the workflow's push triggers, and calls the script from the packer just before the filesystem is built. The languages and fonts are pruned from the staged image, never from the tree, so a merge from upstream never meets a deleted file. [The three branches, and the trim](https://github.com/qir3k/sonix-player-tempotec-v1/blob/personal/docs/PERSONAL-BUILD.md).
+The workflow can also be run manually for a chosen ref or release tag. Use the artifact whose build report matches the revision you intend to install; do not choose an artifact just because it is the newest one in the Actions list.
 
 ## Install or restore firmware
 
@@ -378,7 +333,7 @@ For bug reports, include the exact model, the firmware build/commit and relevant
 
 ## Credits
 
-This player exists because of the original **[Sonix Player](https://github.com/Jepl4r/sonix-player)** project: almost everything in `sonix-player/` and `sonix-packer/` is that work, carried here and adapted. The TempoTec V1 port is mr-f0xx's; this fork follows it upstream and adds what is listed at the top of this file. The original is licensed under the GPL-3.0, and so is this fork.
+This project builds on the original **[Sonix Player](https://github.com/Jepl4r/sonix-player)** and **[MrFox's TempoTec V1 port](https://github.com/mr-f0xx/sonix-player-tempotec-v1)**. Most of the player and packer code comes from Jepl4r's project, and the V1 board profile and firmware packaging come from MrFox's port. This fork adds and maintains the V1-focused work summarized at the top of this README. The original project is licensed under GPL-3.0, and so is this fork.
 
 - **[Jepl4r](https://github.com/Jepl4r)** — author and maintainer of Sonix Player, and the source of the player, the packer and the interface this port is built on.
 - **[mr-f0xx](https://github.com/mr-f0xx)** — the TempoTec Variations V1 port this fork is built on: the V1 board profile, the V1 packaging path, and the documentation this README grew from.

@@ -50,9 +50,9 @@
 // them if the audio breaks up:
 //
 //   [bluetooth]
-//   receiver_capture_ms = 80    bluealsa's side
+//   receiver_capture_ms = 120   bluealsa's side
 //   receiver_output_ms  = 120   the DAC's side
-#define CAPTURE_MS_DEFAULT 80
+#define CAPTURE_MS_DEFAULT 120
 #define OUTPUT_MS_DEFAULT 120
 
 // Below this neither side has room for a late turn of this thread, whatever the
