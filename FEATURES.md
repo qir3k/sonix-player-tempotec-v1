@@ -125,6 +125,23 @@ plus search, favourites, recently played, and **My stations** read from a
 `radio.txt` you write yourself in the card root. MP3 and AAC, HTTPS with real
 certificate checking (plus an opt-in relaxed mode for a server of your own with
 a self-signed certificate), and HLS.
+- **Radio → Recommended** - the stations where you are, most played first: the
+directory's own popularity order cut to the country picked in **Radio
+settings → Region**, on the list's own page under Recently played (the order
+and the visibility of every row is arranged from **Radio settings → List
+reorder**). The region picker offers the sixty countries with the most stations
+behind them, alphabetically, with **Any country** first.
+- **Radio → Quality filter** - **Radio settings → Quality filter** keeps every
+list to streams of 320 kbps and up, which is the default; **Any bitrate** is
+there for a country where nothing that high exists. The bar is applied to every
+list, a search included, and the answer is checked against it again in case a
+mirror ignores the parameter. The same settings drop duplicates: two entries of
+the same station, in the same country or pointing at the same stream, are one
+row.
+- **Radio → Sleep timer** - the radio's own, in **Radio settings** and as the
+fourth sleep-timer circle in the control centre: a stretch set for a station is
+its own, like the music's, the audiobook's and the podcast's, and a hold on the
+circle opens the radio's settings page on it.
 
 
 ## Wireless
@@ -290,7 +307,7 @@ a self-signed certificate), and HLS.
 
 ## Settings
 
-- **Appearance** - dark and light, plus the V1 palettes Tokyo Night, Amber on Black and OLED (true black with no grey cards, white as its accent, and a main menu without the title and tagline); twelve accent colors, clock position, a dynamic tint that borrows the accent's hue for backgrounds and cards, a toggle to show/hide the battery percentage, and **rounded screen corners** (off by default). The arc is 16 px, sized to the 2" 240×320 panel's glass.
+- **Appearance** - dark and light, plus the V1 palettes Amber on Black and OLED (true black with no grey cards, white as its accent, and a main menu without the title and tagline); a config still holding the removed Tokyo Night reads back as Dark, with its own choice of accent kept. Twelve accent colors, clock position, a dynamic tint that borrows the accent's hue for backgrounds and cards, a toggle to show/hide the battery percentage, and **rounded screen corners** (off by default). The arc is 16 px, sized to the 2" 240×320 panel's glass.
 - **Appearance → Browse on home screen** - replaces the Music tile with Browse, opening the card’s file browser in the card’s `Music` folder directly; a card without that folder still opens at its root. The chevron and the root button still walk up to the rest of the card. Off by default; Music remains available when switched off.
 - **Appearance → Show Books on home screen** - replaces the Audiobooks tile with Books, opening the EPUB shelf directly from home. Off by default; Audiobooks remain available when switched off. Switched on, the two swap places in **More** as well: its Books row becomes Audiobooks, so both libraries stay one tap away and neither is listed twice.
 - **Appearance → Main menu icons only** - optionally hide the six main-menu tile labels and show larger, centered icons. Dedicated native-pixel art avoids stretching small toolbar glyphs or repeatedly filtering the colored illustrations. Applies immediately in every theme and is saved across restarts; other menus, the status bar and the now-playing strip are unchanged. Off by default.
@@ -300,7 +317,7 @@ a self-signed certificate), and HLS.
 - **Appearance → Font** - the face the whole interface is drawn with: MiSans (the default), Neon 80s and, where the image carries them, Roboto or Roboto Mono. Text can also be sized Normal or Large. Any `.ttf` or `.otf` file put in the `Fonts` folder on the card is offered beside those, so people can install their own; a face without Cyrillic, Hangul, kanji or Greek still draws the whole interface, because MiSans stays behind it for the letters it does not have.
 - **Screen** - brightness (5% to 100%), screen-off timeout, double-tap to wake, screensaver,
   and 180° rotation with the touch rotated with it.
-- **Screensaver** - choose to show the cover of the current playing track or pictures from the `Screensaver` folder. On the V1's Tokyo Night, Amber on Black and OLED themes the artwork fills the whole panel and the title, artist and clock are read on a translucent field of the palette's own colour over its foot; Dark and Light keep the blurred strip. The time is white in every palette, whatever accent is chosen, and a podcast episode is named by its own title with the podcast's author under it. Under **Album art**, **Fill** keeps that full-bleed look (the default). **Framed** shows the whole cover instead, at its own resolution, in a rounded frame with margins round it, above the title, artist and clock. That frame is 160 px on the V1. The cover is decoded for exactly that size and never enlarged, so it never turns into blocks.
+- **Screensaver** - choose to show the cover of the current playing track or pictures from the `Screensaver` folder. On the V1's Amber on Black and OLED themes the artwork fills the whole panel and the title, artist and clock are read on a translucent field of the palette's own colour over its foot; Dark and Light keep the blurred strip. The time is white in every palette, whatever accent is chosen, and a podcast episode is named by its own title with the podcast's author under it. Under **Album art**, **Fill** keeps that full-bleed look (the default). **Framed** shows the whole cover instead, at its own resolution, in a rounded frame with margins round it, above the title, artist and clock. That frame is 160 px on the V1. The cover is decoded for exactly that size and never enlarged, so it never turns into blocks.
   > Pictures must be baseline (not progressive) JPEGs, portrait, and no larger than 480x800. The V1 crops and scales them to fill its 240x320 screen. For the sharpest result with nothing cropped, make them 240x320 or 480x640, the screen's own 3:4 shape.
 
 - **Power** - standby, LED behaviour, automatic power-off from thirty seconds to

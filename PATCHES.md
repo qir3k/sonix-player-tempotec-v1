@@ -1590,3 +1590,98 @@ sheet the arrangement puts at the top — the control centre in the classic one,
 Cover Flow in the stock one — because hiding the bar must not take the gesture
 away with it. The reader and the two games hide it behind a full-screen picture
 instead, and they keep their own presses.
+
+### The wake no longer brings the radios back with it
+
+Playing over Bluetooth with the phone feeding it, listening to a USB DAC, or
+just an album off the card: the moment the screen came back was the moment the
+music stopped. It stalled for a second or two, stuttered, sometimes paused, and
+then played normally again -- and it only ever happened on the black-to-lit
+transition, never while the panel stayed dark.
+
+`power_screen_on()` asked for the parked radios first, on the reasoning that
+associating and rebuilding a Bluetooth stack take seconds and those seconds may
+as well be the ones the panel spends waking up. That reasoning was the bug. A
+restore is a firmware download over SDIO for Wi-Fi and a whole stack rebuild for
+Bluetooth, and both of them take the memory the decoder is reading through and
+the card the album is being read from -- on one core, in the same second as the
+panel's init, a full repaint and a cover to decode. The playback thread runs at
+RT priority and cannot be starved by the interface, but it can be made to page
+fault, and that is exactly what a burst of radio work over 56 MB does: the
+buffer runs dry, the driver answers with an xrun, and the music is gone for as
+long as the burst lasts.
+
+So the wake brings the screen back and nothing else. `restore_radios_if_due()`
+in the power tick puts the radios back 1.2 s after the wake, when the panel work
+is finished -- and not while a track, a station or a USB source is playing
+unless something actually wants a radio (`wifi_wanted()`/`bluetooth_in_use()`:
+a station about to be resumed, a fetch in flight) or the user has touched the
+device since, which is the moment they can be asking for the network. A screen
+that goes dark again drops what a wake still owed; they are parked, they stay
+parked, and the next wake starts the wait over.
+
+### Tokyo Night is gone
+
+The palette is removed: the theme row is Dark, Light, Amber on Black and OLED,
+and a config still carrying `theme = tokyo-night` reads back as Dark with its
+accent kept, rewriting the key once so the migration happens on one boot.
+Amber on Black and OLED keep the compact V1 layouts and the function-matched
+glyphs Tokyo Night introduced, so nothing about the look goes with it -- what
+goes is the branch in every colour decision (`theme_is_tokyo_night()` in the
+player's deck, the screensaver's field, the quick panel's heart), the semantic
+hue table in `theme_semantic_color()` (every role now answers with the
+accent), the violet in `theme_browser_folder_color()` and the deck's own three
+violet roles, and its palette. The V1 panel holds four theme buttons in the row
+it had five in.
+
+### Music's one gap
+
+The V1's Music page kept Recently played under the fold by *measuring* it: the
+band's margin was recomputed from the panel's viewport every time the page was
+shown or the queue changed, so the band moved under the finger while the page
+scrolled and teleported back to where it had been when the page settled. The
+measurement is gone and the band is a band like the others.
+
+So is the rest of the guesswork around it. Every space on that page -- the card
+padding, the gap between the four browse tiles, the shortcut rows, the space
+between the four bands and the panel's own edges -- is one number now,
+`MUSIC_GAP`, so the 2x2 grid, the list of indexes and Recently played read down
+in the same step from the header to the last row.
+
+### Radio: where you are, how good, and what is on the list
+
+**Region** and **Quality filter** are Radio settings now, and both live in
+`radio.c` rather than in the page, so every request this player makes is cut by
+them: the directory is asked (`country=`, `bitrateMin=`) and the answer is
+checked against the same two cuts again, since some mirrors ignore a parameter
+and would put back exactly what the setting exists to take out. 320 kbps and up
+is the default; "Any bitrate" is one pill away for a country where nothing that
+high exists. The region is the directory's own name for the country, and it is
+not applied to a search by name -- somebody typing a station's name is asking
+for that station wherever it is.
+
+**Recommended** is the new row: the most played stations of the chosen region,
+on the same station list every other row uses, paged the same way. The old
+languages shortlist is gone -- a country list is a country list, and it comes
+from the directory's own countries, the sixty with the most stations behind
+them, alphabetically.
+
+Duplicates are dropped in two places: when a page is built (`filter_stations()`
+in the worker, so the count a page asks from stays honest) and again when a
+fetched page is appended to the list already on screen. Two entries are the
+same station when they carry the same uuid, when they point at the same stream,
+or when they have the same name in the same country -- half the world has a
+station called "Radio 1".
+
+The hub's arrangement moved off the settings page and onto a page of its own,
+**List reorder**, behind one row. The settings page is four rows long again,
+and the rows it is arranging are on screen while they are arranged. The new
+row is last in the saved ids so that nobody's hidden-row mask shifts by a bit
+and switches something back on; the default order puts Recommended second, and
+an arrangement saved by an older build keeps its own and gains the new row at
+the end.
+
+The radio's sleep timer is a fourth circle in the control centre, beside the
+music's, the audiobook's and the podcast's -- the timer core already had a
+radio kind of its own, it simply had no way in from the control centre. Its
+hold opens Radio settings on the timer, like the other three.
