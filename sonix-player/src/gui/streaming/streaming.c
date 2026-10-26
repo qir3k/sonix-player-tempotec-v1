@@ -102,6 +102,9 @@ static void streaming_refresh_theme(void) {
 void streaming_init(gui_config_t *cfg) {
 	streaming_cfg = cfg;
 	ytmusic_init();
+	// Where an empty page keeps its response body for a pull: the same card
+	// the player's own logs land on.
+	ytmusic_set_card_root(cfg && cfg->sd_root_path ? cfg->sd_root_path : NULL);
 	qobuzpage_init(cfg);
 	tidalpage_init(cfg);
 	podcastpage_init(cfg);

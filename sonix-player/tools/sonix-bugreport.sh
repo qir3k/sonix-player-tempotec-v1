@@ -174,6 +174,18 @@ if [ "${SONIX_FULL_LOG:-0}" = "1" ]; then
 	tailfile "${CARD:-/tmp}/.local/bluetooth.old.log"
 fi
 
+section "youtube music (empty pages)"
+# A page that parsed to nothing keeps its whole response body here, with the
+# head and tail of it in the player log above. The first 20 KB of each is
+# enough to name the shape of what arrived.
+for dump in "${CARD:-/tmp}/.local/ytmusic/"empty-*.json /tmp/sonix-ytmusic/empty-*.json; do
+	if [ -f "$dump" ]; then
+		run "ls -l '$dump'"
+		head -c 20480 "$dump" | sed -n '1,40p'
+	fi
+done
+ls -l /tmp/sonix-ytmusic 2>/dev/null
+
 section "boot trace (boot screen / logo)"
 run 'cat /tmp/.bootlogo_trace'
 run 'cat /tmp/sonix-log-early' 100
