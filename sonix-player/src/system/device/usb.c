@@ -176,6 +176,7 @@ static volatile bool dac_owns_usb;
 static volatile bool suppress_popups;
 static void ensure_storage_gadget(void);
 static void take_card_back(const char *why);
+static void storage_restore(void);
 
 void usb_set_dac_mode(bool on) {
 	// The flag goes up before anything else: setting it afterwards leaves a
@@ -762,7 +763,16 @@ static void storage_export(void) {
 		return;
 	}
 	if (mount_still_up()) {
-		fprintf(stderr, "usb: could not unmount %s; exporting anyway (read-mostly card)\n", sd_mount);
+		// Never hand the block device to Windows while this player still has
+		// the filesystem mounted. That creates a drive letter with an unreadable
+		// or stale volume, and risks corrupting the card. Put the player's card
+		// users back and wait for the cable to be unplugged before trying again.
+		fprintf(stderr, "usb: could not unmount %s; refusing mass-storage export\n", sd_mount);
+		bool was_suppressed = suppress_popups;
+		suppress_popups = true;
+		storage_restore();
+		suppress_popups = was_suppressed;
+		return;
 	}
 
 	// With ADB holding the USB controller its gadget must carry the storage
@@ -922,6 +932,11 @@ static void *usb_thread(void *arg) {
 	thread_be_background("usb watcher");
 
 	bool exported = false;
+	// ADB owns this single-controller gadget. Do not add a mass-storage LUN
+	// alongside it: on the V1 firmware the composite gadget can enumerate in
+	// Windows while exposing an unusable disk. Leave the card mounted until ADB
+	// releases the controller and the dedicated storage gadget can take over.
+	bool said_adb = false;
 	// Set after the PC ejects the medium: the card is back but the cable is
 	// still in, and re-exporting now would undo the eject the user just asked
 	// for. Cleared when VBUS finally drops.
@@ -967,6 +982,7 @@ static void *usb_thread(void *arg) {
 		if (owner != seen_owner) {
 			seen_owner = owner;
 			await_unplug = false;
+			said_adb = false;
 		}
 		if (exported && !storage_active) {
 			exported = false;
@@ -1057,8 +1073,17 @@ static void *usb_thread(void *arg) {
 			continue;
 		}
 
-		// ADB's gadget can export storage alongside the shell; locked_export()
-		// adds the mass-storage function to that gadget when it owns the port.
+		// ADB's gadget is not a reliable mass-storage host on this firmware.
+		// usb_gadget_reclaim_from_adb() wakes this watcher after ADB releases the
+		// controller, then normal export can use the dedicated storage gadget.
+		if (adb_is_running()) {
+			if (!said_adb) {
+				fprintf(stderr, "usb: ADB is running; the card stays mounted (no mass storage)\n");
+				said_adb = true;
+			}
+			continue;
+		}
+		said_adb = false;
 
 		// VBUS alone is not a PC -- a wall charger raises it too, and taking
 		// the card away (stopping the music with it) for a power brick was
@@ -1070,6 +1095,9 @@ static void *usb_thread(void *arg) {
 
 		locked_export();
 		exported = storage_active;
+		if (!exported) {
+			await_unplug = true;
+		}
 	}
 
 	return NULL;
