@@ -155,7 +155,10 @@ static bool worker_started;
 // The results. Two arrays and not one because a podcast and an episode do not
 // share fields, and merging them into a single struct would leave half the
 // fields empty in every row.
-static podcast_feed_t result_feeds[PODCAST_MAX_HELD];
+// Feeds (shows) arrive only through search, the charts and the followed list,
+// each capped at PODCAST_FEEDS_MAX; only the episodes of one podcast run to
+// the catalogue maximum, and they live in result_episodes below.
+static podcast_feed_t result_feeds[PODCAST_FEEDS_MAX];
 static podcast_episode_t result_episodes[PODCAST_MAX_HELD];
 static int result_count;
 static int result_from; // from which row the on-screen list is (re)drawn

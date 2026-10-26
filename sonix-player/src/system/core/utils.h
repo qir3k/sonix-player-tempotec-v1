@@ -51,6 +51,10 @@ bool file_identity_changed(const char *path, const file_identity_t *was);
 int formatDoubleSeconds(double total_seconds, char *buffer, size_t max_len);
 void formatDoubleProgress(double current_secs, double total_secs, char *buffer, size_t max_len);
 
+// A list row's "3:05" -- minutes never roll into hours, which is the form
+// every streaming row shows. Nothing (empty) for a track without a length.
+void format_row_duration(int seconds, char *out, size_t size);
+
 // Marks the calling thread as background work. The X1600E has one core, so any
 // worker at the default priority competes with the interface thread and a JPEG
 // decode or a directory scan reads as the browser freezing. SCHED_IDLE lets

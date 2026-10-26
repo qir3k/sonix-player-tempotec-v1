@@ -563,12 +563,16 @@ static void do_power(bool on) {
 	sleep_ms(on ? 1500 : 300);
 }
 
+// One buffer for the scan text, shared by refresh_networks() and scan_find():
+// both re-read the scan into it and then parse it, and both run on the one
+// worker thread, never nested. Two statics would be 16 KB held for nothing.
+static char scan_text[16384];
+
 // Reads the scan and the saved list, merges them, and publishes the result.
 static void refresh_networks(void) {
-	static char scan_buf[16384];
 	static char saved_buf[4096];
 
-	read_scan_results(scan_buf, sizeof(scan_buf));
+	read_scan_results(scan_text, sizeof(scan_text));
 	read_saved_networks(saved_buf, sizeof(saved_buf));
 
 	wifi_network_t found[WIFI_MAX_NETWORKS];
@@ -576,7 +580,7 @@ static void refresh_networks(void) {
 
 	// The scan first: it is the only source of signal strength.
 	char *save_line = NULL;
-	for (char *line = strtok_r(scan_buf, "\n", &save_line); line && count < WIFI_MAX_NETWORKS;
+	for (char *line = strtok_r(scan_text, "\n", &save_line); line && count < WIFI_MAX_NETWORKS;
 		 line = strtok_r(NULL, "\n", &save_line)) {
 		wifi_network_t net;
 		if (!parse_scan_line(line, &net)) {
@@ -853,11 +857,10 @@ static bool set_scan_ssid(const char *id_text) {
 // out-of-range saved network is exactly the one whose stored settings are
 // all there is to join by.
 static bool scan_find(const char *ssid, bool *secured) {
-	static char buf[16384];
-	read_scan_results(buf, sizeof(buf));
+	read_scan_results(scan_text, sizeof(scan_text));
 
 	char *save_line = NULL;
-	for (char *line = strtok_r(buf, "\n", &save_line); line; line = strtok_r(NULL, "\n", &save_line)) {
+	for (char *line = strtok_r(scan_text, "\n", &save_line); line; line = strtok_r(NULL, "\n", &save_line)) {
 		wifi_network_t net;
 		if (parse_scan_line(line, &net) && strcmp(net.ssid, ssid) == 0) {
 			if (secured) {

@@ -316,7 +316,13 @@ static void file_sync_if_due(bool now) {
 
 static void *writer_main(void *arg) {
 	(void)arg;
-	static char out[64 * 1024];
+	// Taken while the log runs, given back when it stops: the writer thread
+	// exists only under the switch, and 64 KB is too much to hold resident
+	// for a diagnostic almost nobody has on.
+	char *out = malloc(64 * 1024);
+	if (!out) {
+		return NULL;
+	}
 
 	pthread_mutex_lock(&ring_lock);
 	for (;;) {
@@ -336,7 +342,7 @@ static void *writer_main(void *arg) {
 			}
 		}
 
-		size_t take = ring_len < sizeof(out) ? ring_len : sizeof(out);
+		size_t take = ring_len < 64 * 1024 ? ring_len : 64 * 1024;
 		size_t first = RING_SIZE - ring_head < take ? RING_SIZE - ring_head : take;
 		memcpy(out, ring + ring_head, first);
 		memcpy(out + first, ring, take - first);
@@ -354,6 +360,7 @@ static void *writer_main(void *arg) {
 	pthread_mutex_unlock(&ring_lock);
 
 	file_sync_if_due(true);
+	free(out);
 	return NULL;
 }
 
