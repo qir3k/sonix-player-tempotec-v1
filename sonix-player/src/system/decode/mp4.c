@@ -80,6 +80,14 @@ typedef struct {
 	uint32_t max_bitrate;
 
 	uint32_t chap_id; // the text track this one takes its chapters from
+
+	// Fragmented files -- the DASH stream a streaming service sends -- have no
+	// sample tables in `moov` at all. Every sample is described by a `moof` box
+	// in the middle of the file, so the two tables cannot stay where they are:
+	// these arrays are the index, built once while the boxes are walked.
+	uint64_t *frag_offsets;
+	uint32_t *frag_sizes;
+	uint32_t frag_capacity;
 } track_t;
 
 struct mp4_file {
@@ -871,6 +879,208 @@ static int chapter_compare(const void *a, const void *b) {
 // the recursive parse
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// fragmented files
+// ---------------------------------------------------------------------------
+//
+// A DASH audio stream is a `moov` that describes the track and its codec, then
+// a run of `moof`/`mdat` pairs. Each `moof` says where its samples are and how
+// long each one plays; there is no stsz or stco to read. A YouTube Music track
+// arrives this way, so without this the file opens, reports no frames, and
+// plays silence -- which is what a downloaded track used to do.
+//
+// The two arrays hold a few thousand entries for a song and a few hundred
+// thousand for a long podcast episode, which is cheaper than holding the file:
+// a `moof` is only addressable once, so there is nothing to re-read later.
+
+#define MAX_FRAGMENTED_SAMPLES 250000
+#define MAX_FRAGMENTED_RUNS 64
+
+typedef struct {
+	uint32_t track_id;
+	uint32_t default_size;
+	uint32_t default_duration;
+	uint64_t base_offset;
+} traf_t;
+
+static track_t *track_for_id(mp4_file_t *m, uint32_t id) {
+	for (int i = 0; i < m->track_count; i++) {
+		if (m->tracks[i].id == id) {
+			return &m->tracks[i];
+		}
+	}
+	return NULL;
+}
+
+static void fragmented_sample_add(track_t *t, uint64_t offset, uint32_t size, uint32_t duration) {
+	if (t->sample_count >= MAX_FRAGMENTED_SAMPLES) {
+		return;
+	}
+	if (t->sample_count >= t->frag_capacity) {
+		uint32_t want = t->frag_capacity ? t->frag_capacity * 2 : 4096;
+		if (want > MAX_FRAGMENTED_SAMPLES) {
+			want = MAX_FRAGMENTED_SAMPLES;
+		}
+		uint64_t *offsets = realloc(t->frag_offsets, (size_t)want * sizeof(*offsets));
+		if (!offsets) {
+			return;
+		}
+		t->frag_offsets = offsets;
+		uint32_t *sizes = realloc(t->frag_sizes, (size_t)want * sizeof(*sizes));
+		if (!sizes) {
+			return;
+		}
+		t->frag_sizes = sizes;
+		t->frag_capacity = want;
+	}
+	t->frag_offsets[t->sample_count] = offset;
+	t->frag_sizes[t->sample_count] = size;
+	t->sample_count++;
+
+	// The time table is the same shape as a normal file's: runs of samples of
+	// one duration. Audio frames all last the same number of ticks, so this is
+	// one run in practice.
+	if (!duration) {
+		return;
+	}
+	if (!t->stts) {
+		t->stts = calloc(MAX_FRAGMENTED_RUNS, sizeof(*t->stts));
+		if (!t->stts) {
+			return; // the samples are still indexed, just undated
+		}
+	}
+	if (t->stts_count && t->stts[t->stts_count - 1].delta == duration) {
+		t->stts[t->stts_count - 1].count++;
+	} else if (t->stts_count < MAX_FRAGMENTED_RUNS) {
+		t->stts[t->stts_count].count = 1;
+		t->stts[t->stts_count].delta = duration;
+		t->stts_count++;
+	}
+}
+
+// One `trun`: a run of samples whose sizes and durations are either in the box
+// or inherited from its `tfhd`.
+static void parse_trun(mp4_file_t *m, track_t *t, const traf_t *st, const unsigned char *b, size_t len) {
+	if (len < 8) {
+		return;
+	}
+	uint32_t flags = be32(b) & 0xFFFFFFu;
+	uint32_t count = be32(b + 4);
+	size_t pos = 8;
+	int32_t data_offset = 0;
+	if (flags & 0x000001) {
+		if (pos + 4 > len) return;
+		data_offset = (int32_t)be32(b + pos);
+		pos += 4;
+	}
+	if (flags & 0x000004) {
+		if (pos + 4 > len) return;
+		pos += 4; // first-sample-flags: video only
+	}
+	size_t per_sample = 0;
+	if (flags & 0x000100) per_sample += 4; // duration
+	if (flags & 0x000200) per_sample += 4; // size
+	if (flags & 0x000400) per_sample += 4; // flags
+	if (flags & 0x000800) per_sample += 4; // composition offset
+	if (!count || pos + (size_t)count * per_sample > len) {
+		return;
+	}
+
+	uint64_t data = st->base_offset + (uint64_t)(int64_t)data_offset;
+	uint64_t offset = 0;
+	for (uint32_t i = 0; i < count; i++) {
+		uint32_t duration = st->default_duration;
+		uint32_t size = st->default_size;
+		if (flags & 0x000100) {
+			duration = be32(b + pos);
+			pos += 4;
+		}
+		if (flags & 0x000200) {
+			size = be32(b + pos);
+			pos += 4;
+		}
+		if (flags & 0x000400) pos += 4;
+		if (flags & 0x000800) pos += 4;
+		if (size && data + offset + size <= m->file_size) {
+			fragmented_sample_add(t, data + offset, size, duration);
+		}
+		offset += size;
+	}
+}
+
+// One `traf`: its `tfhd` says which track and its defaults, its `trun` boxes
+// carry the samples.
+static void parse_traf(mp4_file_t *m, const unsigned char *b, size_t len, uint64_t moof_off) {
+	traf_t st;
+	memset(&st, 0, sizeof(st));
+	st.base_offset = moof_off; // default-base-is-moof, which is what encoders write
+	track_t *t = NULL;
+	size_t pos = 0;
+	while (pos + 8 <= len) {
+		uint32_t size = be32(b + pos);
+		uint32_t type = be32(b + pos + 4);
+		if (size < 8 || pos + size > len) {
+			return;
+		}
+		const unsigned char *body = b + pos + 8;
+		size_t body_len = size - 8;
+		if (type == FOURCC('t', 'f', 'h', 'd')) {
+			if (body_len < 8) return;
+			uint32_t flags = be32(body) & 0xFFFFFFu;
+			st.track_id = be32(body + 4);
+			st.default_size = 0;
+			st.default_duration = 0;
+			size_t p = 8;
+			if (flags & 0x000001) { // base-data-offset
+				if (p + 8 > body_len) return;
+				st.base_offset = be64(body + p);
+				p += 8;
+			}
+			if (flags & 0x000002) p += 4; // sample-description-index
+			if (flags & 0x000008) {
+				if (p + 4 > body_len) return;
+				st.default_duration = be32(body + p);
+				p += 4;
+			}
+			if (flags & 0x000010) {
+				if (p + 4 > body_len) return;
+				st.default_size = be32(body + p);
+				p += 4;
+			}
+			t = track_for_id(m, st.track_id);
+			// Video is not decoded here, and indexing it would cost megabytes
+			// for nothing: only the sound track is followed.
+			if (t && t->handler != FOURCC('s', 'o', 'u', 'n')) {
+				t = NULL;
+			}
+		} else if (type == FOURCC('t', 'r', 'u', 'n') && t) {
+			parse_trun(m, t, &st, body, body_len);
+		}
+		pos += size;
+	}
+}
+
+static void parse_moof(mp4_file_t *m, uint64_t off, const box_t *moof) {
+	size_t len = 0;
+	unsigned char *b = load_box(m, moof, &len);
+	if (!b) {
+		return;
+	}
+	size_t pos = 0;
+	while (pos + 8 <= len) {
+		uint32_t size = be32(b + pos);
+		uint32_t type = be32(b + pos + 4);
+		if (size < 8 || pos + size > len) {
+			break;
+		}
+		if (type == FOURCC('t', 'r', 'a', 'f')) {
+			parse_traf(m, b + pos + 8, size - 8, off);
+		}
+		pos += size;
+	}
+	free(b);
+}
+
 static void parse_boxes(mp4_file_t *m, uint64_t start, uint64_t end, track_t *current, int depth) {
 	if (depth > MAX_DEPTH) {
 		return;
@@ -900,6 +1110,13 @@ static void parse_boxes(mp4_file_t *m, uint64_t start, uint64_t end, track_t *cu
 				track_t *t = &m->tracks[m->track_count++];
 				memset(t, 0, sizeof(*t));
 				parse_boxes(m, box.content, box.content + box.body_size, t, depth + 1);
+			}
+			break;
+
+		case FOURCC('m', 'o', 'o', 'f'):
+			// Only at the top level: a `moof` inside anything else is not one.
+			if (!current) {
+				parse_moof(m, pos, &box);
 			}
 			break;
 
@@ -1098,6 +1315,13 @@ static void parse_boxes(mp4_file_t *m, uint64_t start, uint64_t end, track_t *cu
 static bool size_at(mp4_file_t *m, int track_index, uint32_t index, uint32_t *out) {
 	track_t *t = &m->tracks[track_index];
 
+	if (t->frag_sizes) {
+		if (index >= t->sample_count) {
+			return false;
+		}
+		*out = t->frag_sizes[index];
+		return true;
+	}
 	if (t->uniform_size) {
 		*out = t->uniform_size;
 		return true;
@@ -1206,7 +1430,22 @@ static bool chunk_offset(const mp4_file_t *m, const track_t *t, uint32_t chunk /
 // Playback asks for frame N+1 after frame N, so the answer is carried forward.
 static bool frame_location(mp4_file_t *m, int track_index, uint32_t index, uint64_t *offset, uint32_t *size) {
 	track_t *t = &m->tracks[track_index];
-	if (index >= t->sample_count || t->stsc_count == 0 || t->chunk_count == 0) {
+	if (index >= t->sample_count) {
+		return false;
+	}
+	if (t->frag_offsets) {
+		// A fragmented file has no chunks to walk: the index built from the
+		// `moof` boxes is the answer, and the next frame is the usual one after
+		// it.
+		*offset = t->frag_offsets[index];
+		*size = t->frag_sizes[index];
+		m->seq_track = track_index;
+		m->seq_index = index + 1;
+		m->seq_offset = *offset + *size;
+		m->seq_chunk_end = t->sample_count;
+		return true;
+	}
+	if (t->stsc_count == 0 || t->chunk_count == 0) {
 		return false;
 	}
 
@@ -1367,6 +1606,8 @@ void mp4_close(mp4_file_t *m) {
 	for (int i = 0; i < m->track_count; i++) {
 		free(m->tracks[i].stsc);
 		free(m->tracks[i].stts);
+		free(m->tracks[i].frag_offsets);
+		free(m->tracks[i].frag_sizes);
 	}
 	free(m->chapters);
 	free(m->lyrics);
