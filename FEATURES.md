@@ -179,6 +179,8 @@ circle opens the radio's settings page on it.
 - **SonixLink** - a control protocol for a phone: the phone fetches the index
   once and queries it locally instead of paging over the wire. Playback state,
   queue, favourites, artwork and commands.
+- **YouTube Music** - search, charts, Explore, albums, playlists and podcasts, all signed out: the public pages answer a guest, and no account is needed to find or play anything. Signing in (Settings, device code) is only for the personal library -- likes, history, your own playlists. Streams are audio-only AAC; nothing carrying a video track is ever fetched.
+  Google now refuses direct playback to every client without a browser-grade attestation this device cannot run, so guest playback goes through a relay you name yourself: `[ytmusic] relay_base = https://...` in `device_config.ini`, pointing at any Piped-API-compatible server (one Docker container on a machine of your own does it). Playback, downloads and the audio-only filter all run through it. Without a relay set, search and browsing still work and a track answers `ytmusic_relay_needed`.
 - **USB mass storage** - connect the device to a PC or a Smartphone to manage the files on the SD Card.
 
 ## Podcasts on the card
