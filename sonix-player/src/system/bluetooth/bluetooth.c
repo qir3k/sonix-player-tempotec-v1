@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <poll.h>
+#include <sched.h>
 #include <strings.h>
 #include <signal.h>
 #include <sys/ioctl.h>
@@ -539,7 +540,7 @@ static bool stop_process(const char *name) {
 // is the only place anybody ever reads them from on this device. bluetoothd
 // prints nothing there: it writes to syslog, which only the Bluetooth log
 // (btlog.h) listens to.
-static bool spawn_daemon(const char *path, char *const argv[]) {
+static bool spawn_daemon(const char *path, char *const argv[], int rt_priority) {
 	pid_t pid = fork();
 	if (pid < 0) {
 		fprintf(stderr, "bluetooth: fork for %s failed: %s\n", path, strerror(errno));
@@ -550,6 +551,19 @@ static bool spawn_daemon(const char *path, char *const argv[]) {
 			_exit(0); // the middle process leaves at once; init adopts the daemon
 		}
 		setsid();
+		// BlueALSA 4.1.1 on the stock firmware predates --io-rt-priority.
+		// Give the daemon a low RR priority in that case so the A2DP encoder
+		// gets scheduled promptly, while keeping the player's priority-10
+		// playback thread ahead of it on this single-core device.
+		if (rt_priority > 0) {
+			struct sched_param rt = {.sched_priority = rt_priority};
+			if (sched_setscheduler(0, SCHED_RR, &rt) != 0) {
+				fprintf(stderr, "bluetooth: SCHED_RR %d for %s refused: %s\n", rt_priority, argv[0],
+						strerror(errno));
+			} else {
+				fprintf(stderr, "bluetooth: %s process at SCHED_RR %d (encoder fallback)\n", argv[0], rt_priority);
+			}
+		}
 		int devnull = open("/dev/null", O_RDONLY);
 		if (devnull >= 0) {
 			dup2(devnull, STDIN_FILENO);
@@ -733,7 +747,7 @@ static void ensure_dbus(void) {
 	}
 
 	char *argv[3] = {(char *)"dbus-daemon", (char *)"--config-file=" DBUS_SYSTEM_CONF, NULL};
-	spawn_daemon(DBUS_DAEMON_BIN, argv);
+	spawn_daemon(DBUS_DAEMON_BIN, argv, 0);
 	for (int waited = 0; waited < 3000 && !process_running("dbus-daemon"); waited += 50) {
 		sleep_ms(50);
 	}
@@ -938,7 +952,7 @@ static bool ensure_transport(void) {
 		NULL,
 	};
 	fprintf(stderr, "bluetooth: loading %s over %s\n", firmware, BT_TRANSPORT_TTY);
-	if (!spawn_daemon(BT_TRANSPORT_BIN, argv)) {
+	if (!spawn_daemon(BT_TRANSPORT_BIN, argv, 0)) {
 		return false;
 	}
 
@@ -977,7 +991,7 @@ static bool ensure_bluetoothd(void) {
 		if (btlog_enabled()) {
 			argv[3] = (char *)"-d";
 		}
-		spawn_daemon(BLUETOOTHD_BIN, argv);
+		spawn_daemon(BLUETOOTHD_BIN, argv, 0);
 	}
 
 	if (!btstack_wait_service("org.bluez", WAIT_BLUETOOTHD_MS)) {
@@ -1369,7 +1383,11 @@ static bool ensure_bluealsa(void) {
 			fprintf(stderr, "bluetooth: offering %s on top of SBC and AAC\n", line);
 		}
 		fprintf(stderr, "bluetooth: the A2DP transport stays up %d s after the last client\n", keep_alive);
-		spawn_daemon(BLUEALSA_BIN, argv);
+		// Prefer BlueALSA's per-I/O-thread option. On the firmware version
+		// without it, a capped process priority still puts its encoder ahead of
+		// the interface and background work, but below the audio consumer.
+		int fallback_rt = !rt && wanted > 0 ? (wanted < 8 ? wanted : 8) : 0;
+		spawn_daemon(BLUEALSA_BIN, argv, fallback_rt);
 	}
 	if (!btstack_wait_service("org.bluealsa", WAIT_BLUEALSA_MS)) {
 		fprintf(stderr, "bluetooth: bluealsa did not claim org.bluealsa\n");
@@ -1489,6 +1507,7 @@ static bool name_is_just_address(const char *name, const char *mac) {
 // same reason: it is the file the patched bluealsa reads its LDAC and UAT
 // quality settings from.
 #define BT_ALSA_CONF "/usr/data/alsa.conf"
+#define BT_LAST_DEVICE_KEY "bt_last_device"
 
 static void rewrite_alsa_conf(const char *mac) {
 	char before[4096];
@@ -1542,6 +1561,9 @@ static void rewrite_alsa_conf(const char *mac) {
 // longer connected, or when it has stayed gone this long.
 #define A2DP_GRACE_MS 3000
 static uint32_t a2dp_missing_since; // worker only
+static bool a2dp_reconnect_pending; // worker only
+static char a2dp_lost_mac[BT_MAC_MAX]; // worker only
+static char a2dp_expected_disconnect[BT_MAC_MAX]; // worker only, one deliberate disconnect
 
 // Whether bluez still reports an ACL link to this address.
 static bool device_still_connected(const char *mac) {
@@ -1564,6 +1586,9 @@ static void refresh_audio_state(void) {
 
 	if (sink) {
 		a2dp_missing_since = 0;
+		a2dp_reconnect_pending = false;
+		a2dp_lost_mac[0] = '\0';
+		a2dp_expected_disconnect[0] = '\0';
 		if (g_bluealsa_restarted) {
 			g_bluealsa_restarted = false;
 			// Before the player is told: it opens the stream again at once, at
@@ -1581,16 +1606,34 @@ static void refresh_audio_state(void) {
 		copy_field(last, sizeof(last), g_a2dp_mac, sizeof(g_a2dp_mac));
 		pthread_mutex_unlock(&lock);
 
-		if (had_sink && last[0] && device_still_connected(last)) {
-			if (a2dp_missing_since == 0) {
-				a2dp_missing_since = now_ms();
-				fprintf(stderr, "bluetooth: the PCM on %s went away but the link is still up; waiting\n", last);
+		if (had_sink && last[0]) {
+			bool link_up = device_still_connected(last);
+			if (link_up) {
+				if (a2dp_missing_since == 0) {
+					a2dp_missing_since = now_ms();
+					fprintf(stderr, "bluetooth: the PCM on %s went away but the link is still up; waiting\n", last);
+				}
+				if ((uint32_t)(now_ms() - a2dp_missing_since) < A2DP_GRACE_MS) {
+					return; // A track or codec change can briefly close the PCM
+				}
+				fprintf(stderr, "bluetooth: the PCM on %s has been gone for %d ms; back to the jack\n", last,
+						A2DP_GRACE_MS);
+			} else {
+				fprintf(stderr, "bluetooth: the link to %s dropped with its audio profile\n", last);
 			}
-			if ((uint32_t)(now_ms() - a2dp_missing_since) < A2DP_GRACE_MS) {
-				return; // nothing has changed yet as far as anything else is concerned
+
+			// A stream that drops for good while Bluetooth remains enabled should
+			// be invited back. Keep this to the last audio device, and consume an
+			// intentional disconnect once so the Bluetooth list's Disconnect
+			// action is not undone by recovery.
+			if (strcasecmp(config_get("wireless", BT_LAST_DEVICE_KEY, ""), last) == 0) {
+				if (strcasecmp(a2dp_expected_disconnect, last) == 0) {
+					a2dp_expected_disconnect[0] = '\0';
+				} else {
+					a2dp_reconnect_pending = true;
+					snprintf(a2dp_lost_mac, sizeof(a2dp_lost_mac), "%s", last);
+				}
 			}
-			fprintf(stderr, "bluetooth: the PCM on %s has been gone for %d ms; back to the jack\n", last,
-					A2DP_GRACE_MS);
 		}
 		a2dp_missing_since = 0;
 	}
@@ -1862,8 +1905,6 @@ static void do_scan_stop(void) {
 // ---------------------------------------------------------------------------
 // coming back to the headphones
 // ---------------------------------------------------------------------------
-
-#define BT_LAST_DEVICE_KEY "bt_last_device"
 
 static void remember_last_device(const char *mac) {
 	if (!mac || !mac[0]) {
@@ -2250,8 +2291,8 @@ static bool pair_and_connect(const char *mac) {
 // Whether going back to the last device should be given up, and why.
 //
 // The reconnect runs on the worker, inline in the power-on job, and can hold
-// that thread for the best part of a minute: eight seconds of grace plus three
-// connect attempts against a device that may be in a drawer. Nothing the user
+// that thread for up to half a minute while a device that may be in a drawer
+// gets its chance. Nothing the user
 // asks for in the meantime runs until it returns, so a queued job from the user
 // ends it.
 //
@@ -2364,17 +2405,17 @@ static void reconnect_last(void) {
 		sleep_ms(250);
 	}
 
-	// Up to three goes. The first can land while bluealsa has a process but has
+	// Up to six goes. The first can land while bluealsa has a process but has
 	// not registered its endpoint with bluez yet, and then the link comes up with
 	// no audio profile on it.
 	//
 	// What bluez answered decides what the wait is worth. "Host is down" is the
 	// page timeout of the device itself -- switched off, in a drawer, out of
-	// range -- and two more of those are ten more seconds of the worker that
-	// cannot succeed. "NotReady" is this side, and needs longer than the 1.5 s
-	// the attempts were spaced by: the log has all three refused inside two
-	// seconds of the stack coming up, 0.14 s apart from it.
-	for (int attempt = 1; attempt <= 3; attempt++) {
+	// range -- so another connect cannot help. "NotReady" is this side; the
+	// controller can take longer to settle after stack startup, so retry it for
+	// up to six attempts, four seconds apart. The log has all three earlier
+	// attempts refused inside two seconds of the stack coming up.
+	for (int attempt = 1; attempt <= 6; attempt++) {
 		// Checked again here and not only between the attempts: the previous
 		// connect_device() took seconds, and this is the last moment before a
 		// command goes out that could tear down somebody else's link.
@@ -2398,7 +2439,32 @@ static void reconnect_last(void) {
 		}
 		sleep_ms(strstr(why, "NotReady") ? 4000 : 1500);
 	}
-	fprintf(stderr, "bluetooth: %s did not come back with an audio profile after three tries\n", mac);
+	fprintf(stderr, "bluetooth: %s did not come back with an audio profile after six tries\n", mac);
+}
+
+// The startup path is not the only time a source can lose its A2DP profile:
+// some earbuds briefly disconnect while changing ear or audio mode. Retry the
+// remembered sink after refresh_audio_state has confirmed the loss, unless a
+// newer user action or a receiver stream took over.
+static void reconnect_lost_audio(void) {
+	if (!a2dp_reconnect_pending || !a2dp_lost_mac[0]) {
+		return;
+	}
+	char mac[BT_MAC_MAX];
+	snprintf(mac, sizeof(mac), "%s", a2dp_lost_mac);
+	a2dp_reconnect_pending = false;
+	a2dp_lost_mac[0] = '\0';
+
+	if (!bluetooth_still_wanted() || reconnect_should_stop(mac) ||
+		strcasecmp(config_get("wireless", BT_LAST_DEVICE_KEY, ""), mac) != 0) {
+		return;
+	}
+	char sink[BT_MAC_MAX];
+	if (btstack_audio_sink(sink, sizeof(sink))) {
+		return;
+	}
+	fprintf(stderr, "bluetooth: restoring the lost audio profile on %s\n", mac);
+	reconnect_last();
 }
 
 // ---------------------------------------------------------------------------
@@ -2603,8 +2669,8 @@ static void do_power(bool on, bool deliberate) {
 		//
 		// What follows is going back to the last device, which is a different
 		// thing with its own feedback on the row it concerns: a grace period
-		// for headphones that reconnect by themselves, then up to three
-		// attempts. Ten seconds on a bad day, and a device list sitting under a
+		// for headphones that reconnect by themselves, then up to six attempts
+		// if the controller answers NotReady. A device list sitting under a
 		// "turning on" line for all of it reads as a radio that never finished
 		// starting.
 		pthread_mutex_lock(&lock);
@@ -3391,6 +3457,7 @@ static void *bluetooth_worker(void *arg) {
 
 			case JOB_REFRESH:
 				refresh_devices();
+				reconnect_lost_audio();
 				break;
 
 			case JOB_PAIR: {
@@ -3441,6 +3508,7 @@ static void *bluetooth_worker(void *arg) {
 				// Logged, because in the log a link closed from here and a
 				// speaker dropping the link look exactly the same otherwise.
 				fprintf(stderr, "bluetooth: disconnecting %s (asked for)\n", job.mac);
+				snprintf(a2dp_expected_disconnect, sizeof(a2dp_expected_disconnect), "%s", job.mac);
 				btstack_disconnect(job.mac);
 				sleep_ms(400);
 				refresh_devices();
@@ -3451,6 +3519,7 @@ static void *bluetooth_worker(void *arg) {
 			case JOB_FORGET:
 				name_for(job.mac, name, sizeof(name));
 				fprintf(stderr, "bluetooth: forgetting %s\n", job.mac);
+				snprintf(a2dp_expected_disconnect, sizeof(a2dp_expected_disconnect), "%s", job.mac);
 				btstack_disconnect(job.mac);
 				set_op(btstack_remove(job.mac) ? BT_OP_OK : BT_OP_FAILED, name);
 				forget_last_device(job.mac);
@@ -3562,6 +3631,7 @@ static void *bluetooth_worker(void *arg) {
 				}
 			}
 			refresh_devices();
+			reconnect_lost_audio();
 		}
 	}
 
