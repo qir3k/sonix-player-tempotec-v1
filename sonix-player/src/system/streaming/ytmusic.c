@@ -608,6 +608,21 @@ static bool json_escape(const char *in, char *out, size_t size) {
 	return true;
 }
 
+// Some Google endpoints protect JSON replies with the standard anti-XSSI
+// prefix. The YouTube Music API usually omits it, but tolerate it here so a
+// harmless transport wrapper does not turn a valid search reply into a parse
+// error.
+static const char *youtubei_json_start(const char *body) {
+	if (!body) return NULL;
+	while (*body == ' ' || *body == '\t' || *body == '\r' || *body == '\n') body++;
+	if (strncmp(body, ")]}'", 4) == 0) {
+		body += 4;
+		if (*body == ',') body++;
+		while (*body == ' ' || *body == '\t' || *body == '\r' || *body == '\n') body++;
+	}
+	return body;
+}
+
 static bool youtubei_post(const char *endpoint, const char *body, bool login_required,
 						  char **response, int *status, char *error, size_t error_size) {
 	pthread_mutex_lock(&request_lock);
@@ -854,7 +869,7 @@ int ytmusic_search_tracks(const char *query, ytmusic_track_t *tracks, int limit,
 	char *body = NULL;
 	if (!youtubei_post("search", request, false, &body, NULL, error, error_size)) return -1;
 	json_doc_t doc;
-	if (!json_parse_limited(body, &doc, YTMUSIC_RESPONSE_TOKEN_LIMIT)) {
+	if (!json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_RESPONSE_TOKEN_LIMIT)) {
 		free(body);
 		set_error(error, error_size, "ytmusic_unreadable_reply");
 		return -1;
@@ -878,7 +893,7 @@ int ytmusic_browse_chart_tracks(ytmusic_track_t *tracks, int limit,
 	char *body = NULL;
 	if (!youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
 	json_doc_t doc;
-	if (!json_parse_limited(body, &doc, YTMUSIC_RESPONSE_TOKEN_LIMIT)) {
+	if (!json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_RESPONSE_TOKEN_LIMIT)) {
 		free(body);
 		set_error(error, error_size, "ytmusic_unreadable_reply");
 		return -1;
@@ -915,7 +930,7 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 	char *body = NULL;
 	if (!youtubei_post("player", request, true, &body, NULL, error, error_size)) return false;
 	json_doc_t doc;
-	if (!json_parse(body, &doc)) {
+	if (!json_parse(youtubei_json_start(body), &doc)) {
 		free(body);
 		set_error(error, error_size, "ytmusic_unreadable_reply");
 		return false;

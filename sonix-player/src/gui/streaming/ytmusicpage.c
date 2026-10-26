@@ -29,8 +29,8 @@ static lv_obj_t *results_screen;
 static lv_obj_t *results_list;
 static lv_obj_t *results_title;
 static lv_obj_t *search_field;
+static lv_obj_t *settings_screen;
 static lv_obj_t *sign_in_row;
-static lv_obj_t *signed_in_row;
 static lv_obj_t *sign_out_row;
 static lv_obj_t *login_screen;
 static lv_obj_t *login_qr;
@@ -48,6 +48,8 @@ static bool login_active;
 static bool login_busy;
 static int login_elapsed;
 static unsigned login_generation;
+
+static void home_refresh_session_rows(void);
 
 typedef struct {
 	int count;
@@ -74,10 +76,32 @@ typedef struct {
 
 static void login_tick_cb(lv_timer_t *timer);
 
+static lv_obj_t *ytmusic_corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph,
+										 lv_event_cb_t cb) {
+	lv_obj_t *button = lv_btn_create(ytmusic_screen);
+	settingsrow_place_corner_button(button, cfg, slot);
+	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(button, 0, 0);
+	lv_obj_set_style_shadow_width(button, 0, 0);
+	lv_obj_set_style_pad_all(button, 0, 0);
+	lv_obj_t *icon = lv_image_create(button);
+	lv_image_set_src(icon, glyph);
+	lv_obj_add_style(icon, &theme_style_icon, 0);
+	settingsrow_scale_corner_icon(icon, cfg);
+	lv_obj_center(icon);
+	lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, NULL);
+	return button;
+}
+
+static void open_settings_cb(lv_event_t *e) {
+	(void)e;
+	home_refresh_session_rows();
+	switch_screen(settings_screen);
+}
+
 static void home_refresh_session_rows(void) {
 	bool logged_in = ytmusic_logged_in();
 	if (sign_in_row) lv_obj_set_hidden(sign_in_row, logged_in);
-	if (signed_in_row) lv_obj_set_hidden(signed_in_row, !logged_in);
 	if (sign_out_row) lv_obj_set_hidden(sign_out_row, !logged_in);
 }
 
@@ -529,25 +553,33 @@ static void build_login_page(void) {
 	switcher_attach_back_gesture(login_screen);
 }
 
+static void build_settings_page(gui_config_t *cfg) {
+	settings_screen = lv_obj_create(NULL);
+	lv_obj_add_style(settings_screen, &theme_style_screen, 0);
+	lv_obj_t *container = settingsrow_page(settings_screen, cfg, "YouTube Music settings");
+	sign_in_row = settingsrow_action(container, "Sign in with Google", login_begin_done_cb, NULL);
+	settingsrow_add_icon(sign_in_row, &icon_import, THEME_SEMANTIC_CYAN);
+	sign_out_row = settingsrow_action(container, "Sign out of YouTube Music", logout_cb, NULL);
+	settingsrow_add_icon(sign_out_row, &icon_log_out, THEME_SEMANTIC_RED);
+	home_refresh_session_rows();
+	player_sheet_attach_drag(container, true);
+	switcher_attach_back_gesture(settings_screen);
+}
+
 void ytmusicpage_init(gui_config_t *cfg) {
 	page_cfg = cfg;
 	ytmusic_screen = lv_obj_create(NULL);
 	lv_obj_add_style(ytmusic_screen, &theme_style_screen, 0);
 	lv_obj_t *home = settingsrow_page(ytmusic_screen, cfg, "YouTube Music");
+	settingsrow_title_corner_slots(settingsrow_page_title(ytmusic_screen), cfg, 1);
+	ytmusic_corner_button(cfg, 0, &icon_music_settings, open_settings_cb);
 	lv_obj_t *row = settingsrow_add(home, "Search YouTube Music", NULL, search_cb, NULL);
 	settingsrow_add_icon(row, &icon_search, THEME_SEMANTIC_CYAN);
 	row = settingsrow_add(home, "Top Songs Charts", NULL, charts_cb, NULL);
 	settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_RED);
-	sign_in_row = settingsrow_action(home, "Sign in with Google", login_begin_done_cb, NULL);
-	row = sign_in_row;
-	settingsrow_add_icon(row, &icon_import, THEME_SEMANTIC_CYAN);
-	signed_in_row = settingsrow_action(home, "Signed in with Google", NULL, NULL);
-	settingsrow_add_icon(signed_in_row, &icon_check, THEME_SEMANTIC_GREEN);
-	sign_out_row = settingsrow_action(home, "Sign out of YouTube Music", logout_cb, NULL);
-	settingsrow_add_icon(sign_out_row, &icon_log_out, THEME_SEMANTIC_RED);
-	home_refresh_session_rows();
 	player_sheet_attach_drag(home, true);
 	build_search_page();
 	build_login_page();
+	build_settings_page(cfg);
 	switcher_attach_back_gesture(ytmusic_screen);
 }
