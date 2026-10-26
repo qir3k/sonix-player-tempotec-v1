@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 // The group and port every mDNS responder on the network listens on.
@@ -18,6 +19,15 @@
 
 // RFC 6762 recommends 120 seconds for the records that name a host.
 #define MDNS_TTL 120
+
+// Multicast is sent at the basic rate, unacknowledged and unretried, so an
+// announcement that is sent once may as well not be sent at all. Said again on
+// this cadence while the responder is up, as the SonixLink one does.
+#define MDNS_ANNOUNCE_MS 30000
+
+// The opening pair: RFC 6762 asks for at least two announcements at least a
+// second apart, so one lost packet leaves the other.
+#define MDNS_PAIR_MS 1000
 
 // A query and the single-A-record answer both fit in a fraction of this; 1500
 // is one Ethernet frame, so nothing that arrives here can be truncated.
@@ -179,18 +189,40 @@ static int put32(uint8_t *buf, int size, int at, uint32_t value) {
 
 static uint16_t get16(const uint8_t *buf, int at) { return (uint16_t)((buf[at] << 8) | buf[at + 1]); }
 
+static uint32_t now_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint32_t)(ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000));
+}
+
 // One answer: this host's name, an A record, this host's address.
-static int build_answer(uint8_t *out, int size, uint16_t id, const char *name, uint32_t address) {
+//
+// `question` is the raw question as it was asked, echoed back when the reply
+// goes to a legacy querier (RFC 6762 section 6.7): a one-shot resolver -- a
+// browser's lookup, Windows' own -- came in on an ephemeral port and expects a
+// DNS-shaped reply carrying the question it asked; without it, some drop the
+// answer on the floor and the name never resolves. A querier listening on
+// :5353 gets the multicast convention, no question.
+static int build_answer(uint8_t *out, int size, uint16_t id, const char *name, uint32_t address,
+						const uint8_t *question, int question_len) {
 	int at = 0;
 
 	at = put16(out, size, at, id);
 	at = put16(out, size, at, 0x8400); // response, authoritative
-	at = put16(out, size, at, 0);	   // no questions echoed back
+	at = put16(out, size, at, question && question_len > 0 ? 1 : 0);
 	at = put16(out, size, at, 1);	   // one answer
 	at = put16(out, size, at, 0);	   // no authority records
 	at = put16(out, size, at, 0);	   // no additional records
 	if (at < 0) {
 		return -1;
+	}
+
+	if (question && question_len > 0) {
+		if (at + question_len > size) {
+			return -1;
+		}
+		memcpy(out + at, question, (size_t)question_len);
+		at += question_len;
 	}
 
 	at = write_name(out, size, at, name);
@@ -282,9 +314,13 @@ static void send_to_group(int fd, const uint8_t *packet, int length) {
 // ---------------------------------------------------------------------------
 
 // Everything this responder knows how to say. Returns the reply length, or 0
-// when the query was not about this host.
-static int handle_query(const uint8_t *in, int len, uint32_t address, const char *name, uint8_t *out, int out_size,
-						bool *unicast) {
+// when the query was not about this host. `question` comes back pointing into
+// `in` at the raw question bytes, for echoing to a legacy querier.
+static int handle_query(const uint8_t *in, int len, const struct sockaddr_in *from, uint32_t address,
+						const char *name, uint8_t *out, int out_size, bool *unicast,
+						const uint8_t **question, int *question_len) {
+	*question = NULL;
+	*question_len = 0;
 	if (len < 12) {
 		return 0;
 	}
@@ -299,6 +335,7 @@ static int handle_query(const uint8_t *in, int len, uint32_t address, const char
 	int at = 12;
 
 	for (int i = 0; i < questions; i++) {
+		int asked_at = at;
 		char asked[256];
 		at = read_name(in, len, at, asked, sizeof(asked));
 		if (at < 0 || at + 4 > len) {
@@ -319,11 +356,39 @@ static int handle_query(const uint8_t *in, int len, uint32_t address, const char
 			continue;
 		}
 
-		*unicast = (qclass & DNS_UNICAST_RESPONSE) != 0;
-		return build_answer(out, out_size, id, name, address);
+		// A one-shot resolver: the top bit of the class asks for a reply
+		// straight back, or the question simply came from somewhere that is not
+		// an mDNS responder's port. Both get a reply addressed to them, with
+		// the question echoed; the TTL of a record handed out that way is
+		// theirs to keep for a moment only, since nothing multicasts the
+		// correction if the address changes under a unicast-only listener.
+		*unicast = (qclass & DNS_UNICAST_RESPONSE) != 0 || from->sin_port != htons(MDNS_PORT);
+		if (*unicast) {
+			*question = in + asked_at;
+			*question_len = at - asked_at;
+		}
+		return build_answer(out, out_size, id, name, address, *question, *question_len);
 	}
 
 	return 0;
+}
+
+// One unsolicited "here I am" to the group. The name is read under the lock:
+// mdns_start() can rename a responder that is already running.
+static void announce(int fd, uint32_t address) {
+	char name[sizeof(host_full)];
+	pthread_mutex_lock(&lock);
+	snprintf(name, sizeof(name), "%s", host_full);
+	pthread_mutex_unlock(&lock);
+	if (!name[0]) {
+		return;
+	}
+
+	uint8_t packet[MDNS_BUF];
+	int length = build_answer(packet, sizeof(packet), 0, name, address, NULL, 0);
+	if (length > 0) {
+		send_to_group(fd, packet, length);
+	}
 }
 
 static void *mdns_thread(void *unused) {
@@ -331,6 +396,9 @@ static void *mdns_thread(void *unused) {
 
 	int fd = -1;
 	uint32_t bound_address = 0;
+	// The second of the opening pair, and the next steady-state announcement.
+	// Zero means each is not pending.
+	uint32_t pair_deadline = 0, next_announce = 0;
 
 	while (!stop_requested) {
 		uint32_t address = local_address();
@@ -370,22 +438,31 @@ static void *mdns_thread(void *unused) {
 
 			printf("mdns: answering for %s at %s (port %u)\n", name, shown, (unsigned)port);
 
-			// Say it before being asked, twice: a browser that already had the
-			// page open when the address changed picks the new one up without
-			// having to time out first.
-			uint8_t packet[MDNS_BUF];
-			int length = build_answer(packet, sizeof(packet), 0, name, address);
-			if (length > 0) {
-				send_to_group(fd, packet, length);
-				usleep(150 * 1000);
-				send_to_group(fd, packet, length);
-			}
+			// Say it before being asked: the opening pair now, the second one a
+			// second out (RFC 6762 asks for two, apart, so one lost packet
+			// leaves the other), and every MDNS_ANNOUNCE_MS after that, so a
+			// browser that joined late or missed the multicast still learns
+			// the name without asking for it.
+			announce(fd, address);
+			pair_deadline = now_ms() + MDNS_PAIR_MS;
+			next_announce = now_ms() + MDNS_ANNOUNCE_MS;
+		}
+
+		// A due announcement. Both timers ride the loop rather than blocking:
+		// the same second also answers queries, and a sleep would sit on them.
+		uint32_t now = now_ms();
+		if (pair_deadline && (int32_t)(now - pair_deadline) >= 0) {
+			announce(fd, address);
+			pair_deadline = 0;
+		} else if (!pair_deadline && (int32_t)(now - next_announce) >= 0) {
+			announce(fd, address);
+			next_announce = now + MDNS_ANNOUNCE_MS;
 		}
 
 		struct pollfd waiting = {.fd = fd, .events = POLLIN, .revents = 0};
-		int ready = poll(&waiting, 1, 1000);
+		int ready = poll(&waiting, 1, 500);
 		if (ready <= 0) {
-			continue; // timeout, or a signal: go round and re-check the address
+			continue; // timeout, or a signal: go round and re-check the timers
 		}
 
 		uint8_t in[MDNS_BUF];
@@ -407,7 +484,10 @@ static void *mdns_thread(void *unused) {
 
 		uint8_t out[MDNS_BUF];
 		bool unicast = false;
-		int length = handle_query(in, (int)got, address, name, out, sizeof(out), &unicast);
+		const uint8_t *question = NULL;
+		int question_len = 0;
+		int length = handle_query(in, (int)got, &from, address, name, out, sizeof(out), &unicast, &question,
+								  &question_len);
 		if (length <= 0) {
 			continue;
 		}

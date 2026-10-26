@@ -6,6 +6,7 @@ Run from the repository root on a Linux host:
 make -C sonix-player/tests test
 make -C sonix-player/tests sanitize
 make -C sonix-player/tests swvolume
+make -C sonix-player/tests kblayout
 make -C sonix-player/tests eq
 make -C sonix-player/tests calculator
 make -C sonix-player/tests notes
