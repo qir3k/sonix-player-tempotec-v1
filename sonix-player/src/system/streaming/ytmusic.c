@@ -31,6 +31,20 @@
 #define YTMUSIC_OAUTH_TOKEN_URL "https://oauth2.googleapis.com/token"
 #define YTMUSIC_OAUTH_SCOPE "https://www.googleapis.com/auth/youtube.readonly"
 
+// The web client's public InnerTube key. It is not an account credential: it
+// is the key music.youtube.com hands every visitor, and every open-source
+// YouTube Music client carries it. It is used directly rather than scraped
+// from the page, because the page now answers a client whose User-Agent it
+// does not recognise -- and this player is not a browser -- with a "your
+// browser is deprecated" stub that contains no key at all. That stub is what
+// ytmusic_context_unreadable was.
+//
+// The client version is the page's build stamp, in the same "1.YYYYMMDD.01.00"
+// form the public clients use, derived from today's date so it never goes
+// stale in a shipped image.
+#define YTMUSIC_API_KEY "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30"
+#define YTMUSIC_CLIENT_VERSION_FALLBACK "1.20250101.01.00"
+
 static pthread_mutex_t session_lock = PTHREAD_MUTEX_INITIALIZER;
 static char session_cookie[YTMUSIC_COOKIE_MAX];
 static pthread_mutex_t api_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -42,7 +56,6 @@ static char oauth_client_secret[256];
 static char access_token[2048];
 static char refresh_token[1024];
 static time_t access_expires_at;
-static time_t context_fetched_at;
 
 static void set_error(char *out, size_t size, const char *reason) {
 	if (out && size) snprintf(out, size, "%s", reason ? reason : "ytmusic_request_failed");
@@ -405,44 +418,28 @@ ytmusic_login_state_t ytmusic_login_device_poll(ytmusic_device_login_t *login,
 	return YTMUSIC_LOGIN_ERROR;
 }
 
-static bool extract_html_value(const char *html, const char *key, char *out, size_t size) {
-	out[0] = '\0';
-	const char *p = strstr(html, key);
-	if (!p) return false;
-	p += strlen(key);
-	const char *end = strchr(p, '"');
-	if (!end || end == p || (size_t)(end - p) >= size) return false;
-	memcpy(out, p, (size_t)(end - p));
-	out[end - p] = '\0';
-	return true;
-}
-
+// The API key and the client version the request headers and bodies carry.
+// Fixed at the first request and never refetched: neither changes while the
+// player runs, and the version is today's date at boot.
 static bool ensure_context(char *error, size_t error_size) {
 	pthread_mutex_lock(&api_lock);
-	time_t now = time(NULL);
-	if (api_key[0] && client_version[0] && now - context_fetched_at < 6 * 60 * 60) {
+	if (api_key[0] && client_version[0]) {
 		pthread_mutex_unlock(&api_lock);
 		return true;
 	}
-	char *html = NULL;
-	if (!http_get(YTMUSIC_SITE, &html, NULL, 512 * 1024, YTMUSIC_TIMEOUT)) {
-		set_error(error, error_size, http_last_error() ? http_last_error() : "ytmusic_no_reply");
-		pthread_mutex_unlock(&api_lock);
-		return false;
+
+	snprintf(api_key, sizeof(api_key), "%s", YTMUSIC_API_KEY);
+	time_t now = time(NULL);
+	struct tm utc;
+	if (gmtime_r(&now, &utc)) {
+		snprintf(client_version, sizeof(client_version), "1.%04d%02d%02d.01.00", utc.tm_year + 1900,
+				 utc.tm_mon + 1, utc.tm_mday);
+	} else {
+		snprintf(client_version, sizeof(client_version), "%s", YTMUSIC_CLIENT_VERSION_FALLBACK);
 	}
-	char key[sizeof(api_key)] = "", version[sizeof(client_version)] = "";
-	bool ok = extract_html_value(html, "\"INNERTUBE_API_KEY\":\"", key, sizeof(key)) &&
-		  extract_html_value(html, "\"INNERTUBE_CLIENT_VERSION\":\"", version, sizeof(version));
-	free(html);
-	if (!ok) {
-		set_error(error, error_size, "ytmusic_context_unreadable");
-		pthread_mutex_unlock(&api_lock);
-		return false;
-	}
-	snprintf(api_key, sizeof(api_key), "%s", key);
-	snprintf(client_version, sizeof(client_version), "%s", version);
-	context_fetched_at = now;
 	pthread_mutex_unlock(&api_lock);
+	(void)error;
+	(void)error_size;
 	return true;
 }
 
@@ -608,6 +605,32 @@ static bool json_escape(const char *in, char *out, size_t size) {
 	}
 	out[used] = '\0';
 	return true;
+}
+
+// The charts landing page is a set of carousels; the tracks themselves are one
+// browse away, in the playlist behind each chart. This finds the first such
+// playlist ("VL...") the page offers, for the case where the songs chart did
+// not arrive as a list of rows -- signed out, YouTube returns only the video
+// charts. Without it the row opened a page with nothing playable on it.
+static bool first_chart_playlist(const char *body, char *out, size_t size) {
+	// The whole value, "VL" included: a playlist is browsed as "VL<id>" and a
+	// bare "PL..." is refused. Chart entries carry it complete.
+	static const char NEEDLE[] = "\"browseId\":\"";
+	const char *p = body;
+	while ((p = strstr(p, NEEDLE)) != NULL) {
+		p += sizeof(NEEDLE) - 1;
+		if (strncmp(p, "VL", 2) != 0) {
+			continue;
+		}
+		const char *end = strchr(p, '"');
+		if (!end || end == p) return false;
+		size_t n = (size_t)(end - p);
+		if (n + 1 > size) return false;
+		memcpy(out, p, n);
+		out[n] = '\0';
+		return true;
+	}
+	return false;
 }
 
 // Some Google endpoints protect JSON replies with the standard anti-XSSI
@@ -979,6 +1002,25 @@ int ytmusic_browse_chart_tracks(ytmusic_track_t *tracks, int limit,
 	char *body = NULL;
 	if (!youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
 	int count = collect_track_rows_compact(body, tracks, limit);
+
+	// Signed in, the page carries the songs chart as rows. Signed out it only
+	// links to the video charts, so follow the first playlist it offers and
+	// list that chart's tracks instead of reporting nothing.
+	if (count <= 0) {
+		char playlist[96];
+		if (first_chart_playlist(body, playlist, sizeof(playlist))) {
+			free(body);
+			body = NULL;
+			char playlist_request[320];
+			snprintf(playlist_request, sizeof(playlist_request),
+					 "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\""
+					 ",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"%s\"}",
+					 playlist);
+			if (youtubei_post("browse", playlist_request, false, &body, NULL, error, error_size)) {
+				count = collect_track_rows_compact(body, tracks, limit);
+			}
+		}
+	}
 	free(body);
 	if (count < 0) {
 		set_error(error, error_size, "ytmusic_unreadable_reply");
