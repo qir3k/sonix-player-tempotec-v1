@@ -2308,9 +2308,11 @@ int main(int argc, char **argv) {
 	}
 
 	qobuzcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
-	tidalcache_clear_card_cache(card_root);
-	// Tidal playback uses internal temporary storage, not tmpfs or the card.
-	tidalcache_set_root(TIDALCACHE_TEMP_ROOT);
+	// Tidal's playback cache goes to the same card. A hi-res track is one FLAC
+	// of tens -- sometimes hundreds -- of megabytes, which the internal data
+	// partition cannot hold; the card's free space is what decides whether a
+	// track fits.
+	tidalcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	tidalcache_clear(); // remove leftovers from a crash or power loss
 	podcastcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
 	podcastsubs_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
