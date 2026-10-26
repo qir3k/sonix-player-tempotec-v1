@@ -318,3 +318,32 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 	$(CC) $(UI_CPPFLAGS) $(filter-out -Werror,$(UI_CFLAGS)) -c $< -o $@
 
 -include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d))
+
+# The YouTube Music playback resolver against a fake network: the real
+# ytmusic.c linked with a fake http layer, so the resolver runs end to end on
+# any host (real http.c needs the POSIX socket API, which is the Linux hosts'
+# alone). The canned replies carry the Piped /streams shape and the refusals
+# Google sends today; the checks say which stream is picked and which error
+# stands. Guest search against the live endpoint is checked by hand; the
+# suite cannot reach the network, by design.
+YTM_SRC = test_ytmusic.c win_compat_host.c $(ROOT)/src/system/streaming/ytmusic.c \
+          $(ROOT)/src/system/streaming/streamkeys.c \
+          $(ROOT)/src/system/core/json.c $(ROOT)/src/system/core/config.c \
+          $(ROOT)/src/system/core/sha1.c
+.PHONY: ytmusic
+ytmusic: $(BUILD)/test_ytmusic
+	$(BUILD)/test_ytmusic
+
+# streamkeys.c reads its key out of a generated header; the tests run with no
+# key, which is exactly what the generated header says.
+$(BUILD)/build_gen/streamkeys_key.h:
+	@mkdir -p $(BUILD)/build_gen
+	echo '#define STREAMKEYS_KEY_LEN 0' > $@
+
+$(BUILD)/test_ytmusic: $(YTM_SRC) $(ROOT)/src/system/streaming/ytmusic.h \
+                       $(ROOT)/src/system/streaming/streamkeys.h \
+                       $(ROOT)/src/system/net/http.h $(ROOT)/src/system/core/config.h \
+                       $(BUILD)/build_gen/streamkeys_key.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(BUILD) -include win_compat_host.h \
+		-o $@ $(YTM_SRC) $(LDFLAGS) $(LDLIBS)

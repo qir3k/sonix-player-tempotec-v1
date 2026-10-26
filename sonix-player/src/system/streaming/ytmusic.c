@@ -834,6 +834,99 @@ static bool android_player(const char *video_id, char **response, char *error, s
 	return true;
 }
 
+// The relay: a Piped-API-compatible server (GET /streams/{videoId}).
+//
+// Google now demands a browser-grade attestation -- a PO token its JavaScript
+// computes -- from every first-party client before it hands out media URLs.
+// The phone-app client answers "precondition check failed", the web music
+// player "the page needs to be reloaded", the VR client "sign in to confirm
+// you're not a bot", all without giving one byte of streaming data. This
+// device has no JavaScript engine and no way to run that attestation, so a
+// direct guest stream from YouTube is no longer possible from here at all.
+//
+// A relay is a small self-hostable service (Piped, Invidious, or anything
+// that answers the same two endpoints) that runs the attestation on its own
+// connection and passes plain audio URLs back. It is a URL in the settings,
+// not a built-in host: public instances appear and die weekly, and pointing
+// every shipped player at one would break it the day it does. Search and
+// browsing need none of this -- the web music client still answers those
+// signed out, which is why only playback asks for a relay.
+//
+// Only the audio streams are read, and only the AAC-in-MP4 ones: the player
+// decodes AAC in an MP4 container, its Opus decoder reads Ogg and not the
+// WebM YouTube wraps Opus in, and the video streams are never fetched at all.
+#define YTMUSIC_RELAY_MAX_KBPS 320
+
+static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
+							int *duration, char *title, size_t title_size,
+							char *artist, size_t artist_size, char *error, size_t error_size) {
+	const char *configured = config_get("ytmusic", "relay_base", "");
+	if (!configured[0]) {
+		set_error(error, error_size, "ytmusic_relay_needed");
+		return false;
+	}
+	char base[256];
+	snprintf(base, sizeof(base), "%s", configured);
+	size_t base_len = strlen(base);
+	while (base_len > 0 && base[base_len - 1] == '/') base[--base_len] = '\0';
+	// http:// is accepted as well as https://: a relay is often a machine on
+	// the same LAN, where there is no certificate to serve. The stream URLs it
+	// hands out are its own affair, and Google's are https regardless.
+	if (!base_len || (strncmp(base, "https://", 8) != 0 && strncmp(base, "http://", 7) != 0)) {
+		set_error(error, error_size, "ytmusic_relay_needed");
+		return false;
+	}
+
+	char endpoint[320];
+	snprintf(endpoint, sizeof(endpoint), "%s/streams/%.11s", base, video_id);
+	char *body = NULL;
+	pthread_mutex_lock(&request_lock);
+	bool got = http_get(endpoint, &body, NULL, YTMUSIC_RESPONSE_LIMIT, YTMUSIC_TIMEOUT);
+	pthread_mutex_unlock(&request_lock);
+	if (!got) {
+		set_error(error, error_size, "ytmusic_relay_unreachable");
+		return false;
+	}
+
+	json_doc_t doc;
+	bool ok = false;
+	if (json_parse_limited(youtubei_json_start(body), &doc, 32000)) {
+		int root = json_root(&doc);
+		int streams = json_get(&doc, root, "audioStreams");
+		int best = -1;
+		long best_bitrate = -1;
+		for (int i = 0; i < json_len(&doc, streams); i++) {
+			int stream = json_at(&doc, streams, i);
+			char mime[96] = "", candidate[YTMUSIC_URL_MAX] = "";
+			json_obj_str(&doc, stream, "mimeType", mime, sizeof(mime));
+			if (strncasecmp(mime, "audio/mp4", 9) != 0) continue;
+			if (!json_obj_str(&doc, stream, "url", candidate, sizeof(candidate)) || !candidate[0]) continue;
+			long bitrate = json_obj_long(&doc, stream, "bitrate", 0);
+			if (bitrate <= 0 || bitrate > YTMUSIC_RELAY_MAX_KBPS * 1000L) continue;
+			if (bitrate > best_bitrate) {
+				best = stream;
+				best_bitrate = bitrate;
+			}
+		}
+		if (best >= 0 && json_obj_str(&doc, best, "url", url, url_size) && url[0]) {
+			ok = true;
+			if (duration) *duration = (int)json_obj_long(&doc, root, "duration", 0);
+			if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
+			if (artist && artist_size) json_obj_str(&doc, root, "uploader", artist, artist_size);
+		} else {
+			set_error(error, error_size, "ytmusic_aac_stream_unavailable");
+		}
+		json_free(&doc);
+	} else {
+		set_error(error, error_size, "ytmusic_relay_unreadable");
+	}
+	free(body);
+	if (ok) {
+		printf("ytmusic: relay served an audio stream for %.11s\n", video_id);
+	}
+	return ok;
+}
+
 static bool token_video_id(const json_doc_t *doc, int renderer, char out[YTMUSIC_ID_MAX]) {
 	static const char *const paths[] = {
 		"playlistItemData.videoId",
@@ -1257,19 +1350,13 @@ static bool pick_audio_format(const json_doc_t *doc, int root, char *url, size_t
 		}
 	}
 	if (best < 0) {
-		// A few tracks are only offered as the muxed progressive file. It is
-		// much bigger, but the MP4 reader takes the audio track out of it and
-		// the video is never decoded.
-		int progressive = json_path(doc, root, "streamingData.formats");
-		for (int i = 0; i < json_len(doc, progressive) && best < 0; i++) {
-			int format = json_at(doc, progressive, i);
-			char mime[96] = "", candidate[YTMUSIC_URL_MAX] = "";
-			json_obj_str(doc, format, "mimeType", mime, sizeof(mime));
-			if (strncasecmp(mime, "video/mp4", 9) != 0) continue;
-			if (json_obj_str(doc, format, "url", candidate, sizeof(candidate)) && candidate[0]) best = format;
-		}
+		// Nothing audio-only answered a plain URL. That is the end of it: the
+		// muxed progressive file carries a video track this player must never
+		// fetch, demux or decode, so a video stream is not a fallback but the
+		// one answer that is refused. player_reply_media() names the error.
+		return false;
 	}
-	return best >= 0 && json_obj_str(doc, best, "url", url, url_size) && url[0];
+	return json_obj_str(doc, best, "url", url, url_size) && url[0];
 }
 
 // One player reply: the track that was asked for, playable, with its media URL
@@ -1314,14 +1401,22 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 		}
 	}
 
-	// Nothing here needs an account: the phone app's player answers a signed-out
-	// request with direct media URLs, and requiring a sign-in was what made a
-	// track unplayable for anyone whose session Google had refused.
+	// Nothing here needs an account: search and the pages are answered signed
+	// out, and a track plays whether or not anybody has signed in.
 	//
-	// A saved browser session is still offered the web music player first, since
-	// that response knows the account's region and its premium stream. It is not
-	// required, and it is not tried with an OAuth token alone -- that client
-	// refuses such a token outright.
+	// The order of the three answers to "where are the bytes":
+	//
+	//   1. A saved browser session, through the web music player: it knows the
+	//      account's region and, with Premium, its own stream. Still first for
+	//      whoever has signed in; it is not tried with an OAuth token alone --
+	//      that client refuses such a token outright.
+	//   2. The phone-app player. Every request it sends is refused today (see
+	//      relay_audio_url), but it costs one fast 400, and the day Google
+	//      relaxes the wall it is the zero-config answer again.
+	//   3. The relay, last, so its error is the one the user sees: it is the
+	//      actionable one -- set a relay, or fix the one set -- while a
+	//      refusal from Google is not. Guest streaming goes through it, and
+	//      the audio-only filter there is the whole of what is fetched.
 	char cookie[YTMUSIC_COOKIE_MAX];
 	ytmusic_session_cookie(cookie, sizeof(cookie));
 	bool try_web = cookie[0] != '\0';
@@ -1329,8 +1424,8 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 	if (try_web) {
 		char request[1024];
 		snprintf(request, sizeof(request),
-			"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}",
-			video_id);
+			"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"%s\",\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}",
+			client_version[0] ? client_version : YTMUSIC_CLIENT_VERSION_FALLBACK, video_id);
 		char *body = NULL;
 		bool ok = youtubei_post("player", request, true, &body, NULL, error, error_size) &&
 			player_reply_media(body, video_id, url, url_size, duration, title, title_size,
@@ -1341,11 +1436,22 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 	}
 
 	char *body = NULL;
-	if (!android_player(video_id, &body, error, error_size)) return false;
-	bool ok = player_reply_media(body, video_id, url, url_size, duration, title, title_size,
-								 artist, artist_size, error, error_size);
-	free(body);
-	return ok;
+	bool android_ok = android_player(video_id, &body, error, error_size);
+	if (android_ok) {
+		bool ok = player_reply_media(body, video_id, url, url_size, duration, title, title_size,
+									 artist, artist_size, error, error_size);
+		free(body);
+		if (ok) return true;
+	} else {
+		free(body);
+	}
+	if (error && error_size) error[0] = '\0';
+
+	if (relay_audio_url(video_id, url, url_size, duration, title, title_size, artist, artist_size,
+						error, error_size)) {
+		return true;
+	}
+	return false;
 }
 
 static void clean_tag_value(char *value) {
