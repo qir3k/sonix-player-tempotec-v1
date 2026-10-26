@@ -290,36 +290,88 @@ int kblayout_variant_count(const char *key) {
 // which accent a held key offers first
 //
 // The strip is a fixed list per key, and on a phone its order is the one of the
-// language you type in: holding E in Polish offers ę before é, in English é
-// before ę. All of them are still there, in every language -- the keyboard stays
-// universal -- only the order changes, so the one that is wanted is the first
-// cell under the finger.
+// language you type in: holding E in Polish offers ę before é, in French é
+// before ę. All of them are still there, in every language -- the keyboard
+// stays universal -- only the order changes, so the one that is wanted is the
+// first cell under the finger.
 //
-// The language is the swipe one: it is the setting that names the language
-// being typed in, and it is on the same page as the switch for it. With no
-// preference (both, or a layout whose letters have no list here) the table's own
-// order stands, which is the one this keyboard has always had.
+// The alphabet the keyboard is typing in decides: the layout itself, since the
+// layout is what says which language's letters are under the keys. A Cyrillic
+// layout has no Latin accents to prefer, so the player's default layout answers
+// for it. An old [keyboard] swipe_lang setting (from the swipe typing that is
+// gone) still wins when it names a language, for a choice that was made when it
+// was the one that counted.
 // ---------------------------------------------------------------------------
 
-// The letters whose accents belong to Polish.
-// ż before ź, as on a Polish keyboard's own strip: holding Z in Polish has to
-// offer ż first, which is the letter, and ź second, which is the rare one.
+// The accents each alphabet puts first on a held key, in that language's own
+// order. Only these are reordered; every other variant the key offers keeps
+// the table's order behind them, so no letter is ever lost, only demoted.
+//
+// Polish: ż before ź, as on a Polish keyboard's own strip -- holding Z in
+// Polish has to offer ż first, which is the letter, and ź second, which is
+// the rare one.
 static const char *const ACCENTS_POLISH = "\xc4\x85\xc4\x87\xc4\x99\xc5\x82\xc5\x84\xc3\xb3\xc5\x9b\xc5\xbc\xc5\xba"; // ą ć ę ł ń ó ś ż ź
+// German: the umlauts are the alphabet's own letters, then the ones borrowed
+// names carry.
+static const char *const ACCENTS_GERMAN = "\xc3\xa4\xc3\xb6\xc3\xbc\xc3\x9f"; // ä ö ü ß
+// Spanish: the n, then the acute and diaeresis vowels a grave accent order puts
+// far down the strip.
+static const char *const ACCENTS_SPANISH = "\xc3\xb1\xc3\xa1\xc3\xa9\xc3\xad\xc3\xb3\xc3\xba\xc3\xbc"; // ñ á é í ó ú ü
+// French: grave and acute in the order French words actually use them.
+static const char *const ACCENTS_FRENCH =
+	"\xc3\xa9\xc3\xa8\xc3\xa2\xc3\xaa\xc3\xab\xc3\xa7\xc3\xa0\xc3\xb9"; // é è â ê ë ç à ù
+// Portuguese: the cedilla and the tilted vowels first.
+static const char *const ACCENTS_PORTUGUESE =
+	"\xc3\xa7\xc3\xa3\xc3\xb5\xc3\xa1\xc3\xa9\xc3\xad\xc3\xb3\xc3\xba\xc3\xa2\xc3\xea\xc3\xb4"; // ç ã õ á é í ó ú â ê ô
+// Italian: the vowels a grave accent strip buries.
+static const char *const ACCENTS_ITALIAN = "\xc3\xa0\xc3\xa8\xc3\xa9\xc3\xac\xc3\xb2\xc3\xb9"; // à è é ì ò ù
 // And the ones the western European languages use, which English reads as the
 // accents on borrowed names.
 static const char *const ACCENTS_ENGLISH =
 	"\xc3\xa1\xc3\xa0\xc3\xa9\xc3\xa8\xc3\xaa\xc3\xab\xc3\xad\xc3\xac\xc3\xb3\xc3\xb2\xc3\xb6\xc3\xa4\xc3\xbc\xc3\xa7\xc3\xb1";
 
+// The accents the alphabet being typed in puts first. A layout that has no
+// list of its own shares the western European one: its letters are read with
+// those accents even when the language writes them only in borrowed names.
+static const char *accents_for(kblayout_t layout) {
+	switch (layout) {
+	case KB_LAYOUT_POLISH:
+		return ACCENTS_POLISH;
+	case KB_LAYOUT_GERMAN:
+		return ACCENTS_GERMAN;
+	case KB_LAYOUT_SPANISH:
+		return ACCENTS_SPANISH;
+	case KB_LAYOUT_FRENCH:
+		return ACCENTS_FRENCH;
+	case KB_LAYOUT_PORTUGUESE:
+		return ACCENTS_PORTUGUESE;
+	case KB_LAYOUT_ITALIAN:
+		return ACCENTS_ITALIAN;
+	case KB_LAYOUT_ENGLISH:
+	case KB_LAYOUT_DUTCH:
+	case KB_LAYOUT_RUSSIAN:
+	default:
+		return ACCENTS_ENGLISH;
+	}
+}
+
 static int accent_preference(kblayout_t layout, char *out, size_t size) {
 	out[0] = '\0';
-	if (layout == KB_LAYOUT_POLISH || kblayout_default() == KB_LAYOUT_POLISH ||
-		config_get_int("keyboard", "swipe_lang", 0) == 1) {
-		snprintf(out, size, "%s", ACCENTS_POLISH);
-	} else if (config_get_int("keyboard", "swipe_lang", 0) == 0) {
-		snprintf(out, size, "%s", ACCENTS_ENGLISH);
-	} else {
-		return 0; // both: no language is "the" one, so the table's order stands
+	// The swipe-language setting is a leftover of the swipe typing that is gone
+	// (it named the language being typed in); a saved 1 still means Polish.
+	int swipe = (int)config_get_int("keyboard", "swipe_lang", -1);
+	if (swipe == 1 || swipe == 0) {
+		snprintf(out, size, "%s", swipe == 1 ? ACCENTS_POLISH : ACCENTS_ENGLISH);
+		return 1;
 	}
+	// Otherwise the keyboard's own alphabet decides: the layout the keyboard is
+	// typing in now, or -- when that one has no letters on these keys -- the
+	// default layout of the player.
+	kblayout_t which = layout;
+	if (which == KB_LAYOUT_RUSSIAN) {
+		which = kblayout_default();
+	}
+	snprintf(out, size, "%s", accents_for(which));
 	return 1;
 }
 

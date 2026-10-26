@@ -26,6 +26,7 @@
 
 #include "src/system/library/albumart.h"
 #include "src/system/image/art_shrink.h"
+#include "src/system/bluetooth/bluetooth.h"
 #include "src/system/core/config.h"
 #include "src/system/library/cue.h"
 #include "src/system/playback/playlist.h"
@@ -72,6 +73,19 @@
 // every few seconds for as long as it is connected.
 #define PERSISTENT_IDLE_MS 30000
 #define PENDING_LINKS 2
+
+// Sharing the Bluetooth radio with the music. A2DP and a SonixLink transfer
+// run over the same radio, and the encoder's packets are the ones that cannot
+// wait: when the player is sending audio to headphones, a transfer on the
+// Bluetooth link is paced to a trickle (the artwork the now-playing screen
+// wants still arrives, a moment later) and the two requests that are pure bulk
+// -- the index and the whole thumbnails file -- are refused until the music
+// stops, exactly as they are refused during a scan. Nothing of this touches
+// Wi-Fi clients: they have a radio of their own. [wireless] sonixlink_bt_bg,
+// on by default, turns the whole policy off.
+#define BT_BG_CHUNK_MS 150
+
+static bool bt_bg_enabled(void) { return config_get_int("wireless", "sonixlink_bt_bg", 1) != 0; }
 
 // How much of a request is read before it is judged nonsense. These are short.
 #define REQUEST_MAX 2048
@@ -542,6 +556,11 @@ typedef struct {
 
 static client_t clients[MAX_CLIENTS];
 
+// True while `c` is a Bluetooth link that has to stay out of the audio's way.
+static bool bt_audio_busy(const client_t *c) {
+	return c->persistent && bt_bg_enabled() && bluetooth_audio_active();
+}
+
 static const char *connection_header(const client_t *c) {
 	return c->persistent ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
 }
@@ -910,7 +929,14 @@ static void route_info(client_t *c) {
 	}
 	buf_json_field(&j, "accent", s.accent[0] ? s.accent : "#3584e4", true);
 	buf_fmt(&j, "\"covers_available\":%s,", have_covers ? "true" : "false");
-	buf_fmt(&j, "\"covers_size\":%ld,\"covers_mtime\":%ld}", covers_size, covers_mtime);
+	buf_fmt(&j, "\"covers_size\":%ld,\"covers_mtime\":%ld,", covers_size, covers_mtime);
+	// The transport hint: over Wi-Fi a transfer costs the audio nothing, over
+	// Bluetooth it shares the radio with it. A phone seeing Wi-Fi here has a
+	// reason to move its bulk syncs to the network link.
+	wifi_status_t wifi;
+	wifi_get_status(&wifi);
+	buf_fmt(&j, "\"wifi_available\":%s}",
+			wifi.state == WIFI_STATE_CONNECTED && wifi.ip[0] ? "true" : "false");
 	reply_json(c, &j);
 }
 
@@ -949,6 +975,14 @@ static void route_state(client_t *c) {
 // The index file, sent from disk. Refused while a scan is running: the file is
 // being rewritten, and half a database is worse than none.
 static void route_db(client_t *c) {
+	// A whole index is megabytes, and over Bluetooth those are the audio's
+	// megabytes. Refused rather than slowed: a sync the phone will retry when
+	// the music stops beats one that stutters every track into the bargain.
+	// The idle timeout below closes the connection the refusal left behind.
+	if (bt_audio_busy(c)) {
+		reply_status(c, "503 Service Unavailable", "playing; retry when the music stops");
+		return;
+	}
 	sonixlink_state_t s;
 	state_copy(&s);
 	if (s.scanning) {
@@ -1481,6 +1515,12 @@ static void route_playlist(client_t *c, const char *query) {
 // from the index it has. What is inside is already decoded and scaled, so the
 // phone neither decodes nor resizes anything.
 static void route_covers(client_t *c) {
+	// The same reasoning as the index in route_db(): this file can be a hundred
+	// megabytes, and over Bluetooth it is the audio's hundred.
+	if (bt_audio_busy(c)) {
+		reply_status(c, "503 Service Unavailable", "playing; retry when the music stops");
+		return;
+	}
 	char path[sizeof(thumbs_path)];
 	pthread_mutex_lock(&lock);
 	snprintf(path, sizeof(path), "%s", thumbs_path);
@@ -2447,7 +2487,18 @@ static void read_client(client_t *c) {
 
 // Writes what is ready, then the file if there is one. Never blocks: whatever
 // the socket would not take now goes on the next turn of the loop.
+//
+// On a Bluetooth link while music is playing, sending is also paced: one
+// turn's worth of bytes every BT_BG_CHUNK_MS. The radio's idle gaps between
+// audio packets are what the transfer lives in, and the headroom left over is
+// what keeps the encoder's queue from ever filling -- a stalled transfer is
+// invisible, a dropped audio packet is heard.
 static void write_client(client_t *c) {
+	static uint32_t bt_last_send;
+	if (bt_audio_busy(c) && (uint32_t)(now_ms() - bt_last_send) < BT_BG_CHUNK_MS) {
+		return;
+	}
+
 	while (c->sent < c->out.len) {
 		ssize_t n = send(c->fd, c->out.data + c->sent, c->out.len - c->sent, MSG_NOSIGNAL);
 		if (n > 0) {
@@ -2493,6 +2544,9 @@ static void write_client(client_t *c) {
 		}
 		client_close(c);
 		return;
+	}
+	if (bt_audio_busy(c)) {
+		bt_last_send = now_ms(); // this chunk's turn is spent
 	}
 	c->file_left -= (long)got;
 	if (c->file_left <= 0) {

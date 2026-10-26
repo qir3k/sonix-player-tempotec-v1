@@ -78,6 +78,18 @@ $(BUILD)/test_swvolume: $(SWVOL_SRC) $(ROOT)/src/system/audio/swvolume.h \
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(SWVOL_SRC) $(LDFLAGS) $(LDLIBS)
 
+# The accents a held key offers first, per layout: the strips a long press
+# opens. Plain C, no LVGL; the config is a private file of the test's own.
+KB_SRC = test_kblayout.c $(ROOT)/src/system/input/kblayout.c $(ROOT)/src/system/core/config.c
+.PHONY: kblayout
+kblayout: $(BUILD)/test_kblayout
+	$(BUILD)/test_kblayout
+
+$(BUILD)/test_kblayout: $(KB_SRC) $(ROOT)/src/system/input/kblayout.h \
+                        $(ROOT)/src/system/core/config.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(KB_SRC) $(LDFLAGS) $(LDLIBS)
+
 # The graphic EQ, PEQ and MSEB on stereo PCM -- the same eq_process() radio
 # stations go through. Plain C, no ALSA and no LVGL.
 EQ_SRC = test_eq.c $(ROOT)/src/system/audio/eq.c $(ROOT)/src/system/core/config.c
