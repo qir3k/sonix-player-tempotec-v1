@@ -150,7 +150,11 @@ struct keyboard_s {
 	// The strip of accented letters a held key opens (kblayout_variant), and
 	// which of them the finger is on. `variant_key` is the cap the strip was
 	// opened for; `variant_swallow` eats the click that ends the hold, since
-	// the letter is written on release instead.
+	// the letter is written on release instead. `variant_mirrored` says the
+	// strip runs right to left (a key on the right half of the keyboard): the
+	// cells then carry the variants in reverse, so the one the locale prefers
+	// sits under the finger rather than at the far end -- holding O on a
+	// Polish keyboard has to hand you ó, wherever on the strip it lands.
 	lv_obj_t *variants;
 	lv_obj_t *variant_cell[KB_LAYOUT_MAX_VARIANTS];
 	lv_obj_t *variant_label[KB_LAYOUT_MAX_VARIANTS];
@@ -158,6 +162,7 @@ struct keyboard_s {
 	lv_obj_t *variant_btn;
 	int variant_count;
 	int variant_sel; // -1 while the strip is closed
+	bool variant_mirrored;
 	bool variant_swallow;
 
 	bool mode_long_pressed; // the "123" key opened the layout menu; eat its click
@@ -787,6 +792,10 @@ static void kb_variants_open(keyboard_t *kb, lv_obj_t *key, const char *cap) {
 			lv_obj_set_hidden(kb->variant_cell[i], true);
 		}
 	}
+	// Not mirrored yet: whether the strip runs away from or towards the finger
+	// is decided below, from where the key sits, and the cells are refilled if
+	// it runs towards it.
+	kb->variant_mirrored = false;
 
 	kb_preview_hide(kb);
 	lv_obj_set_hidden(kb->variants, false);
@@ -811,6 +820,14 @@ static void kb_variants_open(keyboard_t *kb, lv_obj_t *key, const char *cap) {
 		x = key_x - cell_w / 2 - KB_VARIANT_PAD;
 	} else {
 		x = key_x + cell_w / 2 + KB_VARIANT_PAD - w;
+		// The strip runs right to left, so the cell under the finger is the
+		// last one. The variants are laid out in reverse, preferred first from
+		// the finger's end: holding O must offer ó where the finger already
+		// is, not make it travel the whole strip for it.
+		kb->variant_mirrored = true;
+		for (int i = 0; i < count; i++) {
+			lv_label_set_text(kb->variant_label[i], kblayout_variant(kb->layout, cap, count - 1 - i));
+		}
 	}
 	if (x > host_w - w - 2) {
 		x = host_w - w - 2;
@@ -865,7 +882,10 @@ static void kb_variants_cb(lv_event_t *e) {
 		return;
 	}
 	if (code == LV_EVENT_RELEASED && kb->field) {
-		kb_type(kb, kblayout_variant(kb->layout, kb->variant_key, kb->variant_sel));
+		// A mirrored strip shows the variants in reverse; the cell the finger
+		// is on names the logical variant it holds.
+		int logical = kb->variant_mirrored ? kb->variant_count - 1 - kb->variant_sel : kb->variant_sel;
+		kb_type(kb, kblayout_variant(kb->layout, kb->variant_key, logical));
 	}
 	kb_variants_close(kb); // RELEASED or PRESS_LOST
 }

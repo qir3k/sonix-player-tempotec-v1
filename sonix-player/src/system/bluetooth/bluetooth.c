@@ -14,6 +14,7 @@
 #include <strings.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
@@ -463,6 +464,16 @@ static bool process_running(const char *name) {
 	int found = 0;
 	for_each_process(name, count_one, &found);
 	return found > 0;
+}
+
+// One process raised to the nice level carried in `user` (a negative int).
+// Applied to bluealsa when the daemon has no --io-rt-priority of its own: the
+// encoder threads it creates per connection inherit the main thread's nice,
+// and without this they sit at zero, where a 400 ms interface pass at a track
+// change is long enough for the sink to hear the encoder miss packets.
+static void renice_one(pid_t pid, void *user) {
+	int nice_value = *(int *)user;
+	setpriority(PRIO_PROCESS, pid, nice_value);
 }
 
 // Kilobytes of resident memory held by the processes with this name. Only for
@@ -1304,8 +1315,25 @@ static bool ensure_bluealsa(void) {
 			snprintf(rtprio, sizeof(rtprio), "--io-rt-priority=%d", wanted);
 			fprintf(stderr, "bluetooth: encoder threads at SCHED_FIFO %d\n", wanted);
 		} else if (wanted > 0) {
-			fprintf(stderr, "bluetooth: this bluealsa has no --io-rt-priority; the encoder stays at normal "
-							"priority\n");
+			// The daemon cannot take SCHED_FIFO, so the next best thing: raise
+			// it in the nice order instead. Its connection threads are created
+			// after this point and inherit it, which is what keeps the encoder
+			// fed while the interface redraws at a track change. A refused
+			// setpriority (not root) leaves things as they were, quietly.
+			int nice_value = -wanted;
+			if (nice_value < -19) {
+				nice_value = -19; // the lowest nice there is
+			}
+			int reniced = 0;
+			for_each_process("bluealsa", renice_one, &nice_value);
+			for_each_process("bluealsa", count_one, &reniced);
+			if (reniced) {
+				fprintf(stderr, "bluetooth: this bluealsa has no --io-rt-priority; reniced to %d instead\n",
+						nice_value);
+			} else {
+				fprintf(stderr, "bluetooth: this bluealsa has no --io-rt-priority; the encoder stays at normal "
+								"priority\n");
+			}
 		}
 		// LDAC's bit rate. A daemon option and not a per-link one: it is read
 		// here and nowhere else, which is why changing it restarts the daemon.
