@@ -636,11 +636,16 @@ static bool source_read_line(source_t *src, char *out, size_t out_size) {
 // The API's own answers are not chunked, but a proxy in front of one of the
 // mirrors may chunk a long reply -- and a long reply is exactly what a list of
 // stations is.
-static void read_chunked(source_t *src, body_t *b) {
+//
+// Returns true only when the terminating zero-length chunk was seen. Every
+// other exit is a connection that ended inside the body, and the caller has to
+// treat what arrived as broken: half a JSON document parses into nothing, and
+// an audio segment with a hole in it is worse than no segment at all.
+static bool read_chunked(source_t *src, body_t *b) {
 	char line[64];
 	for (;;) {
 		if (!source_read_line(src, line, sizeof(line))) {
-			return;
+			return false; // the body ended before the next chunk length did
 		}
 
 		// The length may carry chunk extensions after a ';'.
@@ -650,7 +655,7 @@ static void read_chunked(source_t *src, body_t *b) {
 		}
 		long len = strtol(line, NULL, 16);
 		if (len <= 0) {
-			return; // the last chunk (trailers, if any, are of no interest)
+			return true; // the last chunk (trailers, if any, are of no interest)
 		}
 
 		char buf[8192];
@@ -658,17 +663,17 @@ static void read_chunked(source_t *src, body_t *b) {
 		while (left > 0) {
 			size_t want = left > sizeof(buf) ? sizeof(buf) : left;
 			if (!source_read_exact(src, buf, want)) {
-				return;
+				return false;
 			}
 			if (!body_append(b, buf, want)) {
-				return;
+				return false;
 			}
 			left -= want;
 		}
 
 		char crlf[2];
 		if (!source_read_exact(src, crlf, 2)) {
-			return;
+			return false;
 		}
 	}
 }
@@ -795,7 +800,15 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 
 	if (chunked) {
 		source_t src = {.conn = &conn, .lead = lead, .lead_len = (size_t)lead_len, .lead_pos = 0};
-		read_chunked(&src, &body);
+		if (!read_chunked(&src, &body)) {
+			// The connection ended inside the chunked body: the same broken
+			// answer the Content-Length path refuses above.
+			fprintf(stderr, "http: %s%.*s -> chunked body cut short\n", u->host, (int)strcspn(u->path, "?"),
+					u->path);
+			conn_close(&conn);
+			free(body.data);
+			return false;
+		}
 	} else {
 		if (lead_len > 0 && !body_append(&body, lead, (size_t)lead_len)) {
 			conn_close(&conn);
