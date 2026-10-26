@@ -192,16 +192,6 @@ static lv_obj_t *list_empty;
 static void rebuild_home(void);
 static void row_clicked_cb(lv_event_t *e);
 
-// "3:42"
-static void duration_text(int seconds, char *out, size_t size) {
-	if (seconds <= 0) {
-		out[0] = '\0';
-		return;
-	}
-	snprintf(out, size, "%d:%02d", seconds / 60, seconds % 60);
-}
-
-// ---------------------------------------------------------------------------
 // the per-row menu
 //
 // Not every list has something to offer on a row, and those that do offer
@@ -797,7 +787,7 @@ static void fill_list(int from) {
 		case JOB_FAV_TRACKS: {
 			const qobuz_track_t *t = &result_tracks[i];
 			char length[16];
-			duration_text(t->duration, length, sizeof(length));
+			format_row_duration(t->duration, length, sizeof(length));
 			if (!t->streamable) {
 				snprintf(detail, sizeof(detail), "%s \xC2\xB7 %s", t->artist, tr("not_included"));
 			} else if (t->hires && t->sample_rate > 0) {

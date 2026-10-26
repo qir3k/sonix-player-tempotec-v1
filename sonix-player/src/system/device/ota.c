@@ -48,7 +48,10 @@ static bool release_valid;
 static char repo[128];
 static char stem[64];
 
-static unsigned char chunk[64 * 1024];
+// The download chunk is taken for the length of the update and given back: a
+// firmware update happens once in the life of the device, and 64 KB is a
+// poor thing to hold resident for it the rest of the time.
+#define OTA_CHUNK_BYTES (64 * 1024)
 
 // ---------------------------------------------------------------------------
 // state
@@ -408,6 +411,14 @@ static ota_result_t do_download(void) {
 		return cancelled() ? OTA_CANCELLED : OTA_DOWNLOAD_FAILED;
 	}
 
+	unsigned char *chunk = malloc(OTA_CHUNK_BYTES);
+	if (!chunk) {
+		http_stream_close(&stream);
+		fclose(f);
+		unlink(part_path);
+		return OTA_DOWNLOAD_FAILED;
+	}
+
 	pthread_mutex_lock(&lock);
 	active_stream = &stream;
 	bool stop = cancel_requested;
@@ -424,7 +435,7 @@ static ota_result_t do_download(void) {
 	long done = 0;
 	while (r == OTA_OK && !stop && done < release.size) {
 		long want = release.size - done;
-		int n = http_stream_read(&stream, chunk, want < (long)sizeof(chunk) ? (int)want : (int)sizeof(chunk));
+		int n = http_stream_read(&stream, chunk, want < (long)OTA_CHUNK_BYTES ? (int)want : (int)OTA_CHUNK_BYTES);
 		if (n <= 0) {
 			printf("ota: the connection ended at %ld of %ld bytes\n", done, release.size);
 			r = OTA_DOWNLOAD_FAILED;
@@ -448,6 +459,7 @@ static ota_result_t do_download(void) {
 	active_stream = NULL;
 	pthread_mutex_unlock(&lock);
 	http_stream_close(&stream);
+	free(chunk);
 
 	if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
 		r = r == OTA_OK ? OTA_DOWNLOAD_FAILED : r;
