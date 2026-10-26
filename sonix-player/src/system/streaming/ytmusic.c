@@ -1125,22 +1125,14 @@ int ytmusic_search_items(const char *query, ytmusic_filter_t filter,
 		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"query\":\"%s\",\"params\":\"%s\"}",
 		escaped, params);
 	char *body = NULL;
-	if (!youtubei_post("search", request, false, &body, NULL, error, error_size)) return -1;
+	// Search is public. Never attach the Google OAuth bearer token here: the
+	// music catalogue can answer an OAuth request with a successful but empty
+	// page, even though the same query works for a signed-out visitor.
+	if (!youtubei_post_ex("search", request, false, true, &body, NULL, error, error_size)) return -1;
+	size_t response_bytes = strlen(body);
 	int count = collect_items_compact(body, items, limit);
 	free(body);
-	// A 200 with no rows in it is how the music endpoints refuse a session
-	// they do not like: no error status, just an empty page. Search is public,
-	// so ask again as a visitor rather than telling a signed-in user that
-	// nothing matched -- that empty signed-in search was the original bug.
-	if (count == 0 && account_attached()) {
-		char *guest = NULL;
-		if (error && error_size) error[0] = '\0';
-		if (youtubei_post_ex("search", request, false, true, &guest, NULL, error, error_size)) {
-			count = collect_items_compact(guest, items, limit);
-			free(guest);
-		}
-		if (error && error_size) error[0] = '\0';
-	}
+	fprintf(stderr, "ytmusic: public search returned %d rows from %zu response bytes\n", count, response_bytes);
 	if (count < 0) set_error(error, error_size, "ytmusic_unreadable_reply");
 	return count;
 }
@@ -1158,21 +1150,25 @@ int ytmusic_browse_items(const char *browse_id, ytmusic_item_t *items, int limit
 		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"%s\"}",
 		browse_id);
 	char *body = NULL;
-	if (!youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
+	bool used_account = false;
+	// Public albums, charts and search-result cards should load even when a
+	// saved OAuth session is not accepted by the Music catalogue. Try them as a
+	// visitor first; an account-owned playlist can still fall through below.
+	if (!youtubei_post_ex("browse", request, false, true, &body, NULL, error, error_size)) {
+		if (!account_attached() || !youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
+		used_account = true;
+	}
 	int count = collect_items_compact(body, items, limit);
 	free(body);
-	// Charts, playlists and every other public page answer an empty body to a
-	// session they will not honour. The visitor's copy of the same page is
-	// what the signed-out player shows, so show that instead of nothing.
-	if (count == 0 && account_attached()) {
-		char *guest = NULL;
-		if (error && error_size) error[0] = '\0';
-		if (youtubei_post_ex("browse", request, false, true, &guest, NULL, error, error_size)) {
-			count = collect_items_compact(guest, items, limit);
-			free(guest);
+	if (count == 0 && !used_account && account_attached()) {
+		char *private_page = NULL;
+		if (youtubei_post("browse", request, false, &private_page, NULL, error, error_size)) {
+			count = collect_items_compact(private_page, items, limit);
+			free(private_page);
 		}
 		if (error && error_size) error[0] = '\0';
 	}
+	fprintf(stderr, "ytmusic: browse %s returned %d rows\n", browse_id, count);
 	if (count < 0) {
 		set_error(error, error_size, "ytmusic_unreadable_reply");
 		return count;
@@ -1230,20 +1226,13 @@ int ytmusic_explore_sections(ytmusic_section_t *sections, int limit,
 	const char *request =
 		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"FEmusic_explore\"}";
 	char *body = NULL;
-	if (!youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
+	// Explore is public too; keep it independent of an attached account just
+	// like search, so a rejected token cannot turn the front page empty.
+	if (!youtubei_post_ex("browse", request, false, true, &body, NULL, error, error_size)) return -1;
+	size_t response_bytes = strlen(body);
 	int count = collect_sections(body, sections, limit);
 	free(body);
-	// As with search: an account the store will not honour gets an empty
-	// Explore, and the visitor's front page is the page to show instead.
-	if (count == 0 && account_attached()) {
-		char *guest = NULL;
-		if (error && error_size) error[0] = '\0';
-		if (youtubei_post_ex("browse", request, false, true, &guest, NULL, error, error_size)) {
-			count = collect_sections(guest, sections, limit);
-			free(guest);
-		}
-		if (error && error_size) error[0] = '\0';
-	}
+	fprintf(stderr, "ytmusic: public Explore returned %d sections from %zu response bytes\n", count, response_bytes);
 	if (!count) set_error(error, error_size, "ytmusic_explore_empty");
 	return count;
 }
