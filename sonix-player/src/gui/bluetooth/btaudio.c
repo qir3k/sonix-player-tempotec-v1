@@ -41,6 +41,7 @@ static lv_timer_t *poll_timer;
 // the headphones answered with, so the rows are built every time it opens.
 static lv_obj_t *codec_screen;
 static lv_obj_t *codec_list;
+static bool resume_after_bt_reconnect;
 
 // ---------------------------------------------------------------------------
 // switching the output over
@@ -50,7 +51,7 @@ static lv_obj_t *codec_list;
 // while something is playing would not be heard until the next track. Rather
 // than reach into the playback thread, the track is reloaded where it stands:
 // the same path a normal track change takes, and one it is known to survive.
-static void restart_playback_if_running(void) {
+static void restart_playback_if_running(bool resume_paused) {
 	char file[512];
 	audio_get_current_file(file, sizeof(file));
 	if (!file[0]) {
@@ -68,7 +69,7 @@ static void restart_playback_if_running(void) {
 
 	audio_play(file);
 	audio_seek(position);
-	if (status == AUDIO_STATUS_PAUSED) {
+	if (status == AUDIO_STATUS_PAUSED && !resume_paused) {
 		audio_pause();
 	}
 	player_refresh_now_playing();
@@ -378,7 +379,7 @@ static void routing_watch_cb(lv_timer_t *timer) {
 		known_generation = generation;
 		if (now_bt && strcmp(known, now) == 0) {
 			printf("btaudio: '%s' is a new bluealsa's now; reloading the track\n", now);
-			restart_playback_if_running();
+			restart_playback_if_running(false);
 			return;
 		}
 	}
@@ -397,10 +398,18 @@ static void routing_watch_cb(lv_timer_t *timer) {
 	// would otherwise carry the album on out of the jack. Pause first: the
 	// reload keeps whatever state it finds.
 	if (was_bt && !now_bt) {
+		// This pause is ours: when the remembered headphones return, reopen at
+		// the saved position and resume instead of leaving playback stranded in
+		// PAUSED until the user taps play manually.
+		resume_after_bt_reconnect = audio_get_status() == AUDIO_STATUS_PLAYING;
 		player_output_unplugged("the Bluetooth headphones");
 	}
 
-	restart_playback_if_running();
+	bool resume = now_bt && resume_after_bt_reconnect;
+	restart_playback_if_running(resume);
+	if (now_bt) {
+		resume_after_bt_reconnect = false;
+	}
 }
 
 static void screen_loaded_cb(lv_event_t *e) {

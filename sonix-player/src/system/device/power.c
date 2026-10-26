@@ -188,7 +188,7 @@ static uint32_t g_screen_off_at; // lv_tick when the panel last went dark
 // In receiver mode a backlight-only blank preserves panel scan-out, so waking
 // the screen does not reset the panel or force a full-screen render on the
 // core carrying Bluetooth audio.
-static bool g_receiver_light_only;
+static bool g_audio_light_only;
 static bool g_resume_after_suspend;
 
 // Whether the panel is blanked, which is not the same question as whether the
@@ -1639,21 +1639,16 @@ void power_screen_off(void) {
 	// nothing is listening for the gesture.
 	power_set_double_tap_wake(g_double_tap_wake);
 
-	// A phone feeding the DAC makes this transition audio-critical. The fade
-	// and the screensaver pre-draw below are both on the UI thread, and the
-	// capture ring is only 80 ms deep: on the one core that decodes the
-	// incoming stream they come out of the music as a gap of a second or
-	// more. Neither is needed here. The panel is going dark, and the next wake
-	// paints its own first frame over a held-back backlight (power_screen_on's
-	// wake hook and wake_repaint), so the screen goes down at once and the
-	// pre-draw waits for a wake that will not be feeding a phone.
+	// Bluetooth audio makes this transition audio-critical in either direction.
+	// The screensaver pre-draw and full wake repaint run on the UI thread, which
+	// shares this single core with BlueALSA's transmitter/receiver work. Keep the
+	// panel scanning its existing frame and only dim the backlight while either
+	// A2DP direction is active; there is no need to reset and redraw the panel.
 	bool receiver = btreceiver_is_active();
-	// During receiver playback a panel reset and the full wake repaint take
-	// hundreds of milliseconds on the same core that drains the A2DP PCM. Keep
-	// scan-out alive whenever possible and only change the backlight. If this
-	// board has no independent brightness control, leave the panel lit rather
-	// than blanking it and forcing that audio-starving repaint on wake.
-	bool light_only = receiver;
+	bool transmitter = bluetooth_audio_active();
+	// If this board has no independent brightness control, leave the panel lit
+	// rather than blanking it and forcing an audio-starving repaint on wake.
+	bool light_only = receiver || transmitter;
 
 	set_indevs_enabled(false); // no touch events into LVGL while the panel is down
 	if (light_only) {
@@ -1664,8 +1659,9 @@ void power_screen_off(void) {
 			backlight_write(BRIGHTNESS_MIN);
 		}
 		backlight_hold();
-		g_receiver_light_only = true;
-		fprintf(stderr, "power: receiver screen off (panel scan retained; backlight-only)\n");
+		g_audio_light_only = true;
+		fprintf(stderr, "power: %s screen off (panel scan retained; backlight-only)\n",
+				receiver ? "receiver" : "Bluetooth transmitter");
 	} else {
 		if (receiver) {
 			backlight_write(BRIGHTNESS_MIN);
@@ -1685,11 +1681,10 @@ void power_screen_off(void) {
 	// hook runs. Done here it costs one invisible frame and the wake shows the
 	// right thing from its very first scan-out.
 	//
-	// Not in receiver mode: the pre-draw is a full-screen render on the core
-	// decoding the phone's stream (see `receiver` above), and the wake hook
-	// and wake_repaint draw the same frame over the blank panel at the next
-	// wake anyway.
-	if (!receiver && g_wake_hook && g_wake_hook()) {
+	// Without active Bluetooth audio, preserve the usual screensaver pre-draw.
+	// In either audio mode it would compete with the Bluetooth stream, and the
+	// next image can be drawn after the backlight is restored.
+	if (!light_only && g_wake_hook && g_wake_hook()) {
 		lv_obj_invalidate(lv_layer_top());
 		lv_obj_t *scr = lv_screen_active();
 		if (scr) {
@@ -1755,7 +1750,7 @@ void power_screen_on(void) {
 	}
 	g_screen_on = true;
 	uint32_t wake_started = monotonic_ms();
-	bool fast_receiver_wake = g_receiver_light_only && !g_resume_after_suspend && btreceiver_is_active();
+	bool fast_audio_wake = g_audio_light_only && !g_resume_after_suspend;
 
 	// And disarms the automatic-shutdown RTC alarm: there is a user. The
 	// shutdown timer goes back to zero here and stays there until the screen is
@@ -1776,14 +1771,14 @@ void power_screen_on(void) {
 	// lose the core or the card (see restore_radios_if_due). Marked and left to
 	// the tick, which brings them back once the picture is up and the music has
 	// a quiet moment.
-	if (!fast_receiver_wake && (g_wifi_parked || g_bt_parked)) {
+	if (!fast_audio_wake && (g_wifi_parked || g_bt_parked)) {
 		g_radio_restore_pending = true;
 		g_radio_restore_at = monotonic_ms() + WAKE_RADIO_RESTORE_MS;
 	}
-	if (fast_receiver_wake) {
+	if (fast_audio_wake) {
 		// The panel never stopped scanning, so this is only a backlight and input
-		// wake. No Bluetooth calls, panel reset, screensaver work or synchronous
-		// full-screen repaint belongs on the receiver's audio path.
+		// wake. No radio calls, panel reset, screensaver work or synchronous
+		// full-screen repaint belongs on the Bluetooth audio path.
 		backlight_write(g_cfg.brightness);
 		standby_timers_set_paused(false);
 		if (g_refr_timer) {
@@ -1795,14 +1790,14 @@ void power_screen_on(void) {
 		}
 		set_indevs_enabled(true);
 		indev_timers_set_paused(false);
-		g_receiver_light_only = false;
+		g_audio_light_only = false;
 		led_set_standby(false);
 		lv_display_trigger_activity(g_disp);
 		fprintf(stderr, "power: receiver screen on (backlight only, wake %ums)\n",
 				(unsigned)(monotonic_ms() - wake_started));
 		return;
 	}
-	g_receiver_light_only = false;
+	g_audio_light_only = false;
 
 	// The level the screen comes back at is the one the user chose, however dim.
 	// No too-dim floor is applied here: that guess belongs at init, where the

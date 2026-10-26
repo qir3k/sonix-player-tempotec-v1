@@ -1489,6 +1489,7 @@ static bool name_is_just_address(const char *name, const char *mac) {
 // same reason: it is the file the patched bluealsa reads its LDAC and UAT
 // quality settings from.
 #define BT_ALSA_CONF "/usr/data/alsa.conf"
+#define BT_LAST_DEVICE_KEY "bt_last_device"
 
 static void rewrite_alsa_conf(const char *mac) {
 	char before[4096];
@@ -1538,21 +1539,19 @@ static void rewrite_alsa_conf(const char *mac) {
 // of seconds later. Following that blink instantly sends the music to the jack
 // and back at every track change, which is worse than waiting for it.
 //
-// So the sink going is believed only when bluez agrees that the device is no
-// longer connected, or when it has stayed gone this long.
-#define A2DP_GRACE_MS 3000
+// A short loss of either the A2DP profile or the ACL link is common while some
+// earbuds switch between mono and stereo. Keep routing to the remembered sink
+// through that transition; otherwise the player moves to the jack before the
+// earbuds finish reconnecting.
+#define A2DP_GRACE_MS 8000
+#define A2DP_REOPEN_AFTER_MS 1500
 static uint32_t a2dp_missing_since; // worker only
+static bool a2dp_reconnect_pending; // worker only
+static char a2dp_lost_mac[BT_MAC_MAX]; // worker only
+static char a2dp_expected_disconnect[BT_MAC_MAX]; // worker only
 
-// Whether bluez still reports an ACL link to this address.
-static bool device_still_connected(const char *mac) {
-	bool connected = false;
-	pthread_mutex_lock(&lock);
-	for (int i = 0; i < g_paired_count && !connected; i++) {
-		connected = g_paired[i].connected && strcasecmp(g_paired[i].mac, mac) == 0;
-	}
-	pthread_mutex_unlock(&lock);
-	return connected;
-}
+static void reconnect_lost_audio(void);
+static bool reconnect_should_stop(const char *mac);
 
 // Takes the audio state from bluealsa's PCM objects and moves the sound with it.
 // The PCM exists exactly while there is something to write to, which is the
@@ -1563,7 +1562,20 @@ static void refresh_audio_state(void) {
 	bool sink = btstack_audio_sink(mac, sizeof(mac));
 
 	if (sink) {
+		bool recovered = a2dp_missing_since != 0 &&
+			(uint32_t)(now_ms() - a2dp_missing_since) >= A2DP_REOPEN_AFTER_MS;
 		a2dp_missing_since = 0;
+		a2dp_reconnect_pending = false;
+		a2dp_lost_mac[0] = '\0';
+		if (recovered) {
+			// The route name did not change during the grace period, but the old
+			// ALSA handle can still belong to the dead A2DP transport. Tell the
+			// player's route watcher to reopen it at the saved position.
+			pthread_mutex_lock(&lock);
+			g_output_generation++;
+			pthread_mutex_unlock(&lock);
+			fprintf(stderr, "bluetooth: audio returned after a link loss; reopening the current track\n");
+		}
 		if (g_bluealsa_restarted) {
 			g_bluealsa_restarted = false;
 			// Before the player is told: it opens the stream again at once, at
@@ -1581,16 +1593,25 @@ static void refresh_audio_state(void) {
 		copy_field(last, sizeof(last), g_a2dp_mac, sizeof(g_a2dp_mac));
 		pthread_mutex_unlock(&lock);
 
-		if (had_sink && last[0] && device_still_connected(last)) {
+		if (had_sink && last[0]) {
 			if (a2dp_missing_since == 0) {
 				a2dp_missing_since = now_ms();
-				fprintf(stderr, "bluetooth: the PCM on %s went away but the link is still up; waiting\n", last);
+				fprintf(stderr, "bluetooth: the audio link to %s went away; waiting for the earbuds to reconnect\n",
+						last);
 			}
 			if ((uint32_t)(now_ms() - a2dp_missing_since) < A2DP_GRACE_MS) {
-				return; // nothing has changed yet as far as anything else is concerned
+				return; // preserve the route across a brief profile or link transition
 			}
-			fprintf(stderr, "bluetooth: the PCM on %s has been gone for %d ms; back to the jack\n", last,
+			fprintf(stderr, "bluetooth: the audio link on %s stayed down for %d ms; back to the jack\n", last,
 					A2DP_GRACE_MS);
+			if (strcasecmp(config_get("wireless", BT_LAST_DEVICE_KEY, ""), last) == 0) {
+				if (strcasecmp(a2dp_expected_disconnect, last) == 0) {
+					a2dp_expected_disconnect[0] = '\0';
+				} else {
+					a2dp_reconnect_pending = true;
+					snprintf(a2dp_lost_mac, sizeof(a2dp_lost_mac), "%s", last);
+				}
+			}
 		}
 		a2dp_missing_since = 0;
 	}
@@ -1862,8 +1883,6 @@ static void do_scan_stop(void) {
 // ---------------------------------------------------------------------------
 // coming back to the headphones
 // ---------------------------------------------------------------------------
-
-#define BT_LAST_DEVICE_KEY "bt_last_device"
 
 static void remember_last_device(const char *mac) {
 	if (!mac || !mac[0]) {
@@ -2147,6 +2166,45 @@ static bool connect_device_ex(const char *mac, bool source_only, char *why_out, 
 
 static bool connect_device(const char *mac, bool source_only) {
 	return connect_device_ex(mac, source_only, NULL, 0);
+}
+
+// A transient earbud link loss must not strand playback on the jack. This is
+// called from refresh_audio_state() on the Bluetooth worker after the grace
+// period; it makes at most one reconnect attempt for each loss and never
+// changes daemon scheduling or runs on the playback thread.
+static void reconnect_lost_audio(void) {
+	if (!a2dp_reconnect_pending || !a2dp_lost_mac[0]) {
+		return;
+	}
+	char mac[BT_MAC_MAX];
+	snprintf(mac, sizeof(mac), "%s", a2dp_lost_mac);
+	a2dp_reconnect_pending = false;
+	a2dp_lost_mac[0] = '\0';
+
+	if (!bluetooth_still_wanted() || strcasecmp(config_get("wireless", BT_LAST_DEVICE_KEY, ""), mac) != 0 ||
+		strcasecmp(a2dp_expected_disconnect, mac) == 0 || reconnect_should_stop(mac)) {
+		return;
+	}
+	char sink[BT_MAC_MAX];
+	if (btstack_audio_sink(sink, sizeof(sink))) {
+		return;
+	}
+	fprintf(stderr, "bluetooth: trying once to restore the lost audio link to %s\n", mac);
+	bool link_up = false;
+	btstack_device_connected(mac, &link_up);
+	char why[160] = "";
+	bool requested = link_up || btstack_connect(mac, 7000, why, sizeof(why));
+	if (!requested && connect_was_already_connected(why)) {
+		requested = true; // BlueZ's reply is newer than its cached Connected flag.
+	}
+	if (requested && !wait_for_a2dp(mac, 2500)) {
+		// The ACL may already exist while the A2DP source profile needs opening.
+		btstack_connect_a2dp(mac, 7000);
+	}
+	if (!wait_for_a2dp(mac, 4000)) {
+		fprintf(stderr, "bluetooth: the audio link to %s did not return on its recovery attempt\n", mac);
+	}
+	refresh_devices();
 }
 
 // How long a bond reported as failed is looked for in bluez all the same.
@@ -3324,9 +3382,8 @@ static void *bluetooth_worker(void *arg) {
 			// EINVAL at once and spins this thread.
 			uint32_t wait_ms =
 				!g_enabled ? BT_IDLE_WAIT_MS : (power_screen_is_on() ? BT_POLL_MS : BT_POLL_STANDBY_MS);
-			// While a sink is missing but its link is still up, the answer is
-			// due within the grace above: the usual poll is far too slow to
-			// give it.
+			// While a sink is missing, the answer is due within the grace above:
+			// the usual poll is far too slow to catch an earbud reconnection.
 			if (a2dp_missing_since != 0 && wait_ms > 500) {
 				wait_ms = 500;
 			}
@@ -3441,6 +3498,7 @@ static void *bluetooth_worker(void *arg) {
 				// Logged, because in the log a link closed from here and a
 				// speaker dropping the link look exactly the same otherwise.
 				fprintf(stderr, "bluetooth: disconnecting %s (asked for)\n", job.mac);
+				snprintf(a2dp_expected_disconnect, sizeof(a2dp_expected_disconnect), "%s", job.mac);
 				btstack_disconnect(job.mac);
 				sleep_ms(400);
 				refresh_devices();
@@ -3451,6 +3509,7 @@ static void *bluetooth_worker(void *arg) {
 			case JOB_FORGET:
 				name_for(job.mac, name, sizeof(name));
 				fprintf(stderr, "bluetooth: forgetting %s\n", job.mac);
+				snprintf(a2dp_expected_disconnect, sizeof(a2dp_expected_disconnect), "%s", job.mac);
 				btstack_disconnect(job.mac);
 				set_op(btstack_remove(job.mac) ? BT_OP_OK : BT_OP_FAILED, name);
 				forget_last_device(job.mac);
@@ -3544,12 +3603,20 @@ static void *bluetooth_worker(void *arg) {
 			default:
 				break;
 			}
+			reconnect_lost_audio();
 			continue;
 		}
 
 		// The backstop. bluez says what changed the moment it happens, so this
 		// only catches what a lost signal or a dropped connection would have
 		// hidden -- including the connection itself having gone.
+		// A lost sink has its own short recovery deadline, even with the display
+		// off. The ordinary standby poll is deliberately much slower.
+		if (a2dp_missing_since != 0) {
+			refresh_audio_state();
+			reconnect_lost_audio();
+		}
+
 		uint32_t poll_period = power_screen_is_on() ? BT_POLL_MS : BT_POLL_STANDBY_MS;
 		if (enabled && (uint32_t)(now_ms() - last_poll) >= poll_period) {
 			last_poll = now_ms();
@@ -3562,6 +3629,7 @@ static void *bluetooth_worker(void *arg) {
 				}
 			}
 			refresh_devices();
+			reconnect_lost_audio();
 		}
 	}
 
