@@ -22,7 +22,9 @@
 #define YTMUSIC_SESSION_FILE "ytmusic_session.ini"
 #define YTMUSIC_COOKIE_MAX 6000
 #define YTMUSIC_RESPONSE_LIMIT (3 * 1024 * 1024)
-#define YTMUSIC_RESPONSE_TOKEN_LIMIT 160000
+#define YTMUSIC_RENDERER_SIZE_LIMIT (256 * 1024)
+#define YTMUSIC_RENDERER_TOKEN_LIMIT 8192
+#define YTMUSIC_PLAYER_TOKEN_LIMIT 24000
 #define YTMUSIC_TIMEOUT 15
 #define YTMUSIC_SITE "https://music.youtube.com"
 #define YTMUSIC_OAUTH_DEVICE_URL "https://oauth2.googleapis.com/device/code"
@@ -782,53 +784,143 @@ static bool read_track(const json_doc_t *doc, int item, ytmusic_track_t *track) 
 	return track->title[0] != '\0';
 }
 
-static bool ad_result_context(const json_doc_t *doc, int renderer) {
-	for (int token = renderer; token >= 0; token = doc->toks[token].parent) {
-		if (doc->toks[token].type != JSON_STRING) {
-			continue;
-		}
+static const char *skip_json_space(const char *p) {
+	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+	return p;
+}
 
-		char key[128];
-		if (!json_str(doc, token, key, sizeof(key))) {
+// Return the byte after a JSON string. This small scanner lets search skip the
+// large unrelated parts of an InnerTube response without allocating a token
+// for every field in it.
+static const char *json_string_end(const char *p) {
+	if (*p != '"') return NULL;
+	for (p++; *p; p++) {
+		if (*p == '\\') {
+			if (!p[1]) return NULL;
+			p++;
+		} else if (*p == '"') {
+			return p + 1;
+		}
+	}
+	return NULL;
+}
+
+// Return the byte after one complete object/array, respecting strings and
+// escaped quotes. A response may be truncated at the HTTP cap; in that case
+// complete track rows before the cut remain usable.
+static const char *json_compound_end(const char *start) {
+	char closers[JSON_MAX_DEPTH];
+	int depth = 0;
+	bool in_string = false;
+	for (const char *p = start; *p; p++) {
+		if (in_string) {
+			if (*p == '\\') {
+				if (!p[1]) return NULL;
+				p++;
+			} else if (*p == '"') {
+				in_string = false;
+			}
 			continue;
 		}
+		if (*p == '"') {
+			in_string = true;
+		} else if (*p == '{' || *p == '[') {
+			if (depth >= JSON_MAX_DEPTH) return NULL;
+			closers[depth++] = *p == '{' ? '}' : ']';
+		} else if (*p == '}' || *p == ']') {
+			if (depth <= 0 || closers[depth - 1] != *p) return NULL;
+			if (--depth == 0) return p + 1;
+		}
+	}
+	return NULL;
+}
+
+static bool track_renderer_is_ad(const json_doc_t *doc, int renderer) {
+	for (int i = renderer + 1; i < doc->count; i++) {
+		int object = doc->toks[i].parent;
+		if (doc->toks[i].type != JSON_STRING || object < 0 || doc->toks[object].type != JSON_OBJECT) continue;
+		char key[128];
+		if (!json_str(doc, i, key, sizeof(key))) continue;
 		if (strcasestr(key, "adSlot") || strcasestr(key, "adPlacement") ||
 			strcasestr(key, "displayAd") || strcasestr(key, "promoted") ||
-			strcasestr(key, "sponsored")) {
-			return true;
-		}
-
-		int object = doc->toks[token].parent;
-		if (object < 0 || doc->toks[object].type != JSON_OBJECT) {
-			continue;
-		}
-		if (json_obj_bool(doc, object, "isAd", false) ||
-			json_obj_bool(doc, object, "isSponsored", false) ||
-			json_obj_bool(doc, object, "isPromoted", false) ||
-			json_obj_bool(doc, object, "sponsored", false) ||
-			json_obj_bool(doc, object, "promoted", false)) {
-			return true;
-		}
+			strcasestr(key, "sponsored") || json_obj_bool(doc, object, key, false)) return true;
 	}
 	return false;
 }
 
-static int collect_track_rows(const json_doc_t *doc, ytmusic_track_t *tracks, int limit) {
+// Parse only each musicResponsiveListItemRenderer instead of materializing
+// the entire search/charts response as one token tree. This uses much less RAM
+// and still returns complete early rows if YouTube sends a response larger
+// than our bounded HTTP buffer.
+static int collect_track_rows_compact(const char *response, ytmusic_track_t *tracks, int limit) {
+	const char *json = youtubei_json_start(response);
+	if (!json || (*json != '{' && *json != '[')) return -1;
+	static const char ROW_KEY[] = "musicResponsiveListItemRenderer";
+	const size_t key_len = sizeof(ROW_KEY) - 1;
 	int count = 0;
-	for (int i = 0; i < doc->count && count < limit; i++) {
-		if (doc->toks[i].type != JSON_OBJECT || json_get(doc, i, "musicResponsiveListItemRenderer") < 0) continue;
-		if (ad_result_context(doc, i)) continue;
-		ytmusic_track_t candidate;
-		if (!read_track(doc, i, &candidate)) continue;
-		bool duplicate = false;
-		for (int j = 0; j < count; j++) {
-			if (strcmp(tracks[j].id, candidate.id) == 0) {
-				duplicate = true;
-				break;
-			}
+	bool saw_unreadable_row = false;
+	const char *p = json;
+
+	while (*p && count < limit) {
+		if (*p != '"') {
+			p++;
+			continue;
 		}
-		if (!duplicate) tracks[count++] = candidate;
+		const char *key_end = json_string_end(p);
+		if (!key_end) break;
+		bool is_row_key = (size_t)(key_end - p - 2) == key_len &&
+			memcmp(p + 1, ROW_KEY, key_len) == 0;
+		const char *value = skip_json_space(key_end);
+		if (!is_row_key || *value != ':') {
+			p = key_end;
+			continue;
+		}
+		value = skip_json_space(value + 1);
+		if (*value != '{') {
+			saw_unreadable_row = true;
+			p = key_end;
+			continue;
+		}
+		const char *end = json_compound_end(value);
+		if (!end) {
+			saw_unreadable_row = true;
+			break;
+		}
+		size_t item_len = (size_t)(end - value);
+		if (item_len <= YTMUSIC_RENDERER_SIZE_LIMIT) {
+			char *item_json = malloc(item_len + 1);
+			if (!item_json) return count ? count : -1;
+			memcpy(item_json, value, item_len);
+			item_json[item_len] = '\0';
+			json_doc_t item_doc;
+			if (json_parse_limited(item_json, &item_doc, YTMUSIC_RENDERER_TOKEN_LIMIT)) {
+				int root = json_root(&item_doc);
+				ytmusic_track_t candidate;
+				if (!track_renderer_is_ad(&item_doc, root)) {
+					if (read_track(&item_doc, root, &candidate)) {
+						bool duplicate = false;
+						for (int i = 0; i < count; i++) {
+							if (strcmp(tracks[i].id, candidate.id) == 0) {
+								duplicate = true;
+								break;
+							}
+						}
+						if (!duplicate) tracks[count++] = candidate;
+					} else {
+						saw_unreadable_row = true;
+					}
+				}
+				json_free(&item_doc);
+			} else {
+				saw_unreadable_row = true;
+			}
+			free(item_json);
+		} else {
+			saw_unreadable_row = true;
+		}
+		p = end;
 	}
+	if (!count && saw_unreadable_row) return -1;
 	return count;
 }
 
@@ -868,15 +960,9 @@ int ytmusic_search_tracks(const char *query, ytmusic_track_t *tracks, int limit,
 		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"query\":\"%s\",\"params\":\"EgWKAQIIAWoKEAkQBRAKEAMQBA==\"}", escaped);
 	char *body = NULL;
 	if (!youtubei_post("search", request, false, &body, NULL, error, error_size)) return -1;
-	json_doc_t doc;
-	if (!json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_RESPONSE_TOKEN_LIMIT)) {
-		free(body);
-		set_error(error, error_size, "ytmusic_unreadable_reply");
-		return -1;
-	}
-	int count = collect_track_rows(&doc, tracks, limit);
-	json_free(&doc);
+	int count = collect_track_rows_compact(body, tracks, limit);
 	free(body);
+	if (count < 0) set_error(error, error_size, "ytmusic_unreadable_reply");
 	return count;
 }
 
@@ -892,15 +978,12 @@ int ytmusic_browse_chart_tracks(ytmusic_track_t *tracks, int limit,
 		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"FEmusic_charts\"}";
 	char *body = NULL;
 	if (!youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
-	json_doc_t doc;
-	if (!json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_RESPONSE_TOKEN_LIMIT)) {
-		free(body);
-		set_error(error, error_size, "ytmusic_unreadable_reply");
-		return -1;
-	}
-	int count = collect_track_rows(&doc, tracks, limit);
-	json_free(&doc);
+	int count = collect_track_rows_compact(body, tracks, limit);
 	free(body);
+	if (count < 0) {
+		set_error(error, error_size, "ytmusic_unreadable_reply");
+		return count;
+	}
 	if (!count) set_error(error, error_size, "ytmusic_chart_tracks_unavailable");
 	return count;
 }
@@ -930,10 +1013,10 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 	char *body = NULL;
 	if (!youtubei_post("player", request, true, &body, NULL, error, error_size)) return false;
 	json_doc_t doc;
-	if (!json_parse(youtubei_json_start(body), &doc)) {
+	if (!json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_PLAYER_TOKEN_LIMIT)) {
 		free(body);
-		set_error(error, error_size, "ytmusic_unreadable_reply");
-		return false;
+		body = NULL;
+		goto android_vr_fallback;
 	}
 	int root = json_root(&doc);
 	if (!playable_track_response(&doc, root, video_id, error, error_size)) {
@@ -965,9 +1048,10 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 	// Web Music may return ciphered formats, which require running YouTube's
 	// current player JavaScript. Avoid embedding a large JS engine in the small
 	// player firmware: the Android VR response can provide a direct AAC URL.
+android_vr_fallback:
 	body = NULL;
 	if (!android_vr_player(video_id, &body, error, error_size)) return false;
-	if (!json_parse(body, &doc)) {
+	if (!json_parse_limited(body, &doc, YTMUSIC_PLAYER_TOKEN_LIMIT)) {
 		free(body);
 		set_error(error, error_size, "ytmusic_unreadable_reply");
 		return false;
