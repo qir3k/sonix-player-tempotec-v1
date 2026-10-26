@@ -79,6 +79,11 @@ typedef enum {
 // imported cookie are stored in a private sidecar beside device_config.ini,
 // outside config.c's small per-value limit, and survive player reboots.
 void ytmusic_init(void);
+
+// Where diagnostic dumps go: a public page that parses empty keeps its whole
+// response body under <card_root>/.local/ytmusic/ (and falls back to /tmp when
+// no card was named). Call once at startup, next to ytmusic_init().
+void ytmusic_set_card_root(const char *path);
 bool ytmusic_logged_in(void);
 bool ytmusic_oauth_configured(void);
 bool ytmusic_login_device_begin(ytmusic_device_login_t *login, char *error, size_t error_size);
