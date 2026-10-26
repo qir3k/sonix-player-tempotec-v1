@@ -19,19 +19,34 @@
 #include "src/system/net/wifi.h"
 #include "src/system/streaming/ytmusic.h"
 
-#define YTMUSIC_PAGE_RESULTS 30
+#define YTMUSIC_PAGE_RESULTS YTMUSIC_ITEMS_MAX
 #define YTMUSIC_LOGIN_QR_SIZE 190
 #define YTMUSIC_LOGIN_QUIET 10
+#define YTMUSIC_QUERY_MAX 192
 
+// The page is a small tree: the home screen lists what can be opened, the
+// Explore screen lists the store's carousels, the search screen takes a query,
+// and two shared lists show what came back -- the results screen for a search
+// or a chart, the tracks screen for whatever a card opens (a playlist, an
+// album, a podcast show). A tap on a card loads its page into the tracks
+// screen, so drilling down is one screen at a time and the chevron walks back
+// out of it.
 lv_obj_t *ytmusic_screen;
 
 static gui_config_t *page_cfg;
 static lv_obj_t *home_container;
 static lv_obj_t *search_screen;
+static lv_obj_t *search_title;
+static lv_obj_t *search_field;
+static keyboard_t *search_keyboard;
 static lv_obj_t *results_screen;
 static lv_obj_t *results_list;
 static lv_obj_t *results_title;
-static lv_obj_t *search_field;
+static lv_obj_t *tracks_screen;
+static lv_obj_t *tracks_list;
+static lv_obj_t *tracks_title;
+static lv_obj_t *explore_screen;
+static lv_obj_t *explore_list;
 static lv_obj_t *settings_screen;
 static lv_obj_t *sign_in_row;
 static lv_obj_t *sign_out_row;
@@ -40,11 +55,19 @@ static lv_obj_t *login_qr;
 static lv_obj_t *login_code_label;
 static lv_obj_t *login_url_label;
 static lv_obj_t *login_message;
-static keyboard_t *search_keyboard;
-static pthread_mutex_t search_lock = PTHREAD_MUTEX_INITIALIZER;
-static bool search_busy;
-static ytmusic_track_t displayed_tracks[YTMUSIC_PAGE_RESULTS];
-static int displayed_track_count;
+static pthread_mutex_t page_lock = PTHREAD_MUTEX_INITIALIZER;
+// One network job at a time: a search, an Explore load, a card's page, or the
+// download-and-play of a track. They share the request lock in the system
+// layer and the user can only be looking at one of them.
+static bool page_busy;
+static unsigned list_generation;
+static ytmusic_filter_t search_filter;
+static ytmusic_item_t result_items[YTMUSIC_PAGE_RESULTS];
+static int result_count;
+static ytmusic_item_t track_items[YTMUSIC_PAGE_RESULTS];
+static int track_count;
+static ytmusic_section_t explore_sections[YTMUSIC_SECTIONS_MAX];
+static int explore_section_count;
 static ytmusic_device_login_t device_login;
 static lv_timer_t *login_timer;
 static bool login_active;
@@ -79,12 +102,33 @@ static void open_wifi_settings_cb(lv_event_t *e) {
 	switch_screen(wifisettings_screen);
 }
 
+typedef enum {
+	LIST_SEARCH = 0,
+	LIST_BROWSE,
+} list_kind_t;
+
+// A page of rows on its way back from a worker. `to_tracks` says which of the
+// two lists it fills: a card's contents go to the tracks screen, a search or a
+// chart to the results screen.
 typedef struct {
+	list_kind_t kind;
+	bool to_tracks;
+	unsigned generation;
+	ytmusic_filter_t filter;
+	char query[YTMUSIC_QUERY_MAX];
+	char browse_id[YTMUSIC_BROWSE_ID_MAX];
+	char title[96];
 	int count;
-	char title[64];
-	ytmusic_track_t tracks[YTMUSIC_PAGE_RESULTS];
 	char error[192];
-} search_result_t;
+	ytmusic_item_t items[YTMUSIC_PAGE_RESULTS];
+} list_result_t;
+
+typedef struct {
+	unsigned generation;
+	int count;
+	char error[192];
+	ytmusic_section_t sections[YTMUSIC_SECTIONS_MAX];
+} explore_result_t;
 
 typedef struct {
 	ytmusic_track_t track;
@@ -103,9 +147,31 @@ typedef struct {
 } login_result_t;
 
 static void login_tick_cb(lv_timer_t *timer);
+static void list_done(void *data);
+static void *list_worker(void *arg);
+static void explore_done(void *data);
+static void item_clicked_cb(lv_event_t *e);
+static void section_clicked_cb(lv_event_t *e);
+
+static bool begin_busy(void) {
+	pthread_mutex_lock(&page_lock);
+	if (page_busy) {
+		pthread_mutex_unlock(&page_lock);
+		return false;
+	}
+	page_busy = true;
+	pthread_mutex_unlock(&page_lock);
+	return true;
+}
+
+static void end_busy(void) {
+	pthread_mutex_lock(&page_lock);
+	page_busy = false;
+	pthread_mutex_unlock(&page_lock);
+}
 
 static lv_obj_t *ytmusic_corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph,
-										 lv_event_cb_t cb) {
+									   lv_event_cb_t cb) {
 	lv_obj_t *button = lv_btn_create(ytmusic_screen);
 	settingsrow_place_corner_button(button, cfg, slot);
 	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
@@ -167,10 +233,10 @@ static void login_result_done(void *data) {
 		login_elapsed = 0;
 		lv_label_set_text(login_code_label, device_login.user_code);
 		lv_label_set_text(login_url_label, device_login.verification_url);
-		lv_label_set_text(login_message, "Scan the QR code, or enter this code on Google.");
+		lv_label_set_text(login_message, tr("ytmusic_scan_qr"));
 		bool qr_ok = login_qr &&
 			lv_qrcode_update(login_qr, device_login.verification_url,
-							(uint32_t)strlen(device_login.verification_url)) == LV_RESULT_OK;
+							 (uint32_t)strlen(device_login.verification_url)) == LV_RESULT_OK;
 		lv_obj_set_hidden(login_qr, !qr_ok);
 		lv_obj_set_hidden(login_url_label, qr_ok);
 		if (!login_timer) login_timer = lv_timer_create(login_tick_cb, 1000, NULL);
@@ -252,13 +318,13 @@ static void login_tick_cb(lv_timer_t *timer) {
 static void login_begin_done_cb(lv_event_t *e) {
 	(void)e;
 	if (!ytmusic_oauth_configured()) {
-		toast_error("Add [ytmusic] client_id and client_secret to streaming-keys.ini, then restart.");
+		toast_error("ytmusic_oauth_keys_missing");
 		return;
 	}
 	login_stop();
 	login_active = true;
 	login_elapsed = 0;
-	lv_label_set_text(login_message, "Requesting a Google sign-in code…");
+	lv_label_set_text(login_message, tr("ytmusic_requesting_code"));
 	lv_label_set_text(login_code_label, "");
 	lv_obj_set_hidden(login_qr, true);
 	lv_obj_set_hidden(login_url_label, true);
@@ -274,12 +340,51 @@ static void login_screen_unloaded(lv_event_t *e) {
 	login_stop();
 }
 
+// ---------------------------------------------------------------------------
+// rows
+// ---------------------------------------------------------------------------
+
+// A card for a playlist or album, a note for a song, the podcast glyph for a
+// show: the same glyphs the Streaming page uses, so the two pages read alike.
+static const lv_image_dsc_t *item_icon(const ytmusic_item_t *item) {
+	if (item->kind == YTMUSIC_ITEM_TRACK) return &icon_music_note;
+	if (strncmp(item->browse_id, "MPSP", 4) == 0) return &icon_podcast_list;
+	return &icon_music2;
+}
+
+static theme_semantic_t item_tone(const ytmusic_item_t *item) {
+	if (item->kind == YTMUSIC_ITEM_TRACK) return THEME_SEMANTIC_RED;
+	if (strncmp(item->browse_id, "MPSP", 4) == 0) return THEME_SEMANTIC_CYAN;
+	return THEME_SEMANTIC_PURPLE;
+}
+
+static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int count, lv_event_cb_t cb) {
+	lv_obj_clean(list);
+	if (count <= 0) {
+		settingsrow_add(list, "no_results", NULL, NULL, NULL);
+		return;
+	}
+	for (int i = 0; i < count; i++) {
+		char label[YTMUSIC_TITLE_MAX + YTMUSIC_NAME_MAX + 8];
+		if (items[i].subtitle[0]) {
+			snprintf(label, sizeof(label), "%s  ·  %s", items[i].title, items[i].subtitle);
+		} else {
+			snprintf(label, sizeof(label), "%s", items[i].title);
+		}
+		lv_obj_t *row = settingsrow_add(list, label, NULL, cb, (void *)(intptr_t)i);
+		settingsrow_name_lines(row, 2);
+		settingsrow_add_icon(row, item_icon(&items[i]), item_tone(&items[i]));
+	}
+}
+
+// ---------------------------------------------------------------------------
+// playing a row
+// ---------------------------------------------------------------------------
+
 static void playback_done(void *data) {
 	play_result_t *result = data;
 	if (!result) return;
-	pthread_mutex_lock(&search_lock);
-	search_busy = false;
-	pthread_mutex_unlock(&search_lock);
+	end_busy();
 	if (result->ok) {
 		player_play_file(result->path);
 		player_refresh_now_playing();
@@ -293,47 +398,232 @@ static void playback_done(void *data) {
 static void *playback_worker(void *arg) {
 	play_result_t *result = arg;
 	result->ok = ytmusic_download_for_playback(&result->track, result->path, sizeof(result->path),
-											 result->error, sizeof(result->error));
+											   result->error, sizeof(result->error));
 	if (!gui_post(playback_done, result)) {
-		pthread_mutex_lock(&search_lock);
-		search_busy = false;
-		pthread_mutex_unlock(&search_lock);
+		end_busy();
 		free(result);
 	}
 	return NULL;
 }
 
-static void play_track_cb(lv_event_t *e) {
-	int index = (int)(intptr_t)lv_event_get_user_data(e);
-	if (index < 0 || index >= displayed_track_count) return;
-	pthread_mutex_lock(&search_lock);
-	if (search_busy) {
-		pthread_mutex_unlock(&search_lock);
-		return;
-	}
+static void play_item(const ytmusic_item_t *item) {
+	if (!item || item->kind != YTMUSIC_ITEM_TRACK || !item->id[0]) return;
+	if (!begin_busy()) return;
 	play_result_t *result = calloc(1, sizeof(*result));
 	if (!result) {
-		pthread_mutex_unlock(&search_lock);
+		end_busy();
 		toast_error("ytmusic_out_of_memory");
 		return;
 	}
-	result->track = displayed_tracks[index];
-	search_busy = true;
-	pthread_mutex_unlock(&search_lock);
-	gui_notify_popup(tr("downloading"));
+	snprintf(result->track.id, sizeof(result->track.id), "%s", item->id);
+	snprintf(result->track.title, sizeof(result->track.title), "%s", item->title);
+	// A row's subtitle is the artist, or the show an episode belongs to.
+	snprintf(result->track.artist, sizeof(result->track.artist), "%s", item->subtitle);
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, playback_worker, result) != 0) {
-		pthread_mutex_lock(&search_lock);
-		search_busy = false;
-		pthread_mutex_unlock(&search_lock);
+		end_busy();
 		free(result);
 		toast_error("ytmusic_playback_failed");
 		return;
 	}
 	pthread_detach(thread);
+	gui_notify_popup(tr("downloading"));
 }
 
-static void show_search(void) {
+static bool start_list_request(list_kind_t kind, bool to_tracks, ytmusic_filter_t filter,
+							   const char *query, const char *browse_id, const char *title) {
+	if (!begin_busy()) return false;
+	list_result_t *result = calloc(1, sizeof(*result));
+	if (!result) {
+		end_busy();
+		toast_error("ytmusic_out_of_memory");
+		return false;
+	}
+	result->kind = kind;
+	result->to_tracks = to_tracks;
+	result->filter = filter;
+	if (query) snprintf(result->query, sizeof(result->query), "%s", query);
+	if (browse_id) snprintf(result->browse_id, sizeof(result->browse_id), "%s", browse_id);
+	snprintf(result->title, sizeof(result->title), "%s", title ? title : "");
+	pthread_mutex_lock(&page_lock);
+	result->generation = ++list_generation;
+	pthread_mutex_unlock(&page_lock);
+
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, list_worker, result) != 0) {
+		end_busy();
+		free(result);
+		toast_error(kind == LIST_SEARCH ? "ytmusic_search_failed" : "ytmusic_browse_failed");
+		return false;
+	}
+	pthread_detach(thread);
+	gui_notify_popup(tr("searching"));
+	return true;
+}
+
+static void *list_worker(void *arg) {
+	list_result_t *result = arg;
+	if (result->kind == LIST_SEARCH) {
+		result->count = ytmusic_search_items(result->query, result->filter, result->items,
+											 YTMUSIC_PAGE_RESULTS, result->error, sizeof(result->error));
+	} else {
+		result->count = ytmusic_browse_items(result->browse_id, result->items,
+											 YTMUSIC_PAGE_RESULTS, result->error, sizeof(result->error));
+	}
+	if (!gui_post(list_done, result)) {
+		end_busy();
+		free(result);
+	}
+	return NULL;
+}
+
+static void list_done(void *data) {
+	list_result_t *result = data;
+	if (!result) return;
+	end_busy();
+	pthread_mutex_lock(&page_lock);
+	bool current = result->generation == list_generation;
+	pthread_mutex_unlock(&page_lock);
+	if (!current) {
+		free(result);
+		return;
+	}
+	if (result->count < 0) {
+		toast_error(result->error[0] ? result->error : "ytmusic_search_failed");
+		free(result);
+		return;
+	}
+	int count = result->count;
+	if (count > YTMUSIC_PAGE_RESULTS) count = YTMUSIC_PAGE_RESULTS;
+	if (result->to_tracks) {
+		track_count = count;
+		memcpy(track_items, result->items, sizeof(track_items[0]) * (size_t)count);
+		lv_label_set_text(tracks_title, tr(result->title[0] ? result->title : "ytmusic_browse"));
+		fill_item_list(tracks_list, track_items, track_count, item_clicked_cb);
+		switch_screen(tracks_screen);
+	} else {
+		result_count = count;
+		memcpy(result_items, result->items, sizeof(result_items[0]) * (size_t)count);
+		lv_label_set_text(results_title, tr(result->title[0] ? result->title : "ytmusic_search_results"));
+		fill_item_list(results_list, result_items, result_count, item_clicked_cb);
+		switch_screen(results_screen);
+	}
+	free(result);
+}
+
+// A tap in either list: a song plays, a card opens its own page in the tracks
+// list. Both lists keep their rows in an array the handler indexes.
+static void item_clicked_cb(lv_event_t *e) {
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	const ytmusic_item_t *item = NULL;
+	if (lv_obj_get_parent(lv_event_get_target(e)) == results_list) {
+		if (index < 0 || index >= result_count) return;
+		item = &result_items[index];
+	} else {
+		if (index < 0 || index >= track_count) return;
+		item = &track_items[index];
+	}
+	if (item->kind == YTMUSIC_ITEM_CONTAINER) {
+		start_list_request(LIST_BROWSE, true, YTMUSIC_FILTER_SONGS, NULL, item->browse_id, item->title);
+	} else {
+		play_item(item);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// explore
+// ---------------------------------------------------------------------------
+
+static void *explore_worker(void *arg) {
+	explore_result_t *result = arg;
+	result->count = ytmusic_explore_sections(result->sections, YTMUSIC_SECTIONS_MAX,
+											  result->error, sizeof(result->error));
+	if (!gui_post(explore_done, result)) {
+		end_busy();
+		free(result);
+	}
+	return NULL;
+}
+
+static void explore_done(void *data) {
+	explore_result_t *result = data;
+	if (!result) return;
+	end_busy();
+	pthread_mutex_lock(&page_lock);
+	bool current = result->generation == list_generation;
+	pthread_mutex_unlock(&page_lock);
+	if (!current) {
+		free(result);
+		return;
+	}
+	if (result->count <= 0) {
+		toast_error(result->error[0] ? result->error : "ytmusic_explore_empty");
+		free(result);
+		return;
+	}
+	explore_section_count = result->count;
+	memcpy(explore_sections, result->sections, sizeof(explore_sections[0]) * (size_t)explore_section_count);
+	lv_obj_clean(explore_list);
+	for (int i = 0; i < explore_section_count; i++) {
+		lv_obj_t *value = NULL;
+		lv_obj_t *row = settingsrow_add(explore_list,
+			explore_sections[i].title[0] ? explore_sections[i].title : "ytmusic_explore",
+			&value, section_clicked_cb, (void *)(intptr_t)i);
+		settingsrow_name_lines(row, 2);
+		settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_PURPLE);
+		if (value) {
+			char text[16];
+			snprintf(text, sizeof(text), "%d", explore_sections[i].count);
+			lv_label_set_text(value, text);
+		}
+	}
+	switch_screen(explore_screen);
+	free(result);
+}
+
+static void explore_start_cb(lv_event_t *e) {
+	(void)e;
+	if (!begin_busy()) return;
+	explore_result_t *result = calloc(1, sizeof(*result));
+	if (!result) {
+		end_busy();
+		toast_error("ytmusic_out_of_memory");
+		return;
+	}
+	pthread_mutex_lock(&page_lock);
+	result->generation = ++list_generation;
+	pthread_mutex_unlock(&page_lock);
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, explore_worker, result) != 0) {
+		end_busy();
+		free(result);
+		toast_error("ytmusic_explore_failed");
+		return;
+	}
+	pthread_detach(thread);
+	gui_notify_popup(tr("searching"));
+}
+
+// One carousel, listed with the cards it holds. Its items came with the page,
+// so this opens without another request.
+static void section_clicked_cb(lv_event_t *e) {
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= explore_section_count) return;
+	const ytmusic_section_t *section = &explore_sections[index];
+	result_count = section->count;
+	memcpy(result_items, section->items, sizeof(result_items[0]) * (size_t)result_count);
+	lv_label_set_text(results_title, tr(section->title[0] ? section->title : "ytmusic_explore"));
+	fill_item_list(results_list, result_items, result_count, item_clicked_cb);
+	switch_screen(results_screen);
+}
+
+// ---------------------------------------------------------------------------
+// home
+// ---------------------------------------------------------------------------
+
+static void show_search(ytmusic_filter_t filter) {
+	search_filter = filter;
+	lv_label_set_text(search_title, tr(filter == YTMUSIC_FILTER_PODCASTS ? "ytmusic_podcasts" : "ytmusic_search"));
 	lv_textarea_set_text(search_field, "");
 	keyboard_reset(search_keyboard);
 	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
@@ -341,135 +631,13 @@ static void show_search(void) {
 	switch_screen(search_screen);
 }
 
-static void search_done(void *data) {
-	search_result_t *result = data;
-	if (!result) return;
-	pthread_mutex_lock(&search_lock);
-	search_busy = false;
-	pthread_mutex_unlock(&search_lock);
-	if (result->count < 0) {
-		toast_error(result->error[0] ? result->error : "ytmusic_search_failed");
-		free(result);
-		return;
-	}
-	lv_obj_clean(results_list);
-	lv_label_set_text(results_title, tr(result->title[0] ? result->title : "YouTube Music"));
-	displayed_track_count = result->count < 0 ? 0 : result->count;
-	if (displayed_track_count > YTMUSIC_PAGE_RESULTS) displayed_track_count = YTMUSIC_PAGE_RESULTS;
-	if (displayed_track_count) memcpy(displayed_tracks, result->tracks,
-								  sizeof(displayed_tracks[0]) * (size_t)displayed_track_count);
-	if (!result->count) {
-		settingsrow_add(results_list, "no_results", NULL, NULL, NULL);
-	} else {
-		for (int i = 0; i < result->count; i++) {
-			char label[YTMUSIC_TITLE_MAX + YTMUSIC_NAME_MAX + 8];
-			snprintf(label, sizeof(label), "%s  ·  %s", result->tracks[i].title,
-					 result->tracks[i].artist[0] ? result->tracks[i].artist : "YouTube Music");
-			lv_obj_t *row = settingsrow_add(results_list, label, NULL, play_track_cb, (void *)(intptr_t)i);
-			settingsrow_name_lines(row, 2);
-			settingsrow_add_icon(row, &icon_music_note, THEME_SEMANTIC_RED);
-		}
-	}
-	switch_screen(results_screen);
-	free(result);
-}
-
-static void *search_worker(void *arg) {
-	char *query = arg;
-	search_result_t *result = calloc(1, sizeof(*result));
-	if (result) {
-		snprintf(result->title, sizeof(result->title), "%s", "Search results");
-		result->count = ytmusic_search_tracks(query, result->tracks, YTMUSIC_PAGE_RESULTS,
-												 result->error, sizeof(result->error));
-		if (!gui_post(search_done, result)) {
-			free(result);
-			pthread_mutex_lock(&search_lock);
-			search_busy = false;
-			pthread_mutex_unlock(&search_lock);
-		}
-	} else {
-		pthread_mutex_lock(&search_lock);
-		search_busy = false;
-		pthread_mutex_unlock(&search_lock);
-	}
-	memset(query, 0, strlen(query));
-	free(query);
-	return NULL;
-}
-
-static void *charts_worker(void *arg) {
-	(void)arg;
-	search_result_t *result = calloc(1, sizeof(*result));
-	if (result) {
-		snprintf(result->title, sizeof(result->title), "%s", "Top Songs Charts");
-		result->count = ytmusic_browse_chart_tracks(result->tracks, YTMUSIC_PAGE_RESULTS,
-													 result->error, sizeof(result->error));
-		if (!gui_post(search_done, result)) {
-			free(result);
-			pthread_mutex_lock(&search_lock);
-			search_busy = false;
-			pthread_mutex_unlock(&search_lock);
-		}
-	} else {
-		pthread_mutex_lock(&search_lock);
-		search_busy = false;
-		pthread_mutex_unlock(&search_lock);
-	}
-	return NULL;
-}
-
-static void charts_cb(lv_event_t *e) {
-	(void)e;
-	pthread_mutex_lock(&search_lock);
-	if (search_busy) {
-		pthread_mutex_unlock(&search_lock);
-		return;
-	}
-	search_busy = true;
-	pthread_mutex_unlock(&search_lock);
-	gui_notify_popup(tr("searching"));
-	pthread_t thread;
-	if (pthread_create(&thread, NULL, charts_worker, NULL) != 0) {
-		pthread_mutex_lock(&search_lock);
-		search_busy = false;
-		pthread_mutex_unlock(&search_lock);
-		toast_error("ytmusic_browse_failed");
-		return;
-	}
-	pthread_detach(thread);
-}
-
 static void search_accept_cb(lv_event_t *e) {
 	(void)e;
-	pthread_mutex_lock(&search_lock);
-	if (search_busy) {
-		pthread_mutex_unlock(&search_lock);
-		return;
-	}
 	const char *text = lv_textarea_get_text(search_field);
-	if (!text || !text[0]) {
-		pthread_mutex_unlock(&search_lock);
-		return;
-	}
-	char *query = strdup(text);
-	if (!query) {
-		pthread_mutex_unlock(&search_lock);
-		toast_error("ytmusic_out_of_memory");
-		return;
-	}
-	search_busy = true;
-	pthread_mutex_unlock(&search_lock);
-	gui_notify_popup(tr("searching"));
-	pthread_t thread;
-	if (pthread_create(&thread, NULL, search_worker, query) != 0) {
-		pthread_mutex_lock(&search_lock);
-		search_busy = false;
-		pthread_mutex_unlock(&search_lock);
-		free(query);
-		toast_error("ytmusic_search_failed");
-		return;
-	}
-	pthread_detach(thread);
+	if (!text || !text[0]) return;
+	char query[YTMUSIC_QUERY_MAX];
+	snprintf(query, sizeof(query), "%s", text);
+	start_list_request(LIST_SEARCH, false, search_filter, query, NULL, "ytmusic_search_results");
 }
 
 static void search_field_cb(lv_event_t *e) {
@@ -479,7 +647,29 @@ static void search_field_cb(lv_event_t *e) {
 
 static void search_cb(lv_event_t *e) {
 	(void)e;
-	show_search();
+	show_search(YTMUSIC_FILTER_SONGS);
+}
+
+static void podcasts_cb(lv_event_t *e) {
+	(void)e;
+	show_search(YTMUSIC_FILTER_PODCASTS);
+}
+
+// "Top songs" is the charts page: the store answers it with the chart rows and
+// with the playlists that hold them, and both are worth showing.
+static void charts_cb(lv_event_t *e) {
+	(void)e;
+	start_list_request(LIST_BROWSE, false, YTMUSIC_FILTER_SONGS, NULL, "FEmusic_charts", "ytmusic_charts");
+}
+
+// The liked songs are a playlist the account owns, so this one needs a session.
+static void favourites_cb(lv_event_t *e) {
+	(void)e;
+	if (!ytmusic_logged_in()) {
+		toast_error("ytmusic_sign_in_for_favourites");
+		return;
+	}
+	start_list_request(LIST_BROWSE, false, YTMUSIC_FILTER_SONGS, NULL, "VLLM", "ytmusic_favourites");
 }
 
 static void logout_cb(lv_event_t *e) {
@@ -491,11 +681,24 @@ static void logout_cb(lv_event_t *e) {
 	else toast_error("ytmusic_session_remove_failed");
 }
 
+// The session file is the only sign-in InnerTube accepts, so it has a row of
+// its own rather than being a hidden feature of the card.
+static void import_session_cb(lv_event_t *e) {
+	(void)e;
+	char error[192] = "";
+	if (ytmusic_import_session_file(page_cfg ? page_cfg->sd_root_path : NULL, error, sizeof(error))) {
+		home_refresh_session_rows();
+		toast_success("ytmusic_session_imported");
+	} else {
+		toast_error(error[0] ? error : "ytmusic_session_file_missing");
+	}
+}
+
 static void build_search_page(void) {
 	search_screen = lv_obj_create(NULL);
 	lv_obj_add_style(search_screen, &theme_style_screen, 0);
 	lv_obj_set_scrollable(search_screen, false);
-	settingsrow_title(search_screen, page_cfg, "Search YouTube Music");
+	search_title = settingsrow_title(search_screen, page_cfg, "ytmusic_search");
 	search_field = lv_textarea_create(search_screen);
 	lv_textarea_set_one_line(search_field, true);
 	lv_textarea_set_placeholder_text(search_field, tr("artist_album_or_track"));
@@ -520,18 +723,31 @@ static void build_search_page(void) {
 	results_title = settingsrow_page_title(results_screen);
 	player_sheet_attach_drag(results_list, true);
 	switcher_attach_back_gesture(results_screen);
+
+	tracks_screen = lv_obj_create(NULL);
+	lv_obj_add_style(tracks_screen, &theme_style_screen, 0);
+	tracks_list = settingsrow_page(tracks_screen, page_cfg, "YouTube Music");
+	tracks_title = settingsrow_page_title(tracks_screen);
+	player_sheet_attach_drag(tracks_list, true);
+	switcher_attach_back_gesture(tracks_screen);
+
+	explore_screen = lv_obj_create(NULL);
+	lv_obj_add_style(explore_screen, &theme_style_screen, 0);
+	explore_list = settingsrow_page(explore_screen, page_cfg, "ytmusic_explore");
+	player_sheet_attach_drag(explore_list, true);
+	switcher_attach_back_gesture(explore_screen);
 }
 
 static void build_login_page(void) {
 	login_screen = lv_obj_create(NULL);
 	lv_obj_add_style(login_screen, &theme_style_screen, 0);
 	lv_obj_set_scrollable(login_screen, false);
-	settingsrow_title(login_screen, page_cfg, "Sign in with Google");
+	settingsrow_title(login_screen, page_cfg, "ytmusic_sign_in");
 
 	lv_obj_t *box = lv_obj_create(login_screen);
 	int top = settingsrow_content_top(page_cfg);
 	lv_obj_set_size(box, page_cfg->screen_width - 2 * page_cfg->padding,
-				 page_cfg->screen_height - top - page_cfg->padding);
+			 page_cfg->screen_height - top - page_cfg->padding);
 	lv_obj_align(box, LV_ALIGN_TOP_MID, 0, top);
 	lv_obj_set_style_bg_opa(box, 0, 0);
 	lv_obj_set_style_border_width(box, 0, 0);
@@ -584,7 +800,7 @@ static void build_login_page(void) {
 	lv_obj_set_style_text_align(login_message, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(login_message, &theme_style_text, 0);
 	lv_obj_set_style_text_font(login_message, &font_ui_20, 0);
-	lv_label_set_text(login_message, "Requesting sign-in code…");
+	lv_label_set_text(login_message, tr("ytmusic_requesting_code"));
 
 	lv_obj_add_event_cb(login_screen, login_screen_unloaded, LV_EVENT_SCREEN_UNLOADED, NULL);
 	switcher_attach_back_gesture(login_screen);
@@ -593,11 +809,14 @@ static void build_login_page(void) {
 static void build_settings_page(gui_config_t *cfg) {
 	settings_screen = lv_obj_create(NULL);
 	lv_obj_add_style(settings_screen, &theme_style_screen, 0);
-	lv_obj_t *container = settingsrow_page(settings_screen, cfg, "YouTube Music settings");
-	sign_in_row = settingsrow_action(container, "Sign in with Google", login_begin_done_cb, NULL);
+	lv_obj_t *container = settingsrow_page(settings_screen, cfg, "ytmusic_settings");
+	sign_in_row = settingsrow_action(container, "ytmusic_sign_in", login_begin_done_cb, NULL);
 	settingsrow_add_icon(sign_in_row, &icon_import, THEME_SEMANTIC_CYAN);
-	sign_out_row = settingsrow_action(container, "Sign out of YouTube Music", logout_cb, NULL);
+	sign_out_row = settingsrow_action(container, "ytmusic_sign_out", logout_cb, NULL);
 	settingsrow_add_icon(sign_out_row, &icon_log_out, THEME_SEMANTIC_RED);
+	lv_obj_t *import_row = settingsrow_action(container, "ytmusic_import_session", import_session_cb, NULL);
+	settingsrow_add_icon(import_row, &icon_import, THEME_SEMANTIC_PURPLE);
+	settingsrow_add_caption(import_row, "ytmusic_import_session_note");
 	home_refresh_session_rows();
 	player_sheet_attach_drag(container, true);
 	switcher_attach_back_gesture(settings_screen);
@@ -629,10 +848,16 @@ static void home_build(void) {
 		return;
 	}
 
-	lv_obj_t *row = settingsrow_add(home_container, "Search YouTube Music", NULL, search_cb, NULL);
+	lv_obj_t *row = settingsrow_add(home_container, "ytmusic_search", NULL, search_cb, NULL);
 	settingsrow_add_icon(row, &icon_search, THEME_SEMANTIC_CYAN);
-	row = settingsrow_add(home_container, "Top Songs Charts", NULL, charts_cb, NULL);
+	row = settingsrow_add(home_container, "ytmusic_explore", NULL, explore_start_cb, NULL);
+	settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_PURPLE);
+	row = settingsrow_add(home_container, "ytmusic_charts", NULL, charts_cb, NULL);
 	settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_RED);
+	row = settingsrow_add(home_container, "ytmusic_favourites", NULL, favourites_cb, NULL);
+	settingsrow_add_icon(row, &icon_music_note, THEME_SEMANTIC_RED);
+	row = settingsrow_add(home_container, "ytmusic_podcasts", NULL, podcasts_cb, NULL);
+	settingsrow_add_icon(row, &icon_podcast_list, THEME_SEMANTIC_CYAN);
 }
 
 static void home_loaded_cb(lv_event_t *e) {

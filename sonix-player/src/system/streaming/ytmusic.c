@@ -27,9 +27,17 @@
 #define YTMUSIC_PLAYER_TOKEN_LIMIT 24000
 #define YTMUSIC_TIMEOUT 15
 #define YTMUSIC_SITE "https://music.youtube.com"
-#define YTMUSIC_OAUTH_DEVICE_URL "https://oauth2.googleapis.com/device/code"
+#define YTMUSIC_OAUTH_DEVICE_URL "https://www.youtube.com/o/oauth2/device/code"
 #define YTMUSIC_OAUTH_TOKEN_URL "https://oauth2.googleapis.com/token"
-#define YTMUSIC_OAUTH_SCOPE "https://www.googleapis.com/auth/youtube.readonly"
+// The full YouTube scope, not youtube.readonly. The music endpoints answer a
+// readonly token with an empty page: InnerTube has no read-only notion of the
+// library, and ytmusicapi -- the client this follows -- asks for this one. A
+// token granted only the readonly scope still works for the public pages, and
+// youtubei_post() falls back to those when the account is refused.
+#define YTMUSIC_OAUTH_SCOPE "https://www.googleapis.com/auth/youtube"
+// The grant type the TV-device flow exchanges a code with. The standard
+// urn:ietf:...:device_code grant issues a token the music endpoints refuse.
+#define YTMUSIC_OAUTH_DEVICE_GRANT "http://oauth.net/grant_type/device/1.0"
 
 // The web client's public InnerTube key. It is not an account credential: it
 // is the key music.youtube.com hands every visitor, and every open-source
@@ -333,13 +341,12 @@ ytmusic_login_state_t ytmusic_login_device_poll(ytmusic_device_login_t *login,
 		set_error(error, error_size, "ytmusic_oauth_invalid_device_code");
 		return YTMUSIC_LOGIN_ERROR;
 	}
-	char device_code[1400], client_id[768], secret[768], form[3500];
+	char device_code[1400], client_id[768], secret[768], grant[128], form[3500];
 	http_url_encode(login->device_code, device_code, sizeof(device_code));
 	http_url_encode(oauth_client_id, client_id, sizeof(client_id));
 	http_url_encode(oauth_client_secret, secret, sizeof(secret));
-	int n = snprintf(form, sizeof(form),
-		"client_id=%s&device_code=%s&grant_type=urn%%3Aietf%%3Aparams%%3Aoauth%%3Agrant-type%%3Adevice_code",
-		client_id, device_code);
+	http_url_encode(YTMUSIC_OAUTH_DEVICE_GRANT, grant, sizeof(grant));
+	int n = snprintf(form, sizeof(form), "client_id=%s&code=%s&grant_type=%s", client_id, device_code, grant);
 	if (oauth_client_secret[0] && n > 0 && (size_t)n < sizeof(form)) {
 		size_t used = (size_t)n;
 		snprintf(form + used, sizeof(form) - used, "&client_secret=%s", secret);
@@ -518,12 +525,44 @@ static bool refresh_access_token(char *error, size_t error_size) {
 	return true;
 }
 
-static bool auth_headers(char *out, size_t size, bool required, char *error, size_t error_size) {
+// True when the player holds something it can send as an account: the
+// imported browser session or the OAuth refresh token.
+static bool account_attached(void) {
 	char cookie[YTMUSIC_COOKIE_MAX];
-	char token[sizeof(access_token)];
 	ytmusic_session_cookie(cookie, sizeof(cookie));
 	pthread_mutex_lock(&session_lock);
-	bool oauth = refresh_token[0] != '\0';
+	bool has = cookie[0] != '\0' || refresh_token[0] != '\0';
+	pthread_mutex_unlock(&session_lock);
+	memset(cookie, 0, sizeof(cookie));
+	return has;
+}
+
+// The credential lines for one request.
+//
+// The imported browser session comes first, because it is the only thing
+// InnerTube accepts as an account. Google's OAuth device token is good for the
+// Data API and refused by the web music endpoints: a signed-in search comes
+// back as a 400, or as a page with no rows in it at all, which is why search
+// used to work only while signed out. The token is kept as a second choice, so
+// a player set up before the session import still tries something.
+//
+// `allow_account` false leaves the request anonymous, which is what the retry
+// in youtubei_post() uses to keep the public pages working.
+static bool auth_headers(char *out, size_t size, bool required, bool allow_account,
+						 char *error, size_t error_size) {
+	char cookie[YTMUSIC_COOKIE_MAX];
+	char token[sizeof(access_token)];
+	if (!allow_account) {
+		if (required) {
+			set_error(error, error_size, "ytmusic_sign_in_required");
+			return false;
+		}
+		if (out && size) out[0] = '\0';
+		return true;
+	}
+	ytmusic_session_cookie(cookie, sizeof(cookie));
+	pthread_mutex_lock(&session_lock);
+	bool oauth = cookie[0] == '\0' && refresh_token[0] != '\0';
 	bool refresh_needed = oauth && (!access_token[0] || time(NULL) + 30 >= access_expires_at);
 	snprintf(token, sizeof(token), "%s", access_token);
 	pthread_mutex_unlock(&session_lock);
@@ -536,8 +575,12 @@ static bool auth_headers(char *out, size_t size, bool required, char *error, siz
 			snprintf(token, sizeof(token), "%s", access_token);
 			pthread_mutex_unlock(&session_lock);
 		}
-		int n = snprintf(out, size, "Authorization: Bearer %s\r\nOrigin: %s\r\nReferer: %s/\r\n",
-						 token, YTMUSIC_SITE, YTMUSIC_SITE);
+		// X-Goog-Request-Time is not optional on a Bearer request: without it
+		// Google answers a 400 and the player showed "request refused" for
+		// every search once an account was attached. ytmusicapi sends the same
+		// header, in the same seconds-since-epoch form.
+		int n = snprintf(out, size, "Authorization: Bearer %s\r\nX-Goog-Request-Time: %ld\r\nOrigin: %s\r\nReferer: %s/\r\n",
+						 token, (long)time(NULL), YTMUSIC_SITE, YTMUSIC_SITE);
 		memset(token, 0, sizeof(token));
 		return n > 0 && (size_t)n < size;
 	}
@@ -607,32 +650,6 @@ static bool json_escape(const char *in, char *out, size_t size) {
 	return true;
 }
 
-// The charts landing page is a set of carousels; the tracks themselves are one
-// browse away, in the playlist behind each chart. This finds the first such
-// playlist ("VL...") the page offers, for the case where the songs chart did
-// not arrive as a list of rows -- signed out, YouTube returns only the video
-// charts. Without it the row opened a page with nothing playable on it.
-static bool first_chart_playlist(const char *body, char *out, size_t size) {
-	// The whole value, "VL" included: a playlist is browsed as "VL<id>" and a
-	// bare "PL..." is refused. Chart entries carry it complete.
-	static const char NEEDLE[] = "\"browseId\":\"";
-	const char *p = body;
-	while ((p = strstr(p, NEEDLE)) != NULL) {
-		p += sizeof(NEEDLE) - 1;
-		if (strncmp(p, "VL", 2) != 0) {
-			continue;
-		}
-		const char *end = strchr(p, '"');
-		if (!end || end == p) return false;
-		size_t n = (size_t)(end - p);
-		if (n + 1 > size) return false;
-		memcpy(out, p, n);
-		out[n] = '\0';
-		return true;
-	}
-	return false;
-}
-
 // Some Google endpoints protect JSON replies with the standard anti-XSSI
 // prefix. The YouTube Music API usually omits it, but tolerate it here so a
 // harmless transport wrapper does not turn a valid search reply into a parse
@@ -648,8 +665,12 @@ static const char *youtubei_json_start(const char *body) {
 	return body;
 }
 
-static bool youtubei_post(const char *endpoint, const char *body, bool login_required,
-						  char **response, int *status, char *error, size_t error_size) {
+// One InnerTube POST. `force_anonymous` leaves the account out of the request
+// altogether: a caller uses it to ask the same public question the signed-out
+// player asks, after the account's own answer came back with no rows in it.
+static bool youtubei_post_ex(const char *endpoint, const char *body, bool login_required,
+							 bool force_anonymous, char **response, int *status,
+							 char *error, size_t error_size) {
 	pthread_mutex_lock(&request_lock);
 	if (!ensure_context(error, error_size)) {
 		pthread_mutex_unlock(&request_lock);
@@ -690,31 +711,57 @@ static bool youtubei_post(const char *endpoint, const char *body, bool login_req
 	int status_code = 0;
 	bool ok = false;
 	bool retried_oauth = false;
-	for (;;) {
+	bool anonymous = false;
+	// At most four passes: the account, a forced token refresh, and the
+	// anonymous retry, which is the one that matters. A page that does not need
+	// an account is never allowed to fail just because the account's credential
+	// was refused -- that is what made search come back empty, and Top Songs
+	// report a refusal, for anyone who had signed in.
+	for (int attempt = 0; attempt < 4; attempt++) {
 		size_t used = strlen(headers);
-		if (!auth_headers(headers + used, sizeof(headers) - used, login_required, error, error_size)) {
+		bool want_account = !anonymous && !force_anonymous;
+		if (!auth_headers(headers + used, sizeof(headers) - used, login_required && want_account,
+						  want_account, error, error_size)) {
 			memset(headers, 0, sizeof(headers));
 			memset(request_body, 0, sizeof(request_body));
 			pthread_mutex_unlock(&request_lock);
 			return false;
 		}
 		ok = http_request(url, &req, response, NULL, YTMUSIC_RESPONSE_LIMIT, YTMUSIC_TIMEOUT, &status_code);
-		if (!ok || status_code != 401 || retried_oauth) break;
+		if (!ok) break;
+		if (status_code >= 200 && status_code < 300) break;
 
-		// The device clock can be corrected after boot, so a locally unexpired
-		// token may already be rejected by Google. Force one refresh and retry
-		// this read-only request before reporting the saved session as expired.
-		pthread_mutex_lock(&session_lock);
-		bool can_refresh = refresh_token[0] != '\0';
-		if (can_refresh) access_expires_at = 0;
-		pthread_mutex_unlock(&session_lock);
-		if (!can_refresh) break;
+		// Not a 2xx. The reply body is of no use to the caller, and the next
+		// attempt would otherwise leak it.
 		if (response && *response) {
 			wipe_free(*response);
 			*response = NULL;
 		}
-		memset(headers + used, 0, sizeof(headers) - used);
-		retried_oauth = true;
+
+		// The device clock can be corrected after boot, so a locally unexpired
+		// token may already be rejected by Google. Force one refresh and retry
+		// this read-only request before giving up on the saved session.
+		if (status_code == 401 && !retried_oauth && !anonymous && !force_anonymous) {
+			pthread_mutex_lock(&session_lock);
+			bool can_refresh = refresh_token[0] != '\0';
+			if (can_refresh) access_expires_at = 0;
+			pthread_mutex_unlock(&session_lock);
+			if (can_refresh) {
+				retried_oauth = true;
+				memset(headers + used, 0, sizeof(headers) - used);
+				continue;
+			}
+		}
+
+		// Google refused the account (a 400, or a 401 the refresh could not
+		// help). Try the same read without it: the catalogue pages are public,
+		// and a refusal is not a reason to show the user nothing.
+		if (!anonymous && !login_required && !force_anonymous && account_attached()) {
+			anonymous = true;
+			memset(headers + used, 0, sizeof(headers) - used);
+			continue;
+		}
+		break;
 	}
 	memset(headers, 0, sizeof(headers));
 	memset(request_body, 0, sizeof(request_body));
@@ -735,12 +782,24 @@ static bool youtubei_post(const char *endpoint, const char *body, bool login_req
 	return true;
 }
 
-// The web music client sometimes returns signatureCipher instead of a direct
-// stream URL. The device has no JavaScript runtime to execute YouTube's player
-// script, so request an AAC-capable Android VR player response as a direct-URL
-// fallback. Search and account personalization still use the saved Music
-// session; the VR client is only used to resolve the media bytes.
-static bool android_vr_player(const char *video_id, char **response, char *error, size_t error_size) {
+static bool youtubei_post(const char *endpoint, const char *body, bool login_required,
+						  char **response, int *status, char *error, size_t error_size) {
+	return youtubei_post_ex(endpoint, body, login_required, false, response, status, error, error_size);
+}
+
+// The phone app's player endpoint. It is what resolves the media bytes: the
+// web music client answers with a ciphered stream the device cannot solve (it
+// has no JavaScript engine), and it wants a signed-in session even to try. This
+// one answers with plain https URLs and needs no account, so a track plays
+// whether or not anybody has signed in.
+//
+// ANDROID_VR used to be the direct-URL client of choice; Google has since put
+// it behind a "sign in to confirm you're not a bot" check that answers no
+// streaming data at all, which is why playback stopped working.
+#define YTMUSIC_ANDROID_VERSION "20.10.38"
+#define YTMUSIC_ANDROID_SDK 30
+
+static bool android_player(const char *video_id, char **response, char *error, size_t error_size) {
 	if (!ensure_context(error, error_size)) return false;
 	char key[sizeof(api_key)];
 	pthread_mutex_lock(&api_lock);
@@ -749,8 +808,13 @@ static bool android_vr_player(const char *video_id, char **response, char *error
 	char url[512], body[1024];
 	snprintf(url, sizeof(url), "https://www.youtube.com/youtubei/v1/player?key=%s&prettyPrint=false", key);
 	snprintf(body, sizeof(body),
-		"{\"context\":{\"client\":{\"clientName\":\"ANDROID_VR\",\"clientVersion\":\"1.65.10\",\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}", video_id);
-	const char *headers = "Content-Type: application/json\r\nOrigin: https://www.youtube.com\r\nReferer: https://www.youtube.com/\r\nX-YouTube-Client-Name: 28\r\nX-YouTube-Client-Version: 1.65.10\r\n";
+		"{\"context\":{\"client\":{\"clientName\":\"ANDROID\",\"clientVersion\":\"%s\","
+		"\"androidSdkVersion\":%d,\"osName\":\"Android\",\"osVersion\":\"11\","
+		"\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"%s\","
+		"\"contentCheckOk\":true,\"racyCheckOk\":true}",
+		YTMUSIC_ANDROID_VERSION, YTMUSIC_ANDROID_SDK, video_id);
+	const char *headers = "Content-Type: application/json\r\nOrigin: https://www.youtube.com\r\nReferer: https://www.youtube.com/\r\n"
+						  "X-YouTube-Client-Name: 3\r\nX-YouTube-Client-Version: " YTMUSIC_ANDROID_VERSION "\r\n";
 	http_req_t req = {.method = "POST", .extra_headers = headers, .body = body,
 		.content_type = "application/json", .want_error_body = true, .no_https_downgrade = true};
 	int status = 0;
@@ -790,21 +854,46 @@ static int parse_duration(const char *text) {
 	return 0;
 }
 
-static bool read_track(const json_doc_t *doc, int item, ytmusic_track_t *track) {
-	memset(track, 0, sizeof(*track));
-	int renderer = json_get(doc, item, "musicResponsiveListItemRenderer");
-	if (renderer < 0) renderer = item;
-	if (!token_video_id(doc, renderer, track->id)) return false;
-	json_str(doc, json_path(doc, renderer, "flexColumns.0.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), track->title, sizeof(track->title));
-	json_str(doc, json_path(doc, renderer, "flexColumns.1.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), track->artist, sizeof(track->artist));
-	json_str(doc, json_path(doc, renderer, "flexColumns.2.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), track->album, sizeof(track->album));
+// The page a container row opens: a playlist ("VL..."), an album ("MPRE..."),
+// a podcast show ("MPSP...") or an artist channel.
+static bool token_browse_id(const json_doc_t *doc, int renderer, char *out, size_t size) {
+	static const char *const paths[] = {
+		"navigationEndpoint.browseEndpoint.browseId",
+		"title.runs.0.navigationEndpoint.browseEndpoint.browseId",
+		"subtitle.runs.0.navigationEndpoint.browseEndpoint.browseId",
+	};
+	for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+		if (json_str(doc, json_path(doc, renderer, paths[i]), out, size) && out[0]) return true;
+	}
+	return false;
+}
+
+// One row of any of the three shapes the store uses for a list entry: a song
+// row, a podcast episode (a multi-row item), or a card for a playlist, album or
+// show. A row with a video id plays; one that only names a page opens it.
+static bool read_item(const json_doc_t *doc, int renderer, ytmusic_item_t *item) {
+	memset(item, 0, sizeof(*item));
+	if (token_video_id(doc, renderer, item->id)) {
+		item->kind = YTMUSIC_ITEM_TRACK;
+	} else if (token_browse_id(doc, renderer, item->browse_id, sizeof(item->browse_id))) {
+		item->kind = YTMUSIC_ITEM_CONTAINER;
+	} else {
+		return false;
+	}
+	json_str(doc, json_path(doc, renderer, "flexColumns.0.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), item->title, sizeof(item->title));
+	if (!item->title[0]) json_str(doc, json_path(doc, renderer, "title.runs.0.text"), item->title, sizeof(item->title));
+	// The second column is the artist, or the show for an episode; the third
+	// holds the album, or a play count on an album page. The first one that says
+	// something is the subtitle.
+	json_str(doc, json_path(doc, renderer, "flexColumns.1.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), item->subtitle, sizeof(item->subtitle));
+	if (!item->subtitle[0]) {
+		json_str(doc, json_path(doc, renderer, "flexColumns.2.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), item->subtitle, sizeof(item->subtitle));
+	}
+	if (!item->subtitle[0]) json_str(doc, json_path(doc, renderer, "subtitle.runs.0.text"), item->subtitle, sizeof(item->subtitle));
 	char duration[32] = "";
 	json_str(doc, json_path(doc, renderer, "fixedColumns.0.musicResponsiveListItemFixedColumnRenderer.text.runs.0.text"), duration, sizeof(duration));
-	track->duration = parse_duration(duration);
-	int thumbs = json_path(doc, renderer, "thumbnail.musicThumbnailRenderer.thumbnail.thumbnails");
-	int count = json_len(doc, thumbs);
-	if (count > 0) json_obj_str(doc, json_at(doc, thumbs, count - 1), "url", track->thumbnail, sizeof(track->thumbnail));
-	return track->title[0] != '\0';
+	item->duration = parse_duration(duration);
+	return item->title[0] != '\0';
 }
 
 static const char *skip_json_space(const char *p) {
@@ -871,17 +960,29 @@ static bool track_renderer_is_ad(const json_doc_t *doc, int renderer) {
 	return false;
 }
 
-// Parse only each musicResponsiveListItemRenderer instead of materializing
-// the entire search/charts response as one token tree. This uses much less RAM
-// and still returns complete early rows if YouTube sends a response larger
-// than our bounded HTTP buffer.
-static int collect_track_rows_compact(const char *response, ytmusic_track_t *tracks, int limit) {
+// The three renderers a list entry arrives in. A song and a podcast show are
+// both "responsive list items", a playlist/album/show card is a "two row item",
+// and a podcast episode is a "multi row item".
+static bool item_renderer_key(const char *key, size_t len) {
+	static const char *const keys[] = {
+		"musicResponsiveListItemRenderer",
+		"musicTwoRowItemRenderer",
+		"musicMultiRowListItemRenderer",
+	};
+	for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+		if (len == strlen(keys[i]) && memcmp(key, keys[i], len) == 0) return true;
+	}
+	return false;
+}
+
+// Parse each item renderer on its own instead of materializing the entire
+// page as one token tree. This uses much less RAM and still returns complete
+// early rows if YouTube sends a response larger than our bounded HTTP buffer.
+static int collect_items_compact(const char *response, ytmusic_item_t *items, int limit) {
 	const char *json = youtubei_json_start(response);
 	if (!json || (*json != '{' && *json != '[')) return -1;
-	static const char ROW_KEY[] = "musicResponsiveListItemRenderer";
-	const size_t key_len = sizeof(ROW_KEY) - 1;
 	int count = 0;
-	bool saw_unreadable_row = false;
+	bool saw_unreadable = false;
 	const char *p = json;
 
 	while (*p && count < limit) {
@@ -891,22 +992,21 @@ static int collect_track_rows_compact(const char *response, ytmusic_track_t *tra
 		}
 		const char *key_end = json_string_end(p);
 		if (!key_end) break;
-		bool is_row_key = (size_t)(key_end - p - 2) == key_len &&
-			memcmp(p + 1, ROW_KEY, key_len) == 0;
+		bool is_item_key = item_renderer_key(p + 1, (size_t)(key_end - p - 2));
 		const char *value = skip_json_space(key_end);
-		if (!is_row_key || *value != ':') {
+		if (!is_item_key || *value != ':') {
 			p = key_end;
 			continue;
 		}
 		value = skip_json_space(value + 1);
 		if (*value != '{') {
-			saw_unreadable_row = true;
+			saw_unreadable = true;
 			p = key_end;
 			continue;
 		}
 		const char *end = json_compound_end(value);
 		if (!end) {
-			saw_unreadable_row = true;
+			saw_unreadable = true;
 			break;
 		}
 		size_t item_len = (size_t)(end - value);
@@ -918,33 +1018,71 @@ static int collect_track_rows_compact(const char *response, ytmusic_track_t *tra
 			json_doc_t item_doc;
 			if (json_parse_limited(item_json, &item_doc, YTMUSIC_RENDERER_TOKEN_LIMIT)) {
 				int root = json_root(&item_doc);
-				ytmusic_track_t candidate;
+				// An ad, sponsored or promoted card is skipped in silence: it is
+				// not a broken row, it is a row this player does not offer.
 				if (!track_renderer_is_ad(&item_doc, root)) {
-					if (read_track(&item_doc, root, &candidate)) {
+					ytmusic_item_t candidate;
+					if (read_item(&item_doc, root, &candidate)) {
 						bool duplicate = false;
 						for (int i = 0; i < count; i++) {
-							if (strcmp(tracks[i].id, candidate.id) == 0) {
+							const char *mine = items[i].kind == YTMUSIC_ITEM_TRACK ? items[i].id : items[i].browse_id;
+							const char *theirs = candidate.kind == YTMUSIC_ITEM_TRACK ? candidate.id : candidate.browse_id;
+							if (mine[0] && strcmp(mine, theirs) == 0) {
 								duplicate = true;
 								break;
 							}
 						}
-						if (!duplicate) tracks[count++] = candidate;
+						if (!duplicate) items[count++] = candidate;
 					} else {
-						saw_unreadable_row = true;
+						saw_unreadable = true;
 					}
 				}
 				json_free(&item_doc);
 			} else {
-				saw_unreadable_row = true;
+				saw_unreadable = true;
 			}
 			free(item_json);
 		} else {
-			saw_unreadable_row = true;
+			saw_unreadable = true;
 		}
 		p = end;
 	}
-	if (!count && saw_unreadable_row) return -1;
+	if (!count && saw_unreadable) return -1;
 	return count;
+}
+
+// The heading of one carousel of the Explore page.
+static void read_section_title(const char *object, char *out, size_t size) {
+	out[0] = '\0';
+	json_doc_t doc;
+	if (!json_parse_limited(object, &doc, 8000)) return;
+	int root = json_root(&doc);
+	if (!json_str(&doc, json_path(&doc, root, "header.musicCarouselShelfBasicHeaderRenderer.title.runs.0.text"), out, size) || !out[0]) {
+		json_str(&doc, json_path(&doc, root, "header.musicCardShelfRenderer.title.runs.0.text"), out, size);
+	}
+	json_free(&doc);
+}
+
+// The cards under one carousel. The carousel is a slice of the whole page, so
+// it is copied out (the scanner wants a terminated string) and the items are
+// read from the copy.
+static int collect_section_items(const char *object, size_t len, ytmusic_section_t *section) {
+	char *copy = malloc(len + 1);
+	if (!copy) return -1;
+	memcpy(copy, object, len);
+	copy[len] = '\0';
+	read_section_title(copy, section->title, sizeof(section->title));
+	int count = collect_items_compact(copy, section->items, YTMUSIC_SECTION_ITEMS_MAX);
+	free(copy);
+	return count;
+}
+
+static bool browse_id_valid(const char *id) {
+	if (!id || !id[0] || strlen(id) >= YTMUSIC_BROWSE_ID_MAX) return false;
+	for (const unsigned char *p = (const unsigned char *)id; *p; p++) {
+		if (!isalnum(*p) && *p != '-' && *p != '_') return false;
+	}
+	return true;
 }
 
 static bool playable_track_response(const json_doc_t *doc, int root, const char *video_id,
@@ -966,68 +1104,209 @@ static bool playable_track_response(const json_doc_t *doc, int root, const char 
 	return true;
 }
 
-int ytmusic_search_tracks(const char *query, ytmusic_track_t *tracks, int limit,
-						  char *error, size_t error_size) {
+int ytmusic_search_items(const char *query, ytmusic_filter_t filter,
+						 ytmusic_item_t *items, int limit, char *error, size_t error_size) {
 	if (error && error_size) error[0] = '\0';
-	if (!query || !query[0] || !tracks || limit <= 0) {
+	if (!query || !query[0] || !items || limit <= 0) {
 		set_error(error, error_size, "ytmusic_invalid_search");
 		return -1;
 	}
-	if (limit > YTMUSIC_TRACKS_MAX) limit = YTMUSIC_TRACKS_MAX;
-	char escaped[512], request[1200];
+	if (limit > YTMUSIC_ITEMS_MAX) limit = YTMUSIC_ITEMS_MAX;
+	char escaped[512], request[1400];
 	if (!json_escape(query, escaped, sizeof(escaped))) {
 		set_error(error, error_size, "ytmusic_search_too_long");
 		return -1;
 	}
+	// The songs filter and the podcasts one. Both are the store's own encoded
+	// filter values, the same ones its search chips send.
+	const char *params = filter == YTMUSIC_FILTER_PODCASTS ? "EgWKAQJQAWoMEA4QChADEAQQCRAF"
+														 : "EgWKAQIIAWoKEAkQBRAKEAMQBA==";
 	snprintf(request, sizeof(request),
-		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"query\":\"%s\",\"params\":\"EgWKAQIIAWoKEAkQBRAKEAMQBA==\"}", escaped);
+		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"query\":\"%s\",\"params\":\"%s\"}",
+		escaped, params);
 	char *body = NULL;
 	if (!youtubei_post("search", request, false, &body, NULL, error, error_size)) return -1;
-	int count = collect_track_rows_compact(body, tracks, limit);
+	int count = collect_items_compact(body, items, limit);
 	free(body);
+	// A 200 with no rows in it is how the music endpoints refuse a session
+	// they do not like: no error status, just an empty page. Search is public,
+	// so ask again as a visitor rather than telling a signed-in user that
+	// nothing matched -- that empty signed-in search was the original bug.
+	if (count == 0 && account_attached()) {
+		char *guest = NULL;
+		if (error && error_size) error[0] = '\0';
+		if (youtubei_post_ex("search", request, false, true, &guest, NULL, error, error_size)) {
+			count = collect_items_compact(guest, items, limit);
+			free(guest);
+		}
+		if (error && error_size) error[0] = '\0';
+	}
 	if (count < 0) set_error(error, error_size, "ytmusic_unreadable_reply");
 	return count;
 }
 
-int ytmusic_browse_chart_tracks(ytmusic_track_t *tracks, int limit,
-								char *error, size_t error_size) {
+int ytmusic_browse_items(const char *browse_id, ytmusic_item_t *items, int limit,
+						 char *error, size_t error_size) {
 	if (error && error_size) error[0] = '\0';
-	if (!tracks || limit <= 0) {
+	if (!items || limit <= 0 || !browse_id_valid(browse_id)) {
 		set_error(error, error_size, "ytmusic_invalid_browse");
 		return -1;
 	}
-	if (limit > YTMUSIC_TRACKS_MAX) limit = YTMUSIC_TRACKS_MAX;
-	const char *request =
-		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"FEmusic_charts\"}";
+	if (limit > YTMUSIC_ITEMS_MAX) limit = YTMUSIC_ITEMS_MAX;
+	char request[512];
+	snprintf(request, sizeof(request),
+		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"%s\"}",
+		browse_id);
 	char *body = NULL;
 	if (!youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
-	int count = collect_track_rows_compact(body, tracks, limit);
-
-	// Signed in, the page carries the songs chart as rows. Signed out it only
-	// links to the video charts, so follow the first playlist it offers and
-	// list that chart's tracks instead of reporting nothing.
-	if (count <= 0) {
-		char playlist[96];
-		if (first_chart_playlist(body, playlist, sizeof(playlist))) {
-			free(body);
-			body = NULL;
-			char playlist_request[320];
-			snprintf(playlist_request, sizeof(playlist_request),
-					 "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\""
-					 ",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"%s\"}",
-					 playlist);
-			if (youtubei_post("browse", playlist_request, false, &body, NULL, error, error_size)) {
-				count = collect_track_rows_compact(body, tracks, limit);
-			}
-		}
-	}
+	int count = collect_items_compact(body, items, limit);
 	free(body);
+	// Charts, playlists and every other public page answer an empty body to a
+	// session they will not honour. The visitor's copy of the same page is
+	// what the signed-out player shows, so show that instead of nothing.
+	if (count == 0 && account_attached()) {
+		char *guest = NULL;
+		if (error && error_size) error[0] = '\0';
+		if (youtubei_post_ex("browse", request, false, true, &guest, NULL, error, error_size)) {
+			count = collect_items_compact(guest, items, limit);
+			free(guest);
+		}
+		if (error && error_size) error[0] = '\0';
+	}
 	if (count < 0) {
 		set_error(error, error_size, "ytmusic_unreadable_reply");
 		return count;
 	}
-	if (!count) set_error(error, error_size, "ytmusic_chart_tracks_unavailable");
 	return count;
+}
+
+// The carousels of one Explore page, in the order the page lists them.
+static int collect_sections(const char *body, ytmusic_section_t *sections, int limit) {
+	int count = 0;
+	static const char NEEDLE[] = "\"musicCarouselShelfRenderer\"";
+	const char *p = body;
+	while (count < limit && (p = strstr(p, NEEDLE)) != NULL) {
+		p += sizeof(NEEDLE) - 1;
+		const char *value = skip_json_space(p);
+		if (*value != ':') continue;
+		value = skip_json_space(value + 1);
+		if (*value != '{') continue;
+		const char *end = json_compound_end(value);
+		if (!end) break;
+		ytmusic_section_t *section = &sections[count];
+		memset(section, 0, sizeof(*section));
+		int items = collect_section_items(value, (size_t)(end - value), section);
+		// A carousel whose cards are not playable or browsable -- "Moods &
+		// genres" is a grid of filter buttons -- is not a row worth showing.
+		if (items > 0) {
+			section->count = items;
+			count++;
+		}
+		p = end;
+	}
+	// A page without carousels still has rows on it: show them under one
+	// untitled heading rather than an empty Explore page.
+	if (!count) {
+		memset(&sections[0], 0, sizeof(sections[0]));
+		int items = collect_items_compact(body, sections[0].items, YTMUSIC_SECTION_ITEMS_MAX);
+		if (items > 0) {
+			sections[0].count = items;
+			count = 1;
+		}
+	}
+	return count;
+}
+
+int ytmusic_explore_sections(ytmusic_section_t *sections, int limit,
+							 char *error, size_t error_size) {
+	if (error && error_size) error[0] = '\0';
+	if (!sections || limit <= 0) {
+		set_error(error, error_size, "ytmusic_invalid_browse");
+		return -1;
+	}
+	if (limit > YTMUSIC_SECTIONS_MAX) limit = YTMUSIC_SECTIONS_MAX;
+	// Explore, the store's own front page of new releases and charts. It is a
+	// public page, so it answers without an account.
+	const char *request =
+		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"FEmusic_explore\"}";
+	char *body = NULL;
+	if (!youtubei_post("browse", request, false, &body, NULL, error, error_size)) return -1;
+	int count = collect_sections(body, sections, limit);
+	free(body);
+	// As with search: an account the store will not honour gets an empty
+	// Explore, and the visitor's front page is the page to show instead.
+	if (count == 0 && account_attached()) {
+		char *guest = NULL;
+		if (error && error_size) error[0] = '\0';
+		if (youtubei_post_ex("browse", request, false, true, &guest, NULL, error, error_size)) {
+			count = collect_sections(guest, sections, limit);
+			free(guest);
+		}
+		if (error && error_size) error[0] = '\0';
+	}
+	if (!count) set_error(error, error_size, "ytmusic_explore_empty");
+	return count;
+}
+
+// The audio stream to download: the AAC track with the highest bitrate that
+// the reply gives a plain URL for. Opus is skipped -- there is an Opus decoder
+// but it reads Ogg, not the WebM container YouTube puts Opus in.
+static bool pick_audio_format(const json_doc_t *doc, int root, char *url, size_t url_size) {
+	int best = -1;
+	long best_bitrate = -1;
+	int formats = json_path(doc, root, "streamingData.adaptiveFormats");
+	for (int i = 0; i < json_len(doc, formats); i++) {
+		int format = json_at(doc, formats, i);
+		char mime[96] = "", candidate[YTMUSIC_URL_MAX] = "";
+		json_obj_str(doc, format, "mimeType", mime, sizeof(mime));
+		if (strncasecmp(mime, "audio/mp4", 9) != 0) continue;
+		if (!json_obj_str(doc, format, "url", candidate, sizeof(candidate)) || !candidate[0]) continue;
+		long bitrate = json_obj_long(doc, format, "bitrate", 0);
+		if (bitrate > best_bitrate) {
+			best = format;
+			best_bitrate = bitrate;
+		}
+	}
+	if (best < 0) {
+		// A few tracks are only offered as the muxed progressive file. It is
+		// much bigger, but the MP4 reader takes the audio track out of it and
+		// the video is never decoded.
+		int progressive = json_path(doc, root, "streamingData.formats");
+		for (int i = 0; i < json_len(doc, progressive) && best < 0; i++) {
+			int format = json_at(doc, progressive, i);
+			char mime[96] = "", candidate[YTMUSIC_URL_MAX] = "";
+			json_obj_str(doc, format, "mimeType", mime, sizeof(mime));
+			if (strncasecmp(mime, "video/mp4", 9) != 0) continue;
+			if (json_obj_str(doc, format, "url", candidate, sizeof(candidate)) && candidate[0]) best = format;
+		}
+	}
+	return best >= 0 && json_obj_str(doc, best, "url", url, url_size) && url[0];
+}
+
+// One player reply: the track that was asked for, playable, with its media URL
+// and the facts the now-playing screen shows.
+static bool player_reply_media(const char *body, const char *video_id, char *url, size_t url_size,
+							   int *duration, char *title, size_t title_size,
+							   char *artist, size_t artist_size,
+							   char *error, size_t error_size) {
+	json_doc_t doc;
+	if (!body || !json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_PLAYER_TOKEN_LIMIT)) {
+		set_error(error, error_size, "ytmusic_unreadable_reply");
+		return false;
+	}
+	int root = json_root(&doc);
+	if (!playable_track_response(&doc, root, video_id, error, error_size)) {
+		json_free(&doc);
+		return false;
+	}
+	int details = json_get(&doc, root, "videoDetails");
+	if (duration) *duration = (int)json_obj_long(&doc, details, "lengthSeconds", 0);
+	if (title && title_size) json_obj_str(&doc, details, "title", title, title_size);
+	if (artist && artist_size) json_obj_str(&doc, details, "author", artist, artist_size);
+	bool ok = pick_audio_format(&doc, root, url, url_size);
+	json_free(&doc);
+	if (!ok) set_error(error, error_size, "ytmusic_aac_stream_unavailable");
+	return ok;
 }
 
 bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
@@ -1045,85 +1324,38 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 			return false;
 		}
 	}
-	if (!ytmusic_logged_in()) {
-		set_error(error, error_size, "ytmusic_sign_in_required");
-		return false;
-	}
-	char request[1024];
-	snprintf(request, sizeof(request),
-		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}", video_id);
-	char *body = NULL;
-	if (!youtubei_post("player", request, true, &body, NULL, error, error_size)) return false;
-	json_doc_t doc;
-	if (!json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_PLAYER_TOKEN_LIMIT)) {
-		free(body);
-		body = NULL;
-		goto android_vr_fallback;
-	}
-	int root = json_root(&doc);
-	if (!playable_track_response(&doc, root, video_id, error, error_size)) {
-		json_free(&doc);
-		free(body);
-		return false;
-	}
-	int details = json_get(&doc, root, "videoDetails");
-	if (duration) *duration = (int)json_obj_long(&doc, details, "lengthSeconds", 0);
-	if (title && title_size) json_obj_str(&doc, details, "title", title, title_size);
-	if (artist && artist_size) json_obj_str(&doc, details, "author", artist, artist_size);
-	int formats = json_path(&doc, root, "streamingData.adaptiveFormats");
-	int chosen = -1;
-	for (int i = 0; i < json_len(&doc, formats); i++) {
-		int format = json_at(&doc, formats, i);
-		char mime[96] = "", candidate[YTMUSIC_URL_MAX] = "";
-		json_obj_str(&doc, format, "mimeType", mime, sizeof(mime));
-		if (strncasecmp(mime, "audio/mp4", 9) != 0) continue;
-		if (json_obj_str(&doc, format, "url", candidate, sizeof(candidate)) && candidate[0]) {
-			chosen = format;
-			break;
-		}
-	}
-	bool ok = chosen >= 0 && json_obj_str(&doc, chosen, "url", url, url_size) && url[0];
-	json_free(&doc);
-	free(body);
-	if (ok) return true;
 
-	// Web Music may return ciphered formats, which require running YouTube's
-	// current player JavaScript. Avoid embedding a large JS engine in the small
-	// player firmware: the Android VR response can provide a direct AAC URL.
-android_vr_fallback:
-	body = NULL;
-	if (!android_vr_player(video_id, &body, error, error_size)) return false;
-	if (!json_parse_limited(body, &doc, YTMUSIC_PLAYER_TOKEN_LIMIT)) {
+	// Nothing here needs an account: the phone app's player answers a signed-out
+	// request with direct media URLs, and requiring a sign-in was what made a
+	// track unplayable for anyone whose session Google had refused.
+	//
+	// A saved browser session is still offered the web music player first, since
+	// that response knows the account's region and its premium stream. It is not
+	// required, and it is not tried with an OAuth token alone -- that client
+	// refuses such a token outright.
+	char cookie[YTMUSIC_COOKIE_MAX];
+	ytmusic_session_cookie(cookie, sizeof(cookie));
+	bool try_web = cookie[0] != '\0';
+	memset(cookie, 0, sizeof(cookie));
+	if (try_web) {
+		char request[1024];
+		snprintf(request, sizeof(request),
+			"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}",
+			video_id);
+		char *body = NULL;
+		bool ok = youtubei_post("player", request, true, &body, NULL, error, error_size) &&
+			player_reply_media(body, video_id, url, url_size, duration, title, title_size,
+							   artist, artist_size, error, error_size);
 		free(body);
-		set_error(error, error_size, "ytmusic_unreadable_reply");
-		return false;
+		if (ok) return true;
+		if (error && error_size) error[0] = '\0';
 	}
-	root = json_root(&doc);
-	if (!playable_track_response(&doc, root, video_id, error, error_size)) {
-		json_free(&doc);
-		free(body);
-		return false;
-	}
-	details = json_get(&doc, root, "videoDetails");
-	if (duration && !*duration) *duration = (int)json_obj_long(&doc, details, "lengthSeconds", 0);
-	if (title && title_size && !title[0]) json_obj_str(&doc, details, "title", title, title_size);
-	if (artist && artist_size && !artist[0]) json_obj_str(&doc, details, "author", artist, artist_size);
-	formats = json_path(&doc, root, "streamingData.adaptiveFormats");
-	ok = false;
-	for (int i = 0; i < json_len(&doc, formats); i++) {
-		int format = json_at(&doc, formats, i);
-		char mime[96] = "", candidate[YTMUSIC_URL_MAX] = "";
-		json_obj_str(&doc, format, "mimeType", mime, sizeof(mime));
-		if (strncasecmp(mime, "audio/mp4", 9) == 0 &&
-			json_obj_str(&doc, format, "url", candidate, sizeof(candidate)) && candidate[0]) {
-			snprintf(url, url_size, "%s", candidate);
-			ok = true;
-			break;
-		}
-	}
-	json_free(&doc);
+
+	char *body = NULL;
+	if (!android_player(video_id, &body, error, error_size)) return false;
+	bool ok = player_reply_media(body, video_id, url, url_size, duration, title, title_size,
+								 artist, artist_size, error, error_size);
 	free(body);
-	if (!ok) set_error(error, error_size, "ytmusic_aac_stream_unavailable");
 	return ok;
 }
 
