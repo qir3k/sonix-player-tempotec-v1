@@ -727,6 +727,16 @@ static bool youtubei_post_ex(const char *endpoint, const char *body, bool login_
 			pthread_mutex_unlock(&request_lock);
 			return false;
 		}
+		if (!want_account) {
+			// The consent wall: from a European address Google answers the
+			// public pages with framework JSON that carries no shelves at all
+			// -- hundreds of kilobytes in, zero rows out, which is what an
+			// empty search page was. These are the cookies the interstitial
+			// sets on acceptance; where no wall stands they are ignored.
+			static const char consent[] = "Cookie: SOCS=CAI; CONSENT=YES+cb\r\n";
+			size_t room = sizeof(headers) - strlen(headers) - 1;
+			strncat(headers, consent, room);
+		}
 		ok = http_request(url, &req, response, NULL, YTMUSIC_RESPONSE_LIMIT, YTMUSIC_TIMEOUT, &status_code);
 		if (!ok) break;
 		if (status_code >= 200 && status_code < 300) break;
@@ -1071,6 +1081,39 @@ static bool item_renderer_key(const char *key, size_t len) {
 // Parse each item renderer on its own instead of materializing the entire
 // page as one token tree. This uses much less RAM and still returns complete
 // early rows if YouTube sends a response larger than our bounded HTTP buffer.
+// A public page that came back with nothing is the one failure a log can
+// diagnose from an armchair: what the body holds says whether Google sent
+// results nobody read (the renderers would be there), a consent or bot wall
+// ("consent", "Sign in to confirm"), or nothing at all.
+static void ytmusic_log_empty_body(const char *what, const char *body) {
+	if (!body) {
+		fprintf(stderr, "ytmusic: %s page empty: no body at all\n", what);
+		return;
+	}
+	static const char *const markers[] = {
+		"musicResponsiveListItemRenderer",
+		"musicTwoRowItemRenderer",
+		"musicShelfRenderer",
+		"musicCarouselShelfRenderer",
+		"consent",
+		"Sign in to confirm",
+		"playabilityStatus",
+	};
+	fprintf(stderr, "ytmusic: %s page empty, %zu bytes:", what, strlen(body));
+	for (size_t i = 0; i < sizeof(markers) / sizeof(markers[0]); i++) {
+		int hits = 0;
+		const char *at = body;
+		while ((at = strstr(at, markers[i])) != NULL) {
+			hits++;
+			at += strlen(markers[i]);
+		}
+		if (hits) {
+			fprintf(stderr, " %s=%d", markers[i], hits);
+		}
+	}
+	fprintf(stderr, "\n");
+}
+
 static int collect_items_compact(const char *response, ytmusic_item_t *items, int limit) {
 	const char *json = youtubei_json_start(response);
 	if (!json || (*json != '{' && *json != '[')) return -1;
@@ -1224,6 +1267,9 @@ int ytmusic_search_items(const char *query, ytmusic_filter_t filter,
 	if (!youtubei_post_ex("search", request, false, true, &body, NULL, error, error_size)) return -1;
 	size_t response_bytes = strlen(body);
 	int count = collect_items_compact(body, items, limit);
+	if (count <= 0) {
+		ytmusic_log_empty_body("search", body);
+	}
 	free(body);
 	fprintf(stderr, "ytmusic: public search returned %d rows from %zu response bytes\n", count, response_bytes);
 	if (count < 0) set_error(error, error_size, "ytmusic_unreadable_reply");
@@ -1252,6 +1298,9 @@ int ytmusic_browse_items(const char *browse_id, ytmusic_item_t *items, int limit
 		used_account = true;
 	}
 	int count = collect_items_compact(body, items, limit);
+	if (count == 0 && !used_account) {
+		ytmusic_log_empty_body(browse_id, body);
+	}
 	free(body);
 	if (count == 0 && !used_account && account_attached()) {
 		char *private_page = NULL;
@@ -1324,6 +1373,9 @@ int ytmusic_explore_sections(ytmusic_section_t *sections, int limit,
 	if (!youtubei_post_ex("browse", request, false, true, &body, NULL, error, error_size)) return -1;
 	size_t response_bytes = strlen(body);
 	int count = collect_sections(body, sections, limit);
+	if (!count) {
+		ytmusic_log_empty_body("explore", body);
+	}
 	free(body);
 	fprintf(stderr, "ytmusic: public Explore returned %d sections from %zu response bytes\n", count, response_bytes);
 	if (!count) set_error(error, error_size, "ytmusic_explore_empty");
