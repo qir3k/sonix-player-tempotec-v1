@@ -145,6 +145,24 @@ static void load_session(void) {
 	fclose(f);
 }
 
+// Where an empty page's body is kept for pulling: the card's root, when one
+// was named.
+static char card_root[600];
+
+void ytmusic_set_card_root(const char *path) {
+	if (!path || !path[0]) {
+		return;
+	}
+	pthread_mutex_lock(&session_lock);
+	snprintf(card_root, sizeof(card_root), "%s", path);
+	// Without a trailing slash, so the joins below cannot double one up.
+	size_t n = strlen(card_root);
+	while (n > 1 && card_root[n - 1] == '/') {
+		card_root[--n] = '\0';
+	}
+	pthread_mutex_unlock(&session_lock);
+}
+
 void ytmusic_init(void) {
 	pthread_mutex_lock(&session_lock);
 	load_session();
@@ -1165,11 +1183,23 @@ static void ytmusic_log_empty_body(const char *what, const char *body) {
 	size_t n = strlen(body);
 	fprintf(stderr, "ytmusic: %s tail: %.160s\n", what, n > 160 ? body + n - 160 : body);
 
-	// And the whole body lands on the tmpfs for an adb pull, if the log is not
-	// enough. One file per kind, rewritten on every empty answer.
-	mkdir("/tmp/sonix-ytmusic", 0700);
-	char path[128];
-	snprintf(path, sizeof(path), "/tmp/sonix-ytmusic/empty-%s.json", what);
+	// And the whole body lands beside the player's own files for a pull, if
+	// the log is not enough: <card>/.local/ytmusic/ when a card was named
+	// (it survives reboots), the tmpfs when it was not. One file per kind,
+	// rewritten on every empty answer.
+	char folder[640], path[700];
+	if (card_root[0]) {
+		char parent[620];
+		snprintf(parent, sizeof(parent), "%s/.local", card_root);
+		mkdir(parent, 0755);
+		snprintf(folder, sizeof(folder), "%s/ytmusic", parent);
+		mkdir(folder, 0755);
+		snprintf(path, sizeof(path), "%s/empty-%s.json", folder, what);
+	} else {
+		mkdir("/tmp/sonix-ytmusic", 0700);
+		snprintf(folder, sizeof(folder), "%s", "/tmp/sonix-ytmusic");
+		snprintf(path, sizeof(path), "%s/empty-%s.json", folder, what);
+	}
 	FILE *f = fopen(path, "wb");
 	if (f) {
 		size_t dumped = strlen(body);
