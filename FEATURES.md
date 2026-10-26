@@ -178,7 +178,9 @@ circle opens the radio's settings page on it.
   Reachable at `sonix-transfer.local`.
 - **SonixLink** - a control protocol for a phone: the phone fetches the index
   once and queries it locally instead of paging over the wire. Playback state,
-  queue, favourites, artwork and commands.
+  queue, favourites, artwork and commands. Over Bluetooth the link keeps out of the
+  music's way: while headphones are playing, bulk syncs wait and small transfers
+  run at a trickle; over Wi-Fi nothing changes.
 - **USB mass storage** - connect the device to a PC or a Smartphone to manage the files on the SD Card.
 
 ## Podcasts on the card
@@ -306,7 +308,9 @@ circle opens the radio's settings page on it.
 
 - **Layouts** - which alphabets are within reach, in the order they are offered
   (Settings → More → Keyboard layout). Holding the "123" key switches a
-  keyboard to another of them for that keyboard only.
+  keyboard to another of them for that keyboard only. Holding a letter key offers its
+  accented forms in the order of the layout being typed in -- ę first in Polish,
+  umlauts in German, é in French -- with the strip's own order behind them.
 
 ## Settings
 
