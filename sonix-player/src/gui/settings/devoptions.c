@@ -4,7 +4,6 @@
 
 #include "lvgl/lvgl.h"
 
-#include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/settings/processespage.h"
 #include "src/gui/shell/settingsrow.h"
@@ -23,8 +22,6 @@ lv_obj_t *devoptions_screen;
 static lv_obj_t *adb_switch;
 static lv_obj_t *log_switch;
 static lv_obj_t *db_log_switch;
-static lv_obj_t *log_name_label; // rises to make room for the path when logging
-static lv_obj_t *log_path_label;
 static lv_obj_t *bt_log_switch;
 static lv_timer_t *adb_poll_timer;
 
@@ -70,53 +67,13 @@ static void update_adb_row(void) {
 	}
 }
 
-// The path only means something while the log is actually being written.
-// With logging on, the name moves up to the top of the row and the path
-// slides in underneath as its subtitle; off, the row looks like any other.
-static void show_path(lv_obj_t *toggle, lv_obj_t *name_label, lv_obj_t *path_label, bool on, const char *path) {
-	if (toggle) {
-		if (on) {
-			lv_obj_add_state(toggle, LV_STATE_CHECKED);
-		} else {
-			lv_obj_remove_state(toggle, LV_STATE_CHECKED);
-		}
-	}
-
-	if (path_label && name_label) {
-		lv_obj_t *card = lv_obj_get_parent(name_label);
-		bool compact = bp_is_tempotec_v1();
-		if (on) {
-			lv_label_set_text(path_label, path);
-			lv_obj_set_hidden(path_label, false);
-			// These cards become two-line rows while active.  Keeping the title
-			// to one ellipsised line leaves a distinct subtitle lane below it;
-			// a wrapped title was painting through the log path on the V1.
-			if (card) {
-				lv_obj_set_height(card, compact ? 76 : 100);
-			}
-			lv_label_set_long_mode(name_label, LV_LABEL_LONG_DOT);
-			lv_obj_set_width(name_label, lv_pct(65));
-			lv_obj_set_style_pad_right(name_label, 0, 0);
-			lv_obj_set_height(name_label, lv_font_get_line_height(lv_obj_get_style_text_font(name_label, LV_PART_MAIN)));
-			lv_obj_align(name_label, LV_ALIGN_TOP_LEFT, 0, compact ? 6 : 12);
-			lv_obj_set_width(path_label, lv_pct(65));
-			lv_obj_align(path_label, LV_ALIGN_BOTTOM_LEFT, 0, compact ? -6 : -12);
-		} else {
-			lv_obj_set_hidden(path_label, true);
-			if (card) {
-				lv_obj_set_height(card, compact ? 56 : 100);
-			}
-			lv_label_set_long_mode(name_label, LV_LABEL_LONG_WRAP);
-			lv_obj_set_width(name_label, lv_pct(100));
-			lv_obj_set_style_pad_right(name_label, compact ? 60 : 84, 0);
-			lv_obj_align(name_label, LV_ALIGN_LEFT_MID, 0, 0);
-		}
-	}
-}
-
 static void update_log_row(void) {
 	bool on = logging_to_sd();
-	show_path(log_switch, log_name_label, log_path_label, on, on ? logging_path() : "");
+	if (on) {
+		lv_obj_add_state(log_switch, LV_STATE_CHECKED);
+	} else {
+		lv_obj_remove_state(log_switch, LV_STATE_CHECKED);
+	}
 }
 
 static void update_bt_log_row(void) {
@@ -126,18 +83,6 @@ static void update_bt_log_row(void) {
 	} else {
 		lv_obj_remove_state(bt_log_switch, LV_STATE_CHECKED);
 	}
-}
-
-// The path as the subtitle of a row: the first thing anybody needs to know
-// when asked to send the log, and only shown while the log is being written.
-static lv_obj_t *add_path_label(lv_obj_t *card) {
-	lv_obj_t *label = lv_label_create(card);
-	lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-	lv_obj_set_width(label, lv_pct(65));
-	lv_obj_add_style(label, &theme_style_text_dim, 0);
-	lv_obj_set_style_text_font(label, &font_ui_18, 0);
-	lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-	return label;
 }
 
 // A note under a card rather than a subtitle inside it: a sentence about when
@@ -199,9 +144,7 @@ void devoptions_init(gui_config_t *cfg) {
 
 	settingsrow_toggle(container, "devoptions_adb", &adb_switch, adb_toggled_cb);
 
-	lv_obj_t *log_card = settingsrow_toggle(container, "devoptions_log_to_microsd", &log_switch, log_toggled_cb);
-	log_name_label = lv_obj_get_child(log_card, 0);
-	log_path_label = add_path_label(log_card);
+	settingsrow_toggle(container, "devoptions_log_to_microsd", &log_switch, log_toggled_cb);
 
 	// Under the log switch, because it only means anything with the log on: the
 	// scan names every file it reads, which is how a crash during a scan can be
