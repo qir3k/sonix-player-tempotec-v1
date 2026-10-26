@@ -14,7 +14,9 @@
 #include "src/gui/shell/toast.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/fonts/fonts.h"
+#include "src/gui/wireless/wifisettings.h"
 #include "src/system/core/lang.h"
+#include "src/system/net/wifi.h"
 #include "src/system/streaming/ytmusic.h"
 
 #define YTMUSIC_PAGE_RESULTS 30
@@ -24,6 +26,7 @@
 lv_obj_t *ytmusic_screen;
 
 static gui_config_t *page_cfg;
+static lv_obj_t *home_container;
 static lv_obj_t *search_screen;
 static lv_obj_t *results_screen;
 static lv_obj_t *results_list;
@@ -50,6 +53,31 @@ static int login_elapsed;
 static unsigned login_generation;
 
 static void home_refresh_session_rows(void);
+static void home_build(void);
+
+// Whether the network is really there. Every row on this page is a request to
+// YouTube, and with no IP address each one ends in a generic error that does
+// not tell the user what they need to know -- so the notice goes in place of
+// the rows, as on the podcast and Tidal pages.
+static bool wifi_is_connected(void) {
+#ifdef HOST_BUILD
+	// The simulator runs on a machine with a network and no wlan0.
+	return true;
+#else
+	if (!wifi_get_enabled()) {
+		return false;
+	}
+	wifi_status_t status;
+	wifi_get_status(&status);
+	return status.state == WIFI_STATE_CONNECTED && status.ip[0] != '\0';
+#endif
+}
+
+// The row under the notice: it leads where the problem is fixed.
+static void open_wifi_settings_cb(lv_event_t *e) {
+	(void)e;
+	switch_screen(wifisettings_screen);
+}
 
 typedef struct {
 	int count;
@@ -515,7 +543,13 @@ static void build_login_page(void) {
 	lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
 	login_qr = lv_qrcode_create(box);
-	lv_qrcode_set_size(login_qr, YTMUSIC_LOGIN_QR_SIZE);
+	// As wide as the box's inner width leaves room for, quiet zone included.
+	// A fixed 190 plus its border was wider than a 240-pixel screen's box and
+	// was cut off at both sides.
+	int qr_size = page_cfg->screen_width - 4 * page_cfg->padding - 2 * YTMUSIC_LOGIN_QUIET;
+	if (qr_size > YTMUSIC_LOGIN_QR_SIZE) qr_size = YTMUSIC_LOGIN_QR_SIZE;
+	if (qr_size < 80) qr_size = 80;
+	lv_qrcode_set_size(login_qr, qr_size);
 	lv_qrcode_set_dark_color(login_qr, lv_color_black());
 	lv_qrcode_set_light_color(login_qr, lv_color_white());
 	lv_obj_set_style_border_color(login_qr, lv_color_white(), 0);
@@ -532,13 +566,16 @@ static void build_login_page(void) {
 	lv_label_set_text(login_url_label, "");
 	lv_obj_set_hidden(login_url_label, true);
 
+	// The code has to be readable and whole: at 36 px bold with 5 px of letter
+	// spacing a device code is wider than the screen, and CLIP cut the first
+	// and last characters off -- exactly the ones that have to be typed in.
 	login_code_label = lv_label_create(box);
-	lv_label_set_long_mode(login_code_label, LV_LABEL_LONG_CLIP);
+	lv_label_set_long_mode(login_code_label, LV_LABEL_LONG_WRAP);
 	lv_obj_set_width(login_code_label, lv_pct(100));
 	lv_obj_set_style_text_align(login_code_label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(login_code_label, &theme_style_text, 0);
-	lv_obj_set_style_text_font(login_code_label, &font_ui_36_bold, 0);
-	lv_obj_set_style_text_letter_space(login_code_label, 5, 0);
+	lv_obj_set_style_text_font(login_code_label, &font_ui_28, 0);
+	lv_obj_set_style_text_letter_space(login_code_label, 3, 0);
 	lv_label_set_text(login_code_label, "");
 
 	login_message = lv_label_create(box);
@@ -566,18 +603,53 @@ static void build_settings_page(gui_config_t *cfg) {
 	switcher_attach_back_gesture(settings_screen);
 }
 
+// The rows, or the no-network notice in their place. Rebuilt on every entry
+// into the page, because the Wi-Fi can have been turned on or off while the
+// user was in the settings that did it.
+static void home_build(void) {
+	if (!home_container) {
+		return;
+	}
+	lv_obj_clean(home_container);
+
+	if (!wifi_is_connected()) {
+		// The same notice as the podcast and Tidal pages: what is missing, on
+		// the page that needs it, with the row that leads where it is fixed.
+		lv_obj_t *note = lv_label_create(home_container);
+		lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+		lv_obj_set_width(note, lv_pct(100));
+		lv_obj_add_style(note, &theme_style_text, 0); // normal colour: an instruction
+		lv_obj_set_style_text_font(note, &font_ui_22, 0);
+		lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_style_pad_hor(note, 4, 0);
+		lv_obj_set_style_pad_top(note, 14, 0);
+		lv_label_set_text(note, tr("enable_wi_fi_first"));
+		lv_obj_t *row = settingsrow_add(home_container, "wi_fi_settings", NULL, open_wifi_settings_cb, NULL);
+		lv_obj_set_style_margin_top(row, 16, 0);
+		return;
+	}
+
+	lv_obj_t *row = settingsrow_add(home_container, "Search YouTube Music", NULL, search_cb, NULL);
+	settingsrow_add_icon(row, &icon_search, THEME_SEMANTIC_CYAN);
+	row = settingsrow_add(home_container, "Top Songs Charts", NULL, charts_cb, NULL);
+	settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_RED);
+}
+
+static void home_loaded_cb(lv_event_t *e) {
+	(void)e;
+	home_build();
+}
+
 void ytmusicpage_init(gui_config_t *cfg) {
 	page_cfg = cfg;
 	ytmusic_screen = lv_obj_create(NULL);
 	lv_obj_add_style(ytmusic_screen, &theme_style_screen, 0);
-	lv_obj_t *home = settingsrow_page(ytmusic_screen, cfg, "YouTube Music");
+	home_container = settingsrow_page(ytmusic_screen, cfg, "YouTube Music");
 	settingsrow_title_corner_slots(settingsrow_page_title(ytmusic_screen), cfg, 1);
 	ytmusic_corner_button(cfg, 0, &icon_music_settings, open_settings_cb);
-	lv_obj_t *row = settingsrow_add(home, "Search YouTube Music", NULL, search_cb, NULL);
-	settingsrow_add_icon(row, &icon_search, THEME_SEMANTIC_CYAN);
-	row = settingsrow_add(home, "Top Songs Charts", NULL, charts_cb, NULL);
-	settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_RED);
-	player_sheet_attach_drag(home, true);
+	home_build();
+	lv_obj_add_event_cb(ytmusic_screen, home_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	player_sheet_attach_drag(home_container, true);
 	build_search_page();
 	build_login_page();
 	build_settings_page(cfg);
