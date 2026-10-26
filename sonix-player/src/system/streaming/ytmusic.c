@@ -665,6 +665,23 @@ static const char *youtubei_json_start(const char *body) {
 	return body;
 }
 
+// Whether a JSON body ended like one: the last non-space byte of any complete
+// JSON document is '}' or ']'. The InnerTube request goes out with
+// "Connection: close", and a reply delimited by the closing connection cannot
+// be told from one cut off by a dropping Wi-Fi link -- several hundred
+// kilobytes arrive, the last kilobyte does not, and the page parses into
+// nothing at all. The body itself is the only witness.
+static bool response_is_complete(const char *body) {
+	if (!body) {
+		return false;
+	}
+	size_t n = strlen(body);
+	while (n > 0 && (body[n - 1] == ' ' || body[n - 1] == '\t' || body[n - 1] == '\r' || body[n - 1] == '\n')) {
+		n--;
+	}
+	return n > 0 && (body[n - 1] == '}' || body[n - 1] == ']');
+}
+
 // One InnerTube POST. `force_anonymous` leaves the account out of the request
 // altogether: a caller uses it to ask the same public question the signed-out
 // player asks, after the account's own answer came back with no rows in it.
@@ -711,6 +728,7 @@ static bool youtubei_post_ex(const char *endpoint, const char *body, bool login_
 	int status_code = 0;
 	bool ok = false;
 	bool retried_oauth = false;
+	bool retried_truncated = false;
 	bool anonymous = false;
 	// At most four passes: the account, a forced token refresh, and the
 	// anonymous retry, which is the one that matters. A page that does not need
@@ -739,7 +757,28 @@ static bool youtubei_post_ex(const char *endpoint, const char *body, bool login_
 		}
 		ok = http_request(url, &req, response, NULL, YTMUSIC_RESPONSE_LIMIT, YTMUSIC_TIMEOUT, &status_code);
 		if (!ok) break;
-		if (status_code >= 200 && status_code < 300) break;
+		if (status_code >= 200 && status_code < 300) {
+			// The socket cannot tell a finished close-delimited reply from one
+			// cut off halfway, so the body is asked instead. An incomplete one
+			// is fetched once more before it is given up on: the pages are
+			// read-only and idempotent, and half an Explore page is worth less
+			// than none, because it parses into an empty screen with no error.
+			if (!response_is_complete(*response)) {
+				if (response && *response) {
+					wipe_free(*response);
+					*response = NULL;
+				}
+				if (!retried_truncated) {
+					retried_truncated = true;
+					memset(headers + used, 0, sizeof(headers) - used);
+					continue;
+				}
+				ok = false;
+				set_error(error, error_size, "ytmusic_connection_cut");
+				break;
+			}
+			break;
+		}
 
 		// Not a 2xx. The reply body is of no use to the caller, and the next
 		// attempt would otherwise leak it.
@@ -1081,10 +1120,13 @@ static bool item_renderer_key(const char *key, size_t len) {
 // Parse each item renderer on its own instead of materializing the entire
 // page as one token tree. This uses much less RAM and still returns complete
 // early rows if YouTube sends a response larger than our bounded HTTP buffer.
+//
 // A public page that came back with nothing is the one failure a log can
 // diagnose from an armchair: what the body holds says whether Google sent
 // results nobody read (the renderers would be there), a consent or bot wall
-// ("consent", "Sign in to confirm"), or nothing at all.
+// ("consent", "Sign in to confirm"), or nothing at all. The head and the tail
+// say the rest -- a body cut off mid-transfer ends mid-string, and that tail
+// is the fingerprint of a connection that died on the way.
 static void ytmusic_log_empty_body(const char *what, const char *body) {
 	if (!body) {
 		fprintf(stderr, "ytmusic: %s page empty: no body at all\n", what);
@@ -1101,17 +1143,43 @@ static void ytmusic_log_empty_body(const char *what, const char *body) {
 	};
 	fprintf(stderr, "ytmusic: %s page empty, %zu bytes:", what, strlen(body));
 	for (size_t i = 0; i < sizeof(markers) / sizeof(markers[0]); i++) {
-		int hits = 0;
+		int hits = 0, as_keys = 0;
 		const char *at = body;
+		size_t len = strlen(markers[i]);
 		while ((at = strstr(at, markers[i])) != NULL) {
 			hits++;
-			at += strlen(markers[i]);
+			// A key occurrence carries a closing quote and a colon; anything
+			// else is the name inside some other string.
+			if (at[len] == '"' && at[len + 1] == ':') {
+				as_keys++;
+			}
+			at += len;
 		}
 		if (hits) {
-			fprintf(stderr, " %s=%d", markers[i], hits);
+			fprintf(stderr, " %s=%d(key %d)", markers[i], hits, as_keys);
 		}
 	}
-	fprintf(stderr, "\n");
+	// The head names what the page actually is; the tail is where a cut-off
+	// transfer shows itself.
+	fprintf(stderr, "\nytmusic: %s head: %.200s\n", what, body);
+	size_t n = strlen(body);
+	fprintf(stderr, "ytmusic: %s tail: %.160s\n", what, n > 160 ? body + n - 160 : body);
+
+	// And the whole body lands on the tmpfs for an adb pull, if the log is not
+	// enough. One file per kind, rewritten on every empty answer.
+	mkdir("/tmp/sonix-ytmusic", 0700);
+	char path[128];
+	snprintf(path, sizeof(path), "/tmp/sonix-ytmusic/empty-%s.json", what);
+	FILE *f = fopen(path, "wb");
+	if (f) {
+		size_t dumped = strlen(body);
+		if (dumped > 1024 * 1024) {
+			dumped = 1024 * 1024;
+		}
+		fwrite(body, 1, dumped, f);
+		fclose(f);
+		fprintf(stderr, "ytmusic: %s body kept at %s\n", what, path);
+	}
 }
 
 static int collect_items_compact(const char *response, ytmusic_item_t *items, int limit) {
