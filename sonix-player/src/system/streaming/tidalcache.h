@@ -32,24 +32,21 @@
 
 #define TIDALCACHE_DIR ".local/tidal-cache"
 
-// The player has a writable UBIFS data partition separate from the microSD.
-// Keep whole-track playback files there instead of putting them in tmpfs RAM.
-#ifdef HOST_BUILD
-#define TIDALCACHE_TEMP_ROOT "/tmp"
-#else
-#define TIDALCACHE_TEMP_ROOT "/usr/data"
-#endif
+// A bounded playback cache rooted on the card, beside Qobuz's. A hi-res track
+// is a single FLAC of tens -- sometimes hundreds -- of megabytes, more than the
+// player's internal data partition can hold; the card is the only storage with
+// room for it, and the only one whose free space says whether a track fits.
+//
+// One GB is the same ceiling as Qobuz's and roughly ten hi-res albums: enough
+// not to re-download what is being listened to these days, small enough not to
+// silently fill a card. Manually kept tracks are copied to Music/Tidal by
+// streamkeep.
+#define TIDALCACHE_MAX_BYTES (1024L * 1024L * 1024L)
 
-// A bounded temporary playback cache. It is rooted on internal writable
-// storage, never on the card; manually kept tracks are copied to Music/Tidal
-// by streamkeep.
-#define TIDALCACHE_MAX_BYTES (128L * 1024L * 1024L)
-
-// Base for the transient cache. NULL or empty
-// disables playback caching.
-void tidalcache_set_root(const char *root);
-// Removes any previous on-card temporary cache from earlier firmware versions.
-void tidalcache_clear_card_cache(const char *sd_root);
+// Where the card is. Called once at startup and on every card change; NULL or
+// empty disables the cache (and with it Tidal, which cannot play anything
+// without it). On the simulator there is no card, and /tmp stands in for one.
+void tidalcache_set_root(const char *sd_root);
 bool tidalcache_ready(void);
 
 // The path this track would have. Says nothing about whether it exists.

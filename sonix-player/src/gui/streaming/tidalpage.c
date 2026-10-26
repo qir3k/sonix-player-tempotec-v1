@@ -4923,9 +4923,10 @@ bool tidalpage_search_artist(const char *artist) {
 
 static void home_loaded_cb(lv_event_t *e) {
 	(void)e;
-	// Playback cache stays on internal storage as cards come and go. Explicit
-	// downloads are copied to storage_sd_root() when kept on the card.
-	tidalcache_set_root(TIDALCACHE_TEMP_ROOT);
+	// The playback cache is on the card, like Qobuz's: a hi-res track is far
+	// too large for the internal data partition. Explicit downloads are copied
+	// from it to Music/Tidal when kept.
+	tidalcache_set_root(storage_sd_root());
 	qobuzart_set_root(storage_sd_root());
 	listcache_set_root(storage_sd_root());
 
@@ -5029,7 +5030,9 @@ void tidalpage_init(gui_config_t *cfg) {
 	qobuzart_set_root(storage_sd_root());
 	listcache_set_root(storage_sd_root());
 
-	tidalcache_set_root(TIDALCACHE_TEMP_ROOT);
+	// The card, which is the only storage with room for a hi-res track. NULL
+	// when there is none, and then Tidal says so instead of downloading.
+	tidalcache_set_root(storage_sd_root());
 	rebuild_home();
 
 	lv_obj_add_event_cb(tidal_screen, home_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);

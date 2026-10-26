@@ -17,6 +17,7 @@
 #include <pthread.h>
 
 #include "src/system/decode/growfile.h"
+#include "src/system/device/system.h"
 #include "src/system/net/http.h"
 #include "src/system/library/mp4flac.h"
 #include "src/system/streaming/streamturn.h"
@@ -26,9 +27,9 @@
 #define FETCH_TIMEOUT_SECS 20
 #define FETCH_CHUNK 32768
 
-// DASH segments are staged on internal storage and mapped for parsing, so a
-// whole high-resolution segment does not consume the player's scarce heap.
-// This ceiling also bounds a malformed or runaway response.
+// DASH segments are staged in a temporary file beside the track and mapped for
+// parsing, so a whole high-resolution segment does not consume the player's
+// scarce heap. This ceiling also bounds a malformed or runaway response.
 #define SEGMENT_LIMIT (8 * 1024 * 1024)
 #define INIT_SEGMENT_LIMIT (1024 * 1024)
 #define SEGMENT_IO_CHUNK (32 * 1024)
@@ -61,46 +62,18 @@ static void register_abandon_once(void) {
 	}
 }
 
-void tidalcache_set_root(const char *root) {
+void tidalcache_set_root(const char *sd_root) {
 	register_abandon_once();
-	if (!root || !*root) {
+	if (!sd_root || !*sd_root) {
 		cache_dir[0] = '\0';
 		return;
 	}
-	snprintf(cache_dir, sizeof(cache_dir), "%s/%s", root, TIDALCACHE_DIR);
-}
-
-void tidalcache_clear_card_cache(const char *sd_root) {
-	if (!sd_root || !sd_root[0]) {
-		return;
-	}
-	char old_dir[768];
-	if (snprintf(old_dir, sizeof(old_dir), "%s/%s", sd_root, TIDALCACHE_DIR) >= (int)sizeof(old_dir)) {
-		return;
-	}
-	DIR *dir = opendir(old_dir);
-	if (!dir) {
-		return;
-	}
-	int removed = 0;
-	struct dirent *entry;
-	while ((entry = readdir(dir)) != NULL) {
-		if (entry->d_name[0] == '.') {
-			continue;
-		}
-		char path[900];
-		if (snprintf(path, sizeof(path), "%s/%s", old_dir, entry->d_name) >= (int)sizeof(path)) {
-			continue;
-		}
-		struct stat st;
-		if (lstat(path, &st) == 0 && S_ISREG(st.st_mode) && remove(path) == 0) {
-			removed++;
-		}
-	}
-	closedir(dir);
-	if (rmdir(old_dir) == 0 && removed > 0) {
-		printf("tidalcache: removed %d legacy on-card cache files\n", removed);
-	}
+#ifdef HOST_BUILD
+	// The simulator has no memory card: /tmp stands in for one, where the cache
+	// lived while it was volatile.
+	sd_root = "/tmp";
+#endif
+	snprintf(cache_dir, sizeof(cache_dir), "%s/%s", sd_root, TIDALCACHE_DIR);
 }
 
 bool tidalcache_ready(void) { return cache_dir[0] != '\0'; }
@@ -830,7 +803,7 @@ static void download_set_error_if_empty(download_t *d, const char *reason) {
 }
 
 static const char *cache_write_error(int err) {
-	return err == ENOSPC ? tr("player_storage_full") : tr("download_interrupted");
+	return err == ENOSPC ? tr("card_full") : tr("download_interrupted");
 }
 
 static void active_progress(long track_id, long done, long total) {
@@ -1288,15 +1261,15 @@ static bool start_dash(download_t *d, bool *consumed, char *out, size_t size) {
 	// estimated: a segment is about four seconds, and 24-bit FLAC runs about
 	// half a megabyte per second. The estimate is coarse and deliberately high
 	// -- pruning a little more than necessary costs a cover re-fetch, pruning
-	// too little fills the player's temporary cache. prune(0) here would prune nothing at
-	// all and let the cache grow past its ceiling.
+	// too little fills the card. prune(0) here would prune nothing at all and
+	// let the cache grow past its ceiling.
 	long segment_reserve = 2L * 1024L * 1024L;
 	long estimate = d->stream.segment_count > (LONG_MAX - SEGMENT_LIMIT) / segment_reserve
 					? LONG_MAX
 					: (long)d->stream.segment_count * segment_reserve + SEGMENT_LIMIT;
 	if (!prune(estimate)) {
-		fprintf(stderr, "tidalcache: not enough internal storage for track %ld\n", d->track_id);
-		set_error(tr("player_storage_full"));
+		fprintf(stderr, "tidalcache: not enough space on the card for track %ld\n", d->track_id);
+		set_error(tr("card_full"));
 		free(init);
 		return false;
 	}
@@ -1379,8 +1352,8 @@ static bool start_file(download_t *d, bool *consumed, int duration_secs, char *o
 	d->total = d->http.content_length;
 	active_progress(d->track_id, d->done, d->total);
 	if (!prune(d->total > 0 ? d->total : 0)) {
-		fprintf(stderr, "tidalcache: not enough internal storage for track %ld\n", d->track_id);
-		set_error(tr("player_storage_full"));
+		fprintf(stderr, "tidalcache: not enough space on the card for track %ld\n", d->track_id);
+		set_error(tr("card_full"));
 		return false;
 	}
 
@@ -1487,8 +1460,12 @@ bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_
 	out[0] = '\0';
 	set_error("");
 
-	if (!tidalcache_ready()) {
-		fprintf(stderr, "tidalcache: no temporary cache root configured\n");
+	// The cache is the card. Without one there is no root, and a root left
+	// over from before a removal points at the bare mount point -- a directory
+	// on the player's internal storage -- which must not be filled with a
+	// track nobody asked to keep.
+	if (!tidalcache_ready() || !storage_card_attached()) {
+		fprintf(stderr, "tidalcache: no cache root configured (no card?)\n");
 		set_error(tr("download_no_card"));
 		return false;
 	}
