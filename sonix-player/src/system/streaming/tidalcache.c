@@ -3,10 +3,13 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -315,20 +318,45 @@ static bool is_recent_stem(const char *stem);
 // Drops the least recently played until the cache fits again. By last access
 // and not creation date: an album downloaded a month ago but played again
 // yesterday has to stay.
-static void prune(long keep_room_for) {
+static bool cache_free_bytes(uint64_t *out) {
+	if (!out || !tidalcache_ready()) return false;
+	struct statvfs st;
+	if (statvfs(cache_dir, &st) != 0) return false;
+	uint64_t unit = st.f_frsize ? (uint64_t)st.f_frsize : (uint64_t)st.f_bsize;
+	if (!unit) return false;
+	*out = (uint64_t)st.f_bavail * unit;
+	return true;
+}
+
+static bool cache_has_room(long keep_room_for) {
+	uint64_t available;
+	if (!cache_free_bytes(&available)) return true; // no filesystem report: retain the existing cache policy
+	uint64_t required = keep_room_for > 0 ? (uint64_t)keep_room_for : 0;
+	// Leave some blocks for directory entries, the marker, and filesystem
+	// bookkeeping. DASH also passes its one-segment staging allowance here.
+	return available >= required + 64 * 1024;
+}
+
+static bool cache_within_limit(long total, long keep_room_for) {
+	uint64_t used = total > 0 ? (uint64_t)total : 0;
+	uint64_t reserve = keep_room_for > 0 ? (uint64_t)keep_room_for : 0;
+	return used + reserve <= (uint64_t)TIDALCACHE_MAX_BYTES;
+}
+
+static bool prune(long keep_room_for) {
 	// Borrowed for the length of the pass and given straight back: this runs
 	// only when a download is about to overflow the cache, so forty kilobytes
 	// are not worth holding for the life of the player.
 	entry_t *entries = malloc(sizeof(*entries) * PRUNE_MAX_ENTRIES);
 	if (!entries) {
-		return; // nothing is deleted, and the ceiling is checked again next time
+		return cache_has_room(keep_room_for); // retain the old cache if there is nothing to prune
 	}
 
 	long total = 0;
 	int count = scan(entries, PRUNE_MAX_ENTRIES, &total);
-	if (total + keep_room_for <= TIDALCACHE_MAX_BYTES) {
+	if (cache_within_limit(total, keep_room_for) && cache_has_room(keep_room_for)) {
 		free(entries);
-		return;
+		return true;
 	}
 
 	for (int i = 0; i < count; i++) {
@@ -343,7 +371,8 @@ static void prune(long keep_room_for) {
 		entries[oldest] = tmp;
 	}
 
-	for (int i = 0; i < count && total + keep_room_for > TIDALCACHE_MAX_BYTES; i++) {
+	for (int i = 0; i < count &&
+		 (!cache_within_limit(total, keep_room_for) || !cache_has_room(keep_room_for)); i++) {
 		// What the queue is about to play is not the cache's to take back.
 		// Without this the pruner could delete the next track while the
 		// queue still points at it -- "next does nothing" until the download
@@ -369,6 +398,7 @@ static void prune(long keep_room_for) {
 	}
 
 	free(entries);
+	return cache_has_room(keep_room_for);
 }
 
 // The tracks the queue still has ahead of it, which the automatic clear must
@@ -746,6 +776,7 @@ typedef struct {
 	long track_id;
 	char path[512];
 	char marker[544];
+	char error[192];
 	FILE *f;
 	long done;	// bytes written to the file
 	long total; // bytes expected, 0 when unknown
@@ -780,6 +811,27 @@ static char active_path[512];
 static long active_done;
 static long active_total;
 static bool active_foreground;
+#define TIDALCACHE_RESULT_SLOTS 8
+typedef struct {
+	long track_id;
+	char error[192];
+} download_result_t;
+static pthread_mutex_t completion_lock = PTHREAD_MUTEX_INITIALIZER;
+static download_result_t completed_results[TIDALCACHE_RESULT_SLOTS];
+static int completed_result_next;
+
+static void download_set_error(download_t *d, const char *reason) {
+	if (d) snprintf(d->error, sizeof(d->error), "%s", reason ? reason : tr("download_interrupted"));
+	set_error(d ? d->error : reason);
+}
+
+static void download_set_error_if_empty(download_t *d, const char *reason) {
+	if (d && !d->error[0]) download_set_error(d, reason);
+}
+
+static const char *cache_write_error(int err) {
+	return err == ENOSPC ? tr("player_storage_full") : tr("download_interrupted");
+}
 
 static void active_progress(long track_id, long done, long total) {
 	pthread_mutex_lock(&active_lock);
@@ -820,6 +872,40 @@ void tidalcache_progress(long *done, long *total) {
 		*total = active_total;
 	}
 	pthread_mutex_unlock(&active_lock);
+}
+
+bool tidalcache_download_error(long track_id, char *out, size_t out_size) {
+	if (!out || out_size == 0) return false;
+	out[0] = '\0';
+	pthread_mutex_lock(&completion_lock);
+	bool found = false;
+	for (int i = 0; track_id > 0 && i < TIDALCACHE_RESULT_SLOTS; i++) {
+		if (completed_results[i].track_id == track_id && completed_results[i].error[0]) {
+			snprintf(out, out_size, "%s", completed_results[i].error);
+			found = true;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&completion_lock);
+	return found;
+}
+
+static void remember_download_result(long track_id, const char *error) {
+	pthread_mutex_lock(&completion_lock);
+	int slot = -1;
+	for (int i = 0; i < TIDALCACHE_RESULT_SLOTS; i++) {
+		if (completed_results[i].track_id == track_id) {
+			slot = i;
+			break;
+		}
+	}
+	if (slot < 0) {
+		slot = completed_result_next;
+		completed_result_next = (completed_result_next + 1) % TIDALCACHE_RESULT_SLOTS;
+	}
+	completed_results[slot].track_id = track_id;
+	snprintf(completed_results[slot].error, sizeof(completed_results[slot].error), "%s", error ? error : "");
+	pthread_mutex_unlock(&completion_lock);
 }
 
 static volatile bool network_wanted;
@@ -890,6 +976,8 @@ static void download_end(download_t *d, bool ok) {
 
 	if (d->f) {
 		if (fclose(d->f) != 0) {
+			int err = errno;
+			download_set_error_if_empty(d, cache_write_error(err));
 			ok = false;
 		}
 		d->f = NULL;
@@ -901,6 +989,7 @@ static void download_end(download_t *d, bool ok) {
 
 	if (ok && d->stream.kind == TIDAL_STREAM_FILE && d->total > 0 && d->done != d->total) {
 		fprintf(stderr, "tidalcache: %ld cut short at %ld of %ld bytes\n", d->track_id, d->done, d->total);
+		download_set_error_if_empty(d, tr("download_interrupted"));
 		ok = false;
 	}
 	// On DASH the file starts with a locally written header, so it is never
@@ -910,11 +999,18 @@ static void download_end(download_t *d, bool ok) {
 	// downloaded again.
 	if (ok && d->stream.kind == TIDAL_STREAM_DASH && d->done <= d->unwrap.header_bytes) {
 		fprintf(stderr, "tidalcache: %ld brought no samples\n", d->track_id);
+		download_set_error_if_empty(d, tr("download_interrupted"));
 		ok = false;
 	}
 	if (ok && d->done == 0) {
+		download_set_error_if_empty(d, tr("download_interrupted"));
 		ok = false;
 	}
+	if (!ok) {
+		download_set_error_if_empty(d, tr("download_interrupted"));
+		set_error(d->error);
+	}
+	remember_download_result(d->track_id, ok ? "" : d->error);
 
 	growfile_finish(d->path, ok);
 
@@ -924,7 +1020,7 @@ static void download_end(download_t *d, bool ok) {
 	} else {
 		// The marker is left in place: next time round the track counts as
 		// incomplete and is downloaded again instead of playing half of it.
-		printf("tidalcache: %ld not completed\n", d->track_id);
+		fprintf(stderr, "tidalcache: %ld not completed: %s\n", d->track_id, d->error);
 	}
 
 	// The turn is released last, not as soon as the stream is closed: while
@@ -949,6 +1045,8 @@ static bool pump_file(download_t *d, long until, bool *finished) {
 
 		int n = http_stream_read(&d->http, buf, (int)sizeof(buf));
 		if (n < 0) {
+			const char *why = http_last_error();
+			download_set_error_if_empty(d, why && why[0] ? why : tr("download_interrupted"));
 			return false;
 		}
 		if (n == 0) {
@@ -956,14 +1054,21 @@ static bool pump_file(download_t *d, long until, bool *finished) {
 			return true;
 		}
 		if (fwrite(buf, 1, (size_t)n, d->f) != (size_t)n) {
-			fprintf(stderr, "tidalcache: write failed (card full?)\n");
+			int err = errno;
+			fprintf(stderr, "tidalcache: write failed: %s\n", strerror(err));
+			download_set_error(d, cache_write_error(err));
 			return false;
 		}
 
 		// Push out what was written before announcing it: without the fflush a
 		// reader would go looking on the card for bytes still sitting in the
 		// stdio buffer.
-		fflush(d->f);
+		if (fflush(d->f) != 0) {
+			int err = errno;
+			fprintf(stderr, "tidalcache: flush failed: %s\n", strerror(err));
+			download_set_error(d, cache_write_error(err));
+			return false;
+		}
 		d->done += n;
 		active_progress(d->track_id, d->done, d->total);
 		growfile_progress(d->path, d->done);
@@ -976,11 +1081,14 @@ static bool pump_file(download_t *d, long until, bool *finished) {
 static bool dash_segment_to_file(download_t *d, const char *url) {
 	char segment_path[560];
 	if (snprintf(segment_path, sizeof(segment_path), "%.520s.segment", d->path) >= (int)sizeof(segment_path)) {
+		download_set_error_if_empty(d, tr("download_interrupted"));
 		return false;
 	}
 	FILE *file = fopen(segment_path, "wb");
 	if (!file) {
-		fprintf(stderr, "tidalcache: cannot open segment temp file: %s\n", strerror(errno));
+		int err = errno;
+		fprintf(stderr, "tidalcache: cannot open segment temp file: %s\n", strerror(err));
+		download_set_error_if_empty(d, cache_write_error(err));
 		return false;
 	}
 
@@ -991,41 +1099,61 @@ static bool dash_segment_to_file(download_t *d, const char *url) {
 	if (!opened) {
 		const char *why = http_last_error();
 		fprintf(stderr, "tidalcache: segment stream did not open%s%s\n", why ? ": " : "", why ? why : "");
+		download_set_error_if_empty(d, why && why[0] ? why : tr("download_interrupted"));
 	}
 	char buffer[SEGMENT_IO_CHUNK];
 	long total = 0;
 	while (ok) {
 		int n = http_stream_read(&http, buffer, sizeof(buffer));
 		if (n < 0) {
+			const char *why = http_last_error();
+			download_set_error_if_empty(d, why && why[0] ? why : tr("download_interrupted"));
 			ok = false;
 			break;
 		}
 		if (n == 0) {
 			break;
 		}
-		if ((size_t)n > SEGMENT_LIMIT - (size_t)total || fwrite(buffer, 1, (size_t)n, file) != (size_t)n) {
+		if ((size_t)n > SEGMENT_LIMIT - (size_t)total) {
+			download_set_error_if_empty(d, tr("download_interrupted"));
+			ok = false;
+			break;
+		}
+		if (fwrite(buffer, 1, (size_t)n, file) != (size_t)n) {
+			int err = errno;
+			download_set_error_if_empty(d, cache_write_error(err));
 			ok = false;
 			break;
 		}
 		total += n;
 	}
-	if (ok && (total == 0 || fflush(file) != 0)) {
+	if (ok && total == 0) {
+		download_set_error_if_empty(d, tr("download_interrupted"));
+		ok = false;
+	}
+	if (ok && fflush(file) != 0) {
+		int err = errno;
+		download_set_error_if_empty(d, cache_write_error(err));
 		ok = false;
 	}
 	if (opened) {
 		http_stream_close(&http);
 	}
 	if (fclose(file) != 0) {
+		int err = errno;
+		download_set_error_if_empty(d, cache_write_error(err));
 		ok = false;
 	}
 	if (!ok) {
 		remove(segment_path);
+		download_set_error_if_empty(d, tr("download_interrupted"));
 		return false;
 	}
 
 	int fd = open(segment_path, O_RDONLY);
 	struct stat st;
 	if (fd < 0 || fstat(fd, &st) != 0 || st.st_size <= 0 || st.st_size > SEGMENT_LIMIT) {
+		download_set_error_if_empty(d, tr("download_interrupted"));
 		if (fd >= 0) close(fd);
 		remove(segment_path);
 		return false;
@@ -1033,12 +1161,14 @@ static bool dash_segment_to_file(download_t *d, const char *url) {
 	void *mapped = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 	close(fd);
 	if (mapped == MAP_FAILED) {
+		download_set_error_if_empty(d, tr("download_interrupted"));
 		remove(segment_path);
 		return false;
 	}
 	ok = mp4flac_segment(&d->unwrap, (const uint8_t *)mapped, (size_t)st.st_size);
 	munmap(mapped, (size_t)st.st_size);
 	remove(segment_path);
+	if (!ok) download_set_error_if_empty(d, tr("download_interrupted"));
 	return ok;
 }
 
@@ -1064,15 +1194,21 @@ static bool pump_dash(download_t *d, int count, bool *finished) {
 		char url[TIDAL_URL_MAX];
 		if (!tidal_dash_segment_url(&d->stream, d->next_segment, url, sizeof(url))) {
 			fprintf(stderr, "tidalcache: cannot build segment %d\n", d->next_segment);
+			download_set_error_if_empty(d, tr("download_interrupted"));
 			return false;
 		}
 
 		if (!dash_segment_to_file(d, url)) {
 			fprintf(stderr, "tidalcache: segment %d did not arrive\n", d->next_segment);
+			download_set_error_if_empty(d, tr("download_interrupted"));
 			return false;
 		}
 
-		fflush(d->f);
+		if (fflush(d->f) != 0) {
+			int err = errno;
+			download_set_error(d, cache_write_error(err));
+			return false;
+		}
 		d->done = d->unwrap.written;
 		active_progress(d->track_id, d->done, 0);
 		growfile_progress(d->path, d->done);
@@ -1103,14 +1239,22 @@ static bool open_output(download_t *d) {
 	// orphan marker (which does nothing) is better than an incomplete file
 	// that looks good.
 	FILE *marker = fopen(d->marker, "wb");
-	if (marker) {
-		fclose(marker);
+	if (!marker) {
+		int err = errno;
+		fprintf(stderr, "tidalcache: cannot create completion marker: %s\n", strerror(err));
+		set_error(cache_write_error(err));
+		return false;
+	}
+	if (fclose(marker) != 0) {
+		int err = errno;
+		set_error(cache_write_error(err));
+		return false;
 	}
 
 	d->f = fopen(d->path, "wb");
 	if (!d->f) {
 		fprintf(stderr, "tidalcache: %s does not open for writing: %s\n", d->path, strerror(errno));
-		set_error(errno == ENOSPC ? tr("card_full") : tr("card_write_failed"));
+		set_error(cache_write_error(errno));
 		return false;
 	}
 	return true;
@@ -1144,9 +1288,18 @@ static bool start_dash(download_t *d, bool *consumed, char *out, size_t size) {
 	// estimated: a segment is about four seconds, and 24-bit FLAC runs about
 	// half a megabyte per second. The estimate is coarse and deliberately high
 	// -- pruning a little more than necessary costs a cover re-fetch, pruning
-	// too little fills the user's card. prune(0) here would prune nothing at
+	// too little fills the player's temporary cache. prune(0) here would prune nothing at
 	// all and let the cache grow past its ceiling.
-	prune((long)d->stream.segment_count * 2L * 1024L * 1024L);
+	long segment_reserve = 2L * 1024L * 1024L;
+	long estimate = d->stream.segment_count > (LONG_MAX - SEGMENT_LIMIT) / segment_reserve
+					? LONG_MAX
+					: (long)d->stream.segment_count * segment_reserve + SEGMENT_LIMIT;
+	if (!prune(estimate)) {
+		fprintf(stderr, "tidalcache: not enough internal storage for track %ld\n", d->track_id);
+		set_error(tr("player_storage_full"));
+		free(init);
+		return false;
+	}
 
 	if (!open_output(d)) {
 		free(init);
@@ -1179,7 +1332,8 @@ static bool start_dash(download_t *d, bool *consumed, char *out, size_t size) {
 
 	bool finished = false;
 	if (!pump_dash(d, head, &finished)) {
-		set_error(current_generation() != d->generation ? tr("download_cancelled") : tr("download_interrupted"));
+		if (current_generation() != d->generation) download_set_error(d, tr("download_cancelled"));
+		else download_set_error_if_empty(d, tr("download_interrupted"));
 		download_end(d, false);
 		*consumed = true;
 		out[0] = '\0';
@@ -1224,7 +1378,11 @@ static bool start_file(download_t *d, bool *consumed, int duration_secs, char *o
 	d->http_open = true;
 	d->total = d->http.content_length;
 	active_progress(d->track_id, d->done, d->total);
-	prune(d->total > 0 ? d->total : 0);
+	if (!prune(d->total > 0 ? d->total : 0)) {
+		fprintf(stderr, "tidalcache: not enough internal storage for track %ld\n", d->track_id);
+		set_error(tr("player_storage_full"));
+		return false;
+	}
 
 	if (!open_output(d)) {
 		return false;
@@ -1252,7 +1410,8 @@ static bool start_file(download_t *d, bool *consumed, int duration_secs, char *o
 
 	bool finished = false;
 	if (!pump_file(d, probe, &finished)) {
-		set_error(current_generation() != d->generation ? tr("download_cancelled") : tr("download_interrupted"));
+		if (current_generation() != d->generation) download_set_error(d, tr("download_cancelled"));
+		else download_set_error_if_empty(d, tr("download_interrupted"));
 		download_end(d, false);
 		*consumed = true;
 		out[0] = '\0';
@@ -1303,7 +1462,8 @@ static bool start_file(download_t *d, bool *consumed, int duration_secs, char *o
 	}
 
 	if (!finished && d->done < want && !pump_file(d, want, &finished)) {
-		set_error(current_generation() != d->generation ? tr("download_cancelled") : tr("download_interrupted"));
+		if (current_generation() != d->generation) download_set_error(d, tr("download_cancelled"));
+		else download_set_error_if_empty(d, tr("download_interrupted"));
 		download_end(d, false);
 		*consumed = true;
 		out[0] = '\0';
@@ -1328,7 +1488,7 @@ bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_
 	set_error("");
 
 	if (!tidalcache_ready()) {
-		fprintf(stderr, "tidalcache: no card to write to\n");
+		fprintf(stderr, "tidalcache: no temporary cache root configured\n");
 		set_error(tr("download_no_card"));
 		return false;
 	}
@@ -1393,7 +1553,6 @@ bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_
 	// stale by the time the turn arrives, and a track change that happened
 	// during the wait would cancel this download the moment it starts.
 	d->generation = current_generation();
-
 	pthread_mutex_lock(&active_lock);
 	active_track_id = track_id;
 	active_done = d->done;

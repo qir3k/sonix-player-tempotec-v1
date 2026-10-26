@@ -13,6 +13,7 @@
 #include "src/system/core/utils.h"
 #include "src/system/decode/growfile.h"
 #include "src/system/device/system.h"
+#include "src/system/device/sysinfo.h"
 #include "src/system/device/usb.h"
 #include "src/system/streaming/podcastdl.h"
 #include "src/system/streaming/qobuzcache.h"
@@ -32,6 +33,21 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static bool running;
+static char last_error_text[192];
+
+static void remember_error(const char *message) {
+	pthread_mutex_lock(&lock);
+	snprintf(last_error_text, sizeof(last_error_text), "%s", message ? message : "");
+	pthread_mutex_unlock(&lock);
+}
+
+bool streamkeep_last_error(char *out, size_t out_size) {
+	if (!out || out_size == 0) return false;
+	pthread_mutex_lock(&lock);
+	snprintf(out, out_size, "%s", last_error_text);
+	pthread_mutex_unlock(&lock);
+	return out[0] != '\0';
+}
 
 bool streamkeep_is_stream_track(const char *path) {
 	if (!path || !path[0]) {
@@ -188,9 +204,57 @@ static bool destination_path(const char *path, const char *service, char *out, s
 // the copy
 // ---------------------------------------------------------------------------
 
-static bool copy_bytes(const char *from, const char *to) {
+static bool copy_bytes(const char *from, const char *to, bool *card_full) {
+	if (card_full) *card_full = false;
 	struct stat st;
 	if (stat(from, &st) != 0 || st.st_size <= 0) {
+		return false;
+	}
+
+	// A repeat of the same explicit download is already complete. Do not need
+	// another whole-file worth of temporary card space just to replace identical
+	// bytes with themselves.
+	struct stat existing;
+	if (stat(to, &existing) == 0 && S_ISREG(existing.st_mode) && existing.st_size == st.st_size) {
+		FILE *old = fopen(to, "rb");
+		FILE *src = fopen(from, "rb");
+		if (old && src) {
+			uint8_t a[KEEP_CHUNK], b[KEEP_CHUNK];
+			bool equal = true;
+			size_t na, nb;
+			for (;;) {
+				na = fread(a, 1, sizeof(a), src);
+				nb = fread(b, 1, sizeof(b), old);
+				if (na != nb || memcmp(a, b, na) != 0) {
+					equal = false;
+					break;
+				}
+				if (na < sizeof(a)) {
+					equal = !ferror(src) && !ferror(old) && feof(src) && feof(old);
+					break;
+				}
+			}
+			fclose(src);
+			fclose(old);
+			if (equal) return true;
+		} else {
+			if (src) fclose(src);
+			if (old) fclose(old);
+		}
+	}
+	char part[900];
+	snprintf(part, sizeof(part), "%.860s%s", to, KEEP_PART_SUFFIX);
+	// A previous power loss may have left this private temporary behind. It is
+	// safe to discard before checking free space or retrying the same copy.
+	remove(part);
+
+	// Fail before creating a partial file when the card plainly cannot hold this
+	// copy. The write path below still handles races and filesystem overhead.
+	sysinfo_storage_t usage;
+	if (sysinfo_sd_usage(&usage) && usage.present &&
+		((uint64_t)st.st_size > UINT64_MAX - 64 * 1024 || usage.free < (uint64_t)st.st_size + 64 * 1024)) {
+		if (card_full) *card_full = true;
+		errno = ENOSPC;
 		return false;
 	}
 
@@ -201,42 +265,56 @@ static bool copy_bytes(const char *from, const char *to) {
 
 	// Aside and renamed, so a half-written file -- the card pulled, the power
 	// gone -- is never mistaken for a finished track by a later scan.
-	char part[900];
-	snprintf(part, sizeof(part), "%.860s%s", to, KEEP_PART_SUFFIX);
 	FILE *out = fopen(part, "wb");
 	if (!out) {
+		if (card_full && errno == ENOSPC) *card_full = true;
 		fclose(in);
 		return false;
 	}
 
 	bool ok = true;
+	int failure_errno = 0;
 	char *buf = malloc(KEEP_CHUNK);
 	if (!buf) {
 		ok = false;
+		failure_errno = ENOMEM;
 	} else {
 		size_t n;
 		while (ok && (n = fread(buf, 1, KEEP_CHUNK, in)) > 0) {
-			ok = fwrite(buf, 1, n, out) == n;
+			if (fwrite(buf, 1, n, out) != n) {
+				ok = false;
+				failure_errno = errno;
+			}
 		}
 		ok = ok && !ferror(in) && !ferror(out);
+		if (!ok && !failure_errno) failure_errno = errno;
 		free(buf);
 	}
-	if (fclose(out) != 0 || !ok) {
+	if (fclose(out) != 0) {
+		if (!failure_errno) failure_errno = errno;
+		ok = false;
+	}
+	if (!ok) {
 		ok = false;
 	}
 	fclose(in);
-	if (!ok || rename(part, to) != 0) {
+	if (!ok) {
+		if (card_full && failure_errno == ENOSPC) *card_full = true;
+		remove(part);
+		return false;
+	}
+	if (rename(part, to) != 0) {
+		if (card_full && errno == ENOSPC) *card_full = true;
 		remove(part);
 		return false;
 	}
 	return true;
 }
 
-static void notify_async(void *user) {
-	gui_notify_popup((intptr_t)user == 1 ? "stream_keep_done" : "stream_keep_failed");
-}
-
-static void notify(int done) { gui_post(notify_async, (void *)(intptr_t)done); }
+typedef struct {
+	char path[768];
+	bool notify_result;
+} keep_request_t;
 
 // Waits for a download that is still growing to finish. A track being listened
 // to is downloaded past its prebuffer in the background, so the marker the cache
@@ -272,11 +350,13 @@ static bool wait_for_download(const char *path, const char *marker) {
 }
 
 static void *keep_worker(void *arg) {
+	keep_request_t *request = arg;
 	char path[768];
 	char service[16];
-	snprintf(path, sizeof(path), "%s", (const char *)arg);
+	snprintf(path, sizeof(path), "%s", request->path);
+	bool notify_result = request->notify_result;
 	snprintf(service, sizeof(service), "%s", tidalcache_owns(path) ? "Tidal" : "Qobuz");
-	free(arg);
+	free(request);
 	thread_be_low_priority("stream keep"); // the card is also playing from it
 
 	// The download is still growing: a copy now would be a truncated track the
@@ -285,12 +365,27 @@ static void *keep_worker(void *arg) {
 	char marker[800];
 	snprintf(marker, sizeof(marker), "%.760s.incompleto", path);
 	bool ok = wait_for_download(path, marker);
+	char error_message[192];
+	snprintf(error_message, sizeof(error_message), "%s", tr("stream_keep_failed"));
+	bool card_full = false;
+	if (!ok) {
+		char download_error[192];
+		long id = tidalcache_track_id(path);
+		if (id && tidalcache_download_error(id, download_error, sizeof(download_error))) {
+			snprintf(error_message, sizeof(error_message), "%s", download_error);
+		}
+	}
 
 	if (ok) {
 		char dest[768];
-		ok = destination_path(path, service, dest, sizeof(dest)) && make_dirs(dest);
+		ok = destination_path(path, service, dest, sizeof(dest));
+		if (ok && !make_dirs(dest)) {
+			card_full = errno == ENOSPC;
+			ok = false;
+		}
 		if (ok) {
-			ok = copy_bytes(path, dest);
+			ok = copy_bytes(path, dest, &card_full);
+			if (!ok) snprintf(error_message, sizeof(error_message), "%s", tr(card_full ? "card_full" : "stream_keep_failed"));
 			if (ok) {
 				// The tags and the sleeve, after the track itself: a reader
 				// that finds the file must find its metadata beside it. The
@@ -303,26 +398,31 @@ static void *keep_worker(void *arg) {
 				stem_of(dest, dest_stem, sizeof(dest_stem));
 				snprintf(from, sizeof(from), "%s.tags", path);
 				snprintf(to, sizeof(to), "%s.tags", dest);
-				copy_bytes(from, to);
+				copy_bytes(from, to, NULL);
 				snprintf(from, sizeof(from), "%s.jpg", src_stem);
 				snprintf(to, sizeof(to), "%s.jpg", dest_stem);
-				copy_bytes(from, to);
+				copy_bytes(from, to, NULL);
 				fprintf(stderr, "streamkeep: %s is now %s\n", path, dest);
 			}
+		} else {
+			snprintf(error_message, sizeof(error_message), "%s", tr(card_full ? "card_full" : "stream_keep_failed"));
 		}
 	}
 	sync();
+	if (!ok) fprintf(stderr, "streamkeep: could not save '%s': %s\n", path, error_message);
 
+	remember_error(ok ? "" : error_message);
 	pthread_mutex_lock(&lock);
 	running = false;
 	pthread_mutex_unlock(&lock);
 
-	notify(ok ? 1 : 0);
+	if (notify_result) gui_notify_popup(ok ? "stream_keep_done" : error_message);
 	return NULL;
 }
 
-bool streamkeep_keep(const char *path) {
+bool streamkeep_keep(const char *path, bool notify_result) {
 	if (!streamkeep_is_stream_track(path)) {
+		remember_error(tr("stream_keep_failed"));
 		return false;
 	}
 	// No card, one that is read-only, or one the computer is using: none of
@@ -330,39 +430,53 @@ bool streamkeep_keep(const char *path) {
 	// worse than saying so now. The caller says why -- it knows whether the
 	// card is missing or merely unusable, and saying it here as well would put
 	// two toasts on the screen for one tap.
-	if (!storage_sd_root() || !storage_sd_writable() || !storage_card_attached() || usb_storage_active()) {
+	if (!storage_sd_root() || !storage_card_attached()) {
+		remember_error(tr("sd_card_missing"));
+		return false;
+	}
+	if (!storage_sd_writable()) {
+		remember_error(tr("card_write_failed"));
+		return false;
+	}
+	if (usb_storage_active()) {
+		remember_error(tr("stream_keep_failed"));
 		return false;
 	}
 
 	pthread_mutex_lock(&lock);
 	if (running) {
 		pthread_mutex_unlock(&lock);
+		remember_error(tr("stream_keep_busy"));
 		return false;
 	}
 	running = true;
+	last_error_text[0] = '\0';
 	pthread_mutex_unlock(&lock);
 
-	char *arg = malloc(strlen(path) + 1);
-	if (!arg) {
+	keep_request_t *request = calloc(1, sizeof(*request));
+	if (!request) {
 		pthread_mutex_lock(&lock);
 		running = false;
 		pthread_mutex_unlock(&lock);
+		remember_error(tr("out_of_memory"));
 		return false;
 	}
-	strcpy(arg, path);
+	snprintf(request->path, sizeof(request->path), "%s", path);
+	request->notify_result = notify_result;
 
 	pthread_t thread;
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 	pthread_attr_setstacksize(&attr, 256 * 1024);
-	bool started = pthread_create(&thread, &attr, keep_worker, arg) == 0;
+	bool started = pthread_create(&thread, &attr, keep_worker, request) == 0;
 	pthread_attr_destroy(&attr);
 	if (!started) {
-		free(arg);
+		free(request);
 		pthread_mutex_lock(&lock);
 		running = false;
 		pthread_mutex_unlock(&lock);
+		remember_error(tr("cannot_start_the_download"));
 		return false;
 	}
 	return true;

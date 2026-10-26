@@ -1258,8 +1258,10 @@ static void keep_on_card_cb(void *user) {
 		gui_notify_popup("stream_keep_busy");
 		return;
 	}
-	if (!streamkeep_keep(state.current_file)) {
-		gui_notify_popup(gui_card_available() ? "stream_keep_failed" : "sd_card_missing");
+	if (!streamkeep_keep(state.current_file, true)) {
+		char error[192] = "";
+		if (streamkeep_last_error(error, sizeof(error))) gui_notify_popup(error);
+		else gui_notify_popup(gui_card_available() ? "stream_keep_failed" : "sd_card_missing");
 	}
 }
 
