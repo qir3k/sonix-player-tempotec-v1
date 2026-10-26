@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
@@ -711,6 +712,7 @@ static lv_obj_t *download_bar;
 static lv_obj_t *download_amount;
 static lv_obj_t *download_cancel_button;
 static lv_timer_t *download_timer;
+static bool download_ui_saving;
 
 static bool download_cancelled(void) {
 	pthread_mutex_lock(&download_ui_lock);
@@ -720,6 +722,9 @@ static bool download_cancelled(void) {
 }
 
 static void download_layer_hide(void) {
+	pthread_mutex_lock(&download_ui_lock);
+	download_ui_saving = false;
+	pthread_mutex_unlock(&download_ui_lock);
 	if (download_timer) {
 		lv_timer_pause(download_timer);
 	}
@@ -746,9 +751,25 @@ static void download_layer_poll(lv_timer_t *timer) {
 	long id = tidalcache_downloading_id();
 	long done = 0, total = 0;
 	tidalcache_progress(&done, &total);
+	pthread_mutex_lock(&download_ui_lock);
+	bool saving = download_ui_saving;
+	pthread_mutex_unlock(&download_ui_lock);
+	if (saving) {
+		lv_bar_set_mode(download_bar, LV_BAR_MODE_RANGE);
+		lv_bar_set_value(download_bar, 1000, LV_ANIM_OFF);
+		int phase = (int)((lv_tick_get() / 3) % 1560);
+		int start = phase <= 780 ? phase : 1560 - phase;
+		lv_bar_set_start_value(download_bar, start, LV_ANIM_OFF);
+		lv_bar_set_value(download_bar, start + 220, LV_ANIM_OFF);
+		lv_label_set_text(download_amount, tr("copying"));
+		if (download_cancelled()) lv_label_set_text(download_amount, tr("podcast_download_cancelling"));
+		return;
+	}
 	if (total > 0) {
 		lv_bar_set_mode(download_bar, LV_BAR_MODE_NORMAL);
-		int permille = done >= total ? 1000 : (int)(done * 1000 / total);
+		int permille = done >= total ? 1000 : (int)((int64_t)done * 1000 / total);
+		if (permille < 0) permille = 0;
+		if (permille > 1000) permille = 1000;
 		lv_bar_set_value(download_bar, permille, LV_ANIM_OFF);
 		lv_label_set_text_fmt(download_amount, "%.1f / %.1f MB \xC2\xB7 %d%%", (double)done / (1024.0 * 1024.0),
 							  (double)total / (1024.0 * 1024.0), permille / 10);
@@ -793,6 +814,7 @@ static void download_layer_show(void) {
 	pthread_mutex_lock(&download_ui_lock);
 	download_ui_at = 0;
 	download_cancel_requested = false;
+	download_ui_saving = false;
 	pthread_mutex_unlock(&download_ui_lock);
 	if (download_cancel_button) {
 		lv_obj_clear_state(download_cancel_button, LV_STATE_DISABLED);
@@ -916,6 +938,8 @@ static void bulk_finish(void) {
 		// The omissions change nothing on screen when adding, so without a word
 		// the action would look like it did nothing.
 		toast_success("added_to_favourites");
+	} else if (downloaded) {
+		toast_success("stream_keep_done");
 	}
 	// Removals leave the list on screen, additions leave it as it was. A
 	// favourite added from a playlist's own selection does not touch that
@@ -2929,9 +2953,12 @@ static void *worker_main(void *arg) {
 							break;
 						}
 						if (!tidalcache_find(track->id, path, sizeof(path))) {
-							const char *why = tidalcache_last_error();
-							snprintf(result_error, sizeof(result_error), "%s",
-									 why && why[0] ? why : tr("download_failed"));
+							char why[192] = "";
+							if (!tidalcache_download_error(track->id, why, sizeof(why))) {
+								const char *last = tidalcache_last_error();
+								snprintf(why, sizeof(why), "%s", last && last[0] ? last : tr("download_failed"));
+							}
+							snprintf(result_error, sizeof(result_error), "%s", why);
 							break;
 						}
 					}
@@ -2941,12 +2968,29 @@ static void *worker_main(void *arg) {
 					}
 					tidalcache_write_sidecars_at(path, track->title, track->artist, track->album,
 										track->album_id, track->track_number, track->duration, cover_url);
-					if (!streamkeep_keep(path)) {
-						snprintf(result_error, sizeof(result_error), "%s", tr("stream_keep_failed"));
+					pthread_mutex_lock(&download_ui_lock);
+					download_ui_saving = true;
+					pthread_mutex_unlock(&download_ui_lock);
+					if (!streamkeep_keep(path, false)) {
+						pthread_mutex_lock(&download_ui_lock);
+						download_ui_saving = false;
+						pthread_mutex_unlock(&download_ui_lock);
+						char why[192] = "";
+						streamkeep_last_error(why, sizeof(why));
+						snprintf(result_error, sizeof(result_error), "%s",
+								 why[0] ? why : tr("stream_keep_failed"));
 						break;
 					}
 					while (streamkeep_busy()) {
 						usleep(100 * 1000);
+					}
+					pthread_mutex_lock(&download_ui_lock);
+					download_ui_saving = false;
+					pthread_mutex_unlock(&download_ui_lock);
+					char keep_error[192] = "";
+					if (streamkeep_last_error(keep_error, sizeof(keep_error))) {
+						snprintf(result_error, sizeof(result_error), "%s", keep_error);
+						break;
 					}
 				}
 				break;

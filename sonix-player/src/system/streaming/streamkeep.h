@@ -2,6 +2,7 @@
 #define STREAMKEEP_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 // A streaming track kept on the card for good.
 //
@@ -24,12 +25,17 @@
 bool streamkeep_is_stream_track(const char *path);
 
 // Copies the track out of the cache, on a worker thread. False when the path is
-// not a cache track, or when another keep is already running. The toast that
-// says how it went is posted to the GUI thread by the worker itself.
-bool streamkeep_keep(const char *path);
+// not a cache track, or when another keep is already running. When
+// `notify_result` is true, the worker posts a result toast; bulk callers can
+// suppress it and report the result once for the whole selection.
+bool streamkeep_keep(const char *path, bool notify_result);
 
 // Whether a keep is running. One at a time: they are card copies, and the card
 // is also what is being read from for playback.
 bool streamkeep_busy(void);
+
+// Copies the latest start or completion failure into `out`; false means the
+// last keep succeeded or there is no saved failure.
+bool streamkeep_last_error(char *out, size_t out_size);
 
 #endif /* STREAMKEEP_H */

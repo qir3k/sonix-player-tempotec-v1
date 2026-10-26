@@ -176,6 +176,11 @@ bool tidalcache_tag(const char *path, const char *key, char *out, size_t size);
 // on success. Per thread, like http_last_error().
 const char *tidalcache_last_error(void);
 
+// A transfer that continued on its own thread may fail after tidalcache_start
+// has returned. After tidalcache_wait_idle(), this retrieves that completion
+// error for the requested track id; false means no asynchronous error is saved.
+bool tidalcache_download_error(long track_id, char *out, size_t out_size);
+
 // The Tidal track id from the local path, 0 if that path is not a track of this
 // cache. The file name is the id ("12345678.flac"): a playing file always maps
 // back to the Tidal track, which is what lets the player's favourite star and
