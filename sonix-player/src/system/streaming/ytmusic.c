@@ -934,34 +934,293 @@ static bool android_player(const char *video_id, char **response, char *error, s
 // WebM YouTube wraps Opus in, and the video streams are never fetched at all.
 #define YTMUSIC_RELAY_MAX_KBPS 320
 
-static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
-							int *duration, char *title, size_t title_size,
-							char *artist, size_t artist_size, char *error, size_t error_size) {
+// A relay that resolves with yt-dlp has to run it before it can answer, and a
+// cold run fetches the player script and solves a signature first: fifteen
+// seconds is enough for a request to Google and not for that. The relay calls
+// get their own, longer one; everything else keeps the short one.
+#define YTMUSIC_RELAY_TIMEOUT 60
+
+// The relay's own address, without the trailing slashes the setting may carry.
+// False when nothing usable is configured -- no setting, or not an address.
+static bool relay_base_address(char *out, size_t size) {
 	const char *configured = config_get("ytmusic", "relay_base", "");
 	if (!configured[0]) {
-		set_error(error, error_size, "ytmusic_relay_needed");
 		return false;
 	}
-	char base[256];
-	snprintf(base, sizeof(base), "%s", configured);
-	size_t base_len = strlen(base);
-	while (base_len > 0 && base[base_len - 1] == '/') base[--base_len] = '\0';
+	snprintf(out, size, "%s", configured);
+	size_t len = strlen(out);
+	while (len > 0 && out[len - 1] == '/') out[--len] = '\0';
 	// http:// is accepted as well as https://: a relay is often a machine on
-	// the same LAN, where there is no certificate to serve. The stream URLs it
-	// hands out are its own affair, and Google's are https regardless.
-	if (!base_len || (strncmp(base, "https://", 8) != 0 && strncmp(base, "http://", 7) != 0)) {
-		set_error(error, error_size, "ytmusic_relay_needed");
+	// the same LAN, where there is no certificate to serve.
+	if (!len || (strncmp(out, "https://", 8) != 0 && strncmp(out, "http://", 7) != 0)) {
+		out[0] = '\0';
+		return false;
+	}
+	return true;
+}
+
+// Where the player fetches a track's bytes from.
+//
+// A relay answers with a media URL, and the ones a Piped or Invidious instance
+// answers with point at Google's own servers. Those cannot be fetched from here
+// at all: the address is bound to the machine that resolved it -- the same
+// request from a different client on a different address is answered 403 -- and
+// it is several thousand characters long, past this player's URL buffer, so
+// what would be requested is a truncated address that is refused without saying
+// why. That is what "could not reach the stream" used to mean, and it left no
+// trace anywhere.
+//
+// So the bytes are always fetched from the relay itself: from the URL it
+// answered with when that URL is its own address, and from /audio/<video-id>
+// -- the endpoint tools/ytmusic-relay.py serves -- when it is somebody else's.
+// A relay that does neither is reported as such instead of having its address
+// quietly fetched and refused.
+//
+// `itag` is the format the reply was read for, carried into the proxied address
+// so the relay serves that one rather than choosing again -- the choice of
+// m4a/AAC under the bitrate cap is this end's, and it should stay that way.
+//
+// `proxied` (optional) says the second path was taken: the one that needs the
+// relay to serve the bytes itself.
+bool ytmusic_relay_stream_url(const char *base, const char *video_id, long itag, const char *reported,
+							  char *out, size_t out_size, bool *proxied) {
+	if (proxied) {
+		*proxied = false;
+	}
+	if (!base || !base[0] || !video_id || strlen(video_id) != 11 || !out || out_size == 0) {
+		return false;
+	}
+	size_t base_len = strlen(base);
+	if (reported && reported[0] && strncmp(reported, base, base_len) == 0 &&
+		(reported[base_len] == '\0' || reported[base_len] == '/' || reported[base_len] == '?')) {
+		snprintf(out, out_size, "%s", reported);
+		return true;
+	}
+	int built = itag > 0 ? snprintf(out, out_size, "%s/audio/%.11s?f=%ld", base, video_id, itag)
+						 : snprintf(out, out_size, "%s/audio/%.11s", base, video_id);
+	if (built < 0 || built >= (int)out_size) {
+		out[0] = '\0';
+		return false;
+	}
+	if (proxied) {
+		*proxied = true;
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Instances
+// ---------------------------------------------------------------------------
+//
+// A Piped or Invidious instance resolves a track on a machine that can do the
+// attestation this device cannot. What it hands back decides whether that is
+// any use here:
+//
+//   * Piped answers /streams/{id} with audioStreams whose URLs point at
+//     Google's own hosts. Those are bound to the address that resolved them,
+//     so fetching one from here is refused; a Piped instance only helps when
+//     it fronts the bytes itself, and then its URL already points at it.
+//   * Invidious answers /api/v1/videos/{id}, and has /latest_version?id=...
+//     &itag=...&local=true for the bytes: the instance fetches the audio and
+//     passes it on, which is the one shape that works from another machine.
+//     That is what is asked for once the formats reply names an itag.
+//
+// Public instances come and go -- most of the well-known ones answer 403 to
+// every request today -- so this is a fallback rather than the way a track is
+// usually played, and the settings page can pin one (a self-hosted instance is
+// the version of it that keeps working).
+static const char *const builtin_instances[] = {
+	"https://pipedapi.kavin.rocks",
+	"https://pipedapi.adminforge.de",
+	"https://api.piped.private.coffee",
+	"https://inv.nadeko.net",
+	"https://yewtu.be",
+	"https://invidious.privacyredirect.com",
+};
+
+// One instance request, not a page: the ones that are down fail on the
+// connection, and the ones that answer do it quickly. Waiting the relay's
+// minute on each would turn a failed track into a two-minute stall.
+#define YTMUSIC_INSTANCE_TIMEOUT 12
+// How many of the built-in hosts are tried before the player gives up: they
+// are guesses, and a play attempt should not wait on six of them.
+#define YTMUSIC_INSTANCE_TRIES 3
+// Room for the [ytmusic] instances line, which lists hosts by hand.
+#define YTMUSIC_INSTANCE_LIST_MAX 512
+
+// A base address as the player needs it: scheme kept, trailing slashes gone.
+// False when it is not an http(s) address at all, which is what a bare host
+// name typed into the settings is.
+static bool normalise_instance(const char *in, char *out, size_t size) {
+	if (!in || !out || size < 16) return false;
+	while (*in == ' ' || *in == '\t') in++;
+	if (!in[0]) return false;
+	// A bare host is what people type -- "invidious.example" -- and https is
+	// what every instance serves, so it is filled in rather than refused.
+	bool scheme = strncmp(in, "https://", 8) == 0 || strncmp(in, "http://", 7) == 0;
+	int n = scheme ? snprintf(out, size, "%s", in) : snprintf(out, size, "https://%s", in);
+	if (n <= 0 || (size_t)n >= size) {
+		out[0] = '\0';
+		return false;
+	}
+	size_t len = strlen(out);
+	while (len > 8 && out[len - 1] == '/') out[--len] = '\0';
+	// A host name is all that may follow the scheme: no path, no space.
+	const char *host = out + (strncmp(out, "https://", 8) == 0 ? 8 : 7);
+	return host[0] != '\0' && strpbrk(host, " \t/?#") == NULL;
+}
+
+// The instance a choice pins, or empty for the three built-in answers.
+static bool pinned_instance(char *out, size_t size) {
+	const char *active = config_get("ytmusic", "source", "auto");
+	if (!active[0] || strcmp(active, "auto") == 0 || strcmp(active, "direct") == 0 ||
+		strcmp(active, "relay") == 0) {
+		return false;
+	}
+	return normalise_instance(active, out, size);
+}
+
+static bool instance_add(char out[][YTMUSIC_SOURCE_MAX], int *count, int limit, const char *base) {
+	char normalised[YTMUSIC_SOURCE_MAX];
+	if (*count >= limit || !normalise_instance(base, normalised, sizeof(normalised))) return false;
+	for (int i = 0; i < *count; i++) {
+		if (strcmp(out[i], normalised) == 0) return false;
+	}
+	snprintf(out[(*count)++], YTMUSIC_SOURCE_MAX, "%s", normalised);
+	return true;
+}
+
+int ytmusic_instance_bases(char out[][YTMUSIC_SOURCE_MAX], int limit) {
+	int count = 0;
+	char pinned[YTMUSIC_SOURCE_MAX];
+	if (pinned_instance(pinned, sizeof(pinned))) instance_add(out, &count, limit, pinned);
+	// [ytmusic] instances is a comma or space separated list, and replaces the
+	// built-in hosts rather than adding to them: someone who has a working
+	// instance does not want six dead ones tried before it.
+	const char *configured = config_get("ytmusic", "instances", "");
+	if (configured[0]) {
+		char list[YTMUSIC_INSTANCE_LIST_MAX];
+		snprintf(list, sizeof(list), "%s", configured);
+		for (char *token = strtok(list, " ,;\t\r\n"); token; token = strtok(NULL, " ,;\t\r\n")) {
+			instance_add(out, &count, limit, token);
+		}
+		return count;
+	}
+	for (size_t i = 0; i < sizeof(builtin_instances) / sizeof(builtin_instances[0]); i++) {
+		instance_add(out, &count, limit, builtin_instances[i]);
+	}
+	return count;
+}
+
+// The stored choice, "auto" when nothing was ever chosen.
+static const char *source_value(void) {
+	const char *active = config_get("ytmusic", "source", "auto");
+	return active[0] ? active : "auto";
+}
+
+int ytmusic_sources(ytmusic_source_t *out, int limit) {
+	if (!out || limit <= 0) return 0;
+	int count = 0;
+	static const struct {
+		const char *value;
+		const char *label;
+	} built_in[] = {
+		{"auto", "ytmusic_source_auto"},
+		{"direct", "ytmusic_source_direct"},
+		{"relay", "ytmusic_source_relay"},
+	};
+	for (size_t i = 0; i < sizeof(built_in) / sizeof(built_in[0]) && count < limit; i++) {
+		// The relay is only a choice once there is one configured: a row that
+		// cannot play anything is worse than no row.
+		if (strcmp(built_in[i].value, "relay") == 0) {
+			char base[256];
+			bool pinned = strcmp(source_value(), "relay") == 0;
+			if (!relay_base_address(base, sizeof(base)) && !pinned) continue;
+			snprintf(out[count].value, YTMUSIC_SOURCE_MAX, "%s", built_in[i].value);
+			snprintf(out[count].label, YTMUSIC_SOURCE_MAX, "%s", built_in[i].label);
+			count++;
+			continue;
+		}
+		snprintf(out[count].value, YTMUSIC_SOURCE_MAX, "%s", built_in[i].value);
+		snprintf(out[count].label, YTMUSIC_SOURCE_MAX, "%s", built_in[i].label);
+		count++;
+	}
+	char bases[YTMUSIC_SOURCES_MAX][YTMUSIC_SOURCE_MAX];
+	int instances = ytmusic_instance_bases(bases, YTMUSIC_SOURCES_MAX);
+	for (int i = 0; i < instances && count < limit; i++) {
+		const char *host = strstr(bases[i], "://");
+		snprintf(out[count].value, YTMUSIC_SOURCE_MAX, "%.*s", YTMUSIC_SOURCE_MAX - 1, bases[i]);
+		snprintf(out[count].label, YTMUSIC_SOURCE_MAX, "%.*s", YTMUSIC_SOURCE_MAX - 1,
+				 host ? host + 3 : bases[i]);
+		count++;
+	}
+	return count;
+}
+
+void ytmusic_source_active(char *out, size_t size) {
+	if (!out || !size) return;
+	snprintf(out, size, "%s", source_value());
+}
+
+bool ytmusic_source_select(const char *value) {
+	if (!value || !value[0]) return false;
+	char chosen[YTMUSIC_SOURCE_MAX];
+	if (strcmp(value, "auto") == 0 || strcmp(value, "direct") == 0 || strcmp(value, "relay") == 0) {
+		snprintf(chosen, sizeof(chosen), "%s", value);
+	} else if (!normalise_instance(value, chosen, sizeof(chosen))) {
+		snprintf(chosen, sizeof(chosen), "%s", value);
+		return false;
+	}
+	config_set("ytmusic", "source", chosen);
+	// The choice is in force either way; a settings file that cannot be
+	// written only means it will not survive a reboot, which is not a reason
+	// to refuse it now.
+	if (!config_save()) {
+		fprintf(stderr, "ytmusic: the source could not be saved, kept for this session\n");
+	}
+	return true;
+}
+
+static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
+							int *duration, char *title, size_t title_size,
+							char *artist, size_t artist_size, bool *proxied,
+							char *error, size_t error_size) {
+	if (proxied) *proxied = false;
+	char base[256];
+	if (!relay_base_address(base, sizeof(base))) {
+		// No relay is not a missing setup step any more: the device plays a
+		// track by itself, and an instance is the other way in. What is left
+		// to say is that every one of them refused.
+		set_error(error, error_size, "ytmusic_no_source");
 		return false;
 	}
 
 	char endpoint[320];
 	snprintf(endpoint, sizeof(endpoint), "%s/streams/%.11s", base, video_id);
 	char *body = NULL;
+	int relay_status = 0;
 	pthread_mutex_lock(&request_lock);
-	bool got = http_get(endpoint, &body, NULL, YTMUSIC_RESPONSE_LIMIT, YTMUSIC_TIMEOUT);
+	// The body of a refusal is kept: it is where the relay says why, and that
+	// belongs in the log rather than in the guess of "no reply".
+	bool got = http_get_ex(endpoint, NULL, true, &body, NULL, YTMUSIC_RESPONSE_LIMIT,
+						   YTMUSIC_RELAY_TIMEOUT, &relay_status);
 	pthread_mutex_unlock(&request_lock);
 	if (!got) {
+		fprintf(stderr, "ytmusic: relay did not answer at %.64s (%s)\n", endpoint,
+				http_last_error() ? http_last_error() : "no reason given");
 		set_error(error, error_size, "ytmusic_relay_unreachable");
+		return false;
+	}
+	if (relay_status >= 400) {
+		// A relay that does not know /streams/{id} is not the kind of relay
+		// this player can use, whatever else it answers: Invidious serves its
+		// own API shape, not this one. Its reply says which it is, in the log.
+		fprintf(stderr, "ytmusic: relay answered %d for %.11s: %.160s\n", relay_status, video_id,
+				body ? body : "");
+		free(body);
+		set_error(error, error_size,
+				  relay_status == 404 || relay_status == 405 ? "ytmusic_relay_not_serving"
+															 : "ytmusic_relay_unreadable");
 		return false;
 	}
 
@@ -986,6 +1245,22 @@ static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
 			}
 		}
 		if (best >= 0 && json_obj_str(&doc, best, "url", url, url_size) && url[0]) {
+			// The address the relay answered with is only worth fetching when it
+			// is the relay's own; see ytmusic_relay_stream_url(). This is the
+			// one place that rewrite belongs: an address the device resolved
+			// itself, through a signed-in session, is fetchable as it stands
+			// and is left alone.
+			char chosen[YTMUSIC_URL_MAX];
+			bool through_relay = false;
+			long itag = json_obj_long(&doc, best, "itag", 0);
+			if (ytmusic_relay_stream_url(base, video_id, itag, url, chosen, sizeof(chosen),
+										&through_relay) &&
+				through_relay) {
+				snprintf(url, url_size, "%s", chosen);
+				printf("ytmusic: %.11s: the relay's own address is elsewhere, so its /audio endpoint is used\n",
+					   video_id);
+			}
+			if (proxied) *proxied = through_relay;
 			ok = true;
 			if (duration) *duration = (int)json_obj_long(&doc, root, "duration", 0);
 			if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
@@ -1001,6 +1276,134 @@ static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
 	if (ok) {
 		printf("ytmusic: relay served an audio stream for %.11s\n", video_id);
 	}
+	return ok;
+}
+
+// One instance, asked for the formats of a track and turned into an address
+// this player can fetch. Two API shapes are tried, because a Piped host and an
+// Invidious host answer different ones and either kind can be pinned:
+//
+//   Piped     /streams/{id}                 audioStreams[].url
+//   Invidious /api/v1/videos/{id}           adaptiveFormats[].itag
+//
+// The second only turns into bytes through /latest_version?local=true, which
+// is why the itag is what is carried out of that reply rather than its URL.
+static bool instance_audio_url(const char *base, const char *video_id, char *url, size_t url_size,
+							   int *duration, char *title, size_t title_size,
+							   char *artist, size_t artist_size, bool *proxied,
+							   char *error, size_t error_size) {
+	if (proxied) *proxied = false;
+	if (!base || !base[0] || !video_id || strlen(video_id) != 11) return false;
+	size_t base_len = strlen(base);
+	char endpoint[YTMUSIC_SOURCE_MAX + 160], *body = NULL;
+	int status = 0;
+	// Whether the host answered at all, which decides which failure to name:
+	// "no playable audio" is only true of a host that replied.
+	bool answered = false;
+
+	// Piped first: it is the shape the relay already speaks, and the one a
+	// Piped instance answers without a query string of its own.
+	snprintf(endpoint, sizeof(endpoint), "%s/streams/%.11s", base, video_id);
+	pthread_mutex_lock(&request_lock);
+	bool got = http_get_ex(endpoint, NULL, true, &body, NULL, YTMUSIC_RESPONSE_LIMIT,
+						   YTMUSIC_INSTANCE_TIMEOUT, &status);
+	pthread_mutex_unlock(&request_lock);
+	if (got && body && status < 400) {
+		answered = true;
+		json_doc_t doc;
+		if (json_parse_limited(youtubei_json_start(body), &doc, 128 * 1024)) {
+			int root = json_root(&doc);
+			int streams = json_get(&doc, root, "audioStreams");
+			int best = -1;
+			long best_rate = -1;
+			for (int i = 0; i < json_len(&doc, streams); i++) {
+				int stream = json_at(&doc, streams, i);
+				char mime[96] = "", candidate[YTMUSIC_URL_MAX] = "";
+				json_obj_str(&doc, stream, "mimeType", mime, sizeof(mime));
+				if (strncasecmp(mime, "audio/mp4", 9) != 0) continue;
+				if (!json_obj_str(&doc, stream, "url", candidate, sizeof(candidate)) || !candidate[0]) continue;
+				long rate = json_obj_long(&doc, stream, "bitrate", 0);
+				if (rate <= 0 || rate > YTMUSIC_RELAY_MAX_KBPS * 1000L) continue;
+				if (rate > best_rate) {
+					best = stream;
+					best_rate = rate;
+				}
+			}
+			if (best >= 0) {
+				char candidate[YTMUSIC_URL_MAX] = "";
+				if (json_obj_str(&doc, best, "url", candidate, sizeof(candidate)) && candidate[0] &&
+					strncmp(candidate, base, base_len) == 0 &&
+					(candidate[base_len] == '/' || candidate[base_len] == '?' ||
+					 candidate[base_len] == '\0')) {
+					// The instance fronts the bytes itself, which is the only kind
+					// of address from somebody else this player can fetch.
+					snprintf(url, url_size, "%s", candidate);
+					if (duration) *duration = (int)json_obj_long(&doc, root, "duration", 0);
+					if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
+					if (artist && artist_size) json_obj_str(&doc, root, "uploader", artist, artist_size);
+					json_free(&doc);
+					free(body);
+					return true;
+				}
+			}
+			json_free(&doc);
+		}
+	}
+	free(body);
+	body = NULL;
+
+	// Invidious: the formats reply names the itag, and /latest_version with
+	// local=true is the endpoint that fetches and passes the audio on.
+	snprintf(endpoint, sizeof(endpoint), "%s/api/v1/videos/%.11s?fields=title,author,lengthSeconds,adaptiveFormats",
+			 base, video_id);
+	status = 0;
+	pthread_mutex_lock(&request_lock);
+	got = http_get_ex(endpoint, NULL, true, &body, NULL, YTMUSIC_RESPONSE_LIMIT, YTMUSIC_INSTANCE_TIMEOUT,
+					  &status);
+	pthread_mutex_unlock(&request_lock);
+	bool ok = false;
+	if (got && body && status < 400) {
+		answered = true;
+		json_doc_t doc;
+		if (json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_RESPONSE_LIMIT)) {
+			int root = json_root(&doc);
+			int formats = json_get(&doc, root, "adaptiveFormats");
+			int best = -1;
+			long best_rate = -1;
+			for (int i = 0; i < json_len(&doc, formats); i++) {
+				int format = json_at(&doc, formats, i);
+				char mime[96] = "";
+				json_obj_str(&doc, format, "type", mime, sizeof(mime));
+				if (strncasecmp(mime, "audio/mp4", 9) != 0) continue;
+				long itag = json_obj_long(&doc, format, "itag", 0);
+				if (itag <= 0) continue;
+				// 140 is the 128 kbit/s AAC every instance has; past the cap the
+				// device is decoding audio it cannot hear anyway.
+				long rate = json_obj_long(&doc, format, "bitrate", 0);
+				if (rate <= 0 || rate > YTMUSIC_RELAY_MAX_KBPS * 1000L) continue;
+				long score = itag == 140 ? (1L << 30) : rate;
+				if (score > best_rate) {
+					best = format;
+					best_rate = score;
+				}
+			}
+			if (best >= 0) {
+				long itag = json_obj_long(&doc, best, "itag", 0);
+				int built = snprintf(url, url_size, "%s/latest_version?id=%.11s&itag=%ld&local=true",
+									 base, video_id, itag);
+				if (built > 0 && (size_t)built < url_size) {
+					ok = true;
+					if (proxied) *proxied = true;
+					if (duration) *duration = (int)json_obj_long(&doc, root, "lengthSeconds", 0);
+					if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
+					if (artist && artist_size) json_obj_str(&doc, root, "author", artist, artist_size);
+				}
+			}
+		}
+		json_free(&doc);
+	}
+	free(body);
+	if (!ok && answered) set_error(error, error_size, "ytmusic_instance_no_stream");
 	return ok;
 }
 
@@ -1622,9 +2025,10 @@ static bool player_reply_media(const char *body, const char *video_id, char *url
 
 bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 					  int *duration, char *title, size_t title_size,
-					  char *artist, size_t artist_size,
+					  char *artist, size_t artist_size, bool *relay_proxied,
 					  char *error, size_t error_size) {
 	if (error && error_size) error[0] = '\0';
+	if (relay_proxied) *relay_proxied = false;
 	if (!video_id || strlen(video_id) != 11 || !url || !url_size) {
 		set_error(error, error_size, "ytmusic_invalid_track");
 		return false;
@@ -1639,19 +2043,35 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 	// Nothing here needs an account: search and the pages are answered signed
 	// out, and a track plays whether or not anybody has signed in.
 	//
-	// The order of the three answers to "where are the bytes":
+	// The order of the answers to "where are the bytes":
 	//
 	//   1. A saved browser session, through the web music player: it knows the
 	//      account's region and, with Premium, its own stream. Still first for
 	//      whoever has signed in; it is not tried with an OAuth token alone --
 	//      that client refuses such a token outright.
-	//   2. The phone-app player. Every request it sends is refused today (see
-	//      relay_audio_url), but it costs one fast 400, and the day Google
-	//      relaxes the wall it is the zero-config answer again.
-	//   3. The relay, last, so its error is the one the user sees: it is the
-	//      actionable one -- set a relay, or fix the one set -- while a
-	//      refusal from Google is not. Guest streaming goes through it, and
-	//      the audio-only filter there is the whole of what is fetched.
+	//   2. The instance pinned in the settings, when one is: pinning it is how
+	//      somebody says "this one works for me", so it goes before the device
+	//      rather than after it.
+	//   3. The device itself, through the phone-app player: no instance, no
+	//      relay, no account. Its reply carries plain URLs and the downloader
+	//      fetches them in ranges, which is what makes a track play with
+	//      nothing else on the network.
+	//   4. The instances: the pinned one's turn already came, so the list is
+	//      the built-in public hosts (or [ytmusic] instances) in order.
+	//   5. The relay, last, so its error is the one the user sees when it is
+	//      configured: it is the actionable one -- set a relay, or fix the one
+	//      set -- while a refusal from Google is not.
+	//
+	// A pin to "direct" asks the device and nothing else; a pin to "relay"
+	// asks that relay and nothing else, because the pin says that machine is
+	// already set up. An instance pin is tried first and the rest still follow
+	// it. "auto" -- the default -- is the whole list in the order above.
+	const char *source = source_value();
+	bool relay_only = strcmp(source, "relay") == 0;
+	bool direct_only = strcmp(source, "direct") == 0;
+	char pinned[YTMUSIC_SOURCE_MAX];
+	bool have_pinned = pinned_instance(pinned, sizeof(pinned));
+
 	char cookie[YTMUSIC_COOKIE_MAX];
 	ytmusic_session_cookie(cookie, sizeof(cookie));
 	bool try_web = cookie[0] != '\0';
@@ -1670,6 +2090,19 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 		if (error && error_size) error[0] = '\0';
 	}
 
+	if (have_pinned &&
+		instance_audio_url(pinned, video_id, url, url_size, duration, title, title_size, artist,
+						   artist_size, relay_proxied, error, error_size)) {
+		printf("ytmusic: %.11s: %s served it\n", video_id, pinned);
+		return true;
+	}
+	if (error && error_size) error[0] = '\0';
+
+	if (relay_only) {
+		return relay_audio_url(video_id, url, url_size, duration, title, title_size, artist,
+							   artist_size, relay_proxied, error, error_size);
+	}
+
 	char *body = NULL;
 	bool android_ok = android_player(video_id, &body, error, error_size);
 	if (android_ok) {
@@ -1682,8 +2115,33 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 	}
 	if (error && error_size) error[0] = '\0';
 
-	if (relay_audio_url(video_id, url, url_size, duration, title, title_size, artist, artist_size,
-						error, error_size)) {
+	// The instances, in the order the settings give them. Each one is asked
+	// until one can hand over bytes the player can fetch: an instance that is
+	// down, refused, or only names a Google address is passed over.
+	if (!direct_only) {
+		char bases[YTMUSIC_SOURCES_MAX][YTMUSIC_SOURCE_MAX];
+		int instances = ytmusic_instance_bases(bases, YTMUSIC_SOURCES_MAX);
+		// The built-in list is a guess at what might be up today; when it is
+		// the list in use, three tries is enough to know. A list somebody
+		// wrote themselves is tried whole, because each entry there is a
+		// machine they chose.
+		if (!config_get("ytmusic", "instances", "")[0] && instances > YTMUSIC_INSTANCE_TRIES) {
+			instances = YTMUSIC_INSTANCE_TRIES;
+		}
+		for (int i = 0; i < instances; i++) {
+			if (have_pinned && strcmp(bases[i], pinned) == 0) continue;
+			if (instance_audio_url(bases[i], video_id, url, url_size, duration, title, title_size,
+								   artist, artist_size, relay_proxied, error, error_size)) {
+				printf("ytmusic: %.11s: %s served it\n", video_id, bases[i]);
+				return true;
+			}
+		}
+		if (error && error_size) error[0] = '\0';
+	}
+
+	if (!direct_only &&
+		relay_audio_url(video_id, url, url_size, duration, title, title_size, artist, artist_size,
+						relay_proxied, error, error_size)) {
 		return true;
 	}
 	return false;
@@ -1718,6 +2176,105 @@ static bool write_playback_tags(const char *path, const ytmusic_track_t *track) 
 	return true;
 }
 
+// Google throttles one long transfer of a media URL to about 32 KB/s -- a
+// three-megabyte track then takes two minutes before a note comes out of the
+// player -- while the same bytes asked for a few hundred kilobytes at a time
+// arrive at the link's own speed. So the download is chunked, and one long
+// transfer is kept as the fallback for a server that ignores Range.
+#define YTMUSIC_CHUNK (256 * 1024)
+
+// The file in ranged chunks. False when Range is not honoured (or nothing came
+// back), which is the caller's cue to download it in one piece instead.
+static bool download_ranged(const char *url, const char *part, uint64_t *downloaded, bool *complete) {
+	*downloaded = 0;
+	*complete = false;
+	FILE *f = fopen(part, "wb");
+	if (!f) {
+		return false;
+	}
+	bool ok = true;
+	while (!*complete) {
+		char range[96], *body = NULL;
+		size_t len = 0;
+		int status = 0;
+		snprintf(range, sizeof(range), "Range: bytes=%llu-%llu\r\n",
+				 (unsigned long long)*downloaded,
+				 (unsigned long long)(*downloaded + YTMUSIC_CHUNK - 1));
+		http_req_t req = {.method = "GET",
+						  .extra_headers = range,
+						  .allow_empty_body = true, // a 206 is success, and so is a 204
+						  .no_https_downgrade = true};
+		bool got = http_request(url, &req, &body, &len, YTMUSIC_CHUNK + 1, YTMUSIC_RELAY_TIMEOUT, &status);
+		if (!got) {
+			free(body);
+			ok = false;
+			break;
+		}
+		if (status == 200) {
+			// The range was ignored and this is the whole file (or as much of
+			// it as was kept): not a piece of anything.
+			free(body);
+			ok = false;
+			break;
+		}
+		if (status == 416 || len == 0) {
+			// Asked past the end: what is on disk is the file.
+			free(body);
+			*complete = *downloaded > 0;
+			break;
+		}
+		if (status != 206 || !body || fwrite(body, 1, len, f) != len) {
+			free(body);
+			ok = false;
+			break;
+		}
+		free(body);
+		*downloaded += len;
+		// A short chunk is the last one: the file ended inside it.
+		if (len < YTMUSIC_CHUNK) *complete = true;
+	}
+	if (fclose(f) != 0) ok = false;
+	return ok && *complete;
+}
+
+// The same file in one transfer, for a server that does not answer Range. This
+// is what the download always did, and the reason for the chunked path above.
+static bool download_streamed(const char *url, const char *part, uint64_t *downloaded, bool *complete) {
+	*downloaded = 0;
+	*complete = false;
+	http_stream_t stream;
+	http_stream_options_t options = {.no_icy = true, .no_https_downgrade = true};
+	if (!http_stream_open_ex(&stream, url, YTMUSIC_RELAY_TIMEOUT, &options)) {
+		return false;
+	}
+	FILE *f = fopen(part, "wb");
+	if (!f) {
+		http_stream_close(&stream);
+		return false;
+	}
+	char *buffer = malloc(32768);
+	bool ok = buffer != NULL;
+	while (ok) {
+		int n = http_stream_read(&stream, buffer, 32768);
+		if (n < 0) {
+			ok = false;
+			break;
+		}
+		if (n == 0) break;
+		if (fwrite(buffer, 1, (size_t)n, f) != (size_t)n) {
+			ok = false;
+			break;
+		}
+		*downloaded += (uint64_t)n;
+	}
+	free(buffer);
+	if (fclose(f) != 0) ok = false;
+	if (stream.content_length64 && *downloaded != stream.content_length64) ok = false;
+	http_stream_close(&stream);
+	*complete = ok;
+	return ok;
+}
+
 static void prune_playback_cache(const char *keep_id) {
 	DIR *dir = opendir("/tmp/sonix-ytmusic");
 	if (!dir) return;
@@ -1741,7 +2298,12 @@ bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, siz
 		return false;
 	}
 	char url[YTMUSIC_URL_MAX], final[512], part[520];
-	if (!ytmusic_audio_url(track->id, url, sizeof(url), NULL, NULL, 0, NULL, 0, error, error_size)) return false;
+	// `proxied` says the address came from the relay and is being fetched
+	// through it -- which is what decides the message when that fails.
+	bool proxied = false;
+	if (!ytmusic_audio_url(track->id, url, sizeof(url), NULL, NULL, 0, NULL, 0, &proxied, error,
+						  error_size)) return false;
+	printf("ytmusic: %.11s: fetching %s%.48s\n", track->id, proxied ? "through the relay: " : "", url);
 	if (mkdir("/tmp/sonix-ytmusic", 0700) != 0 && errno != EEXIST) {
 		set_error(error, error_size, "ytmusic_cache_unavailable");
 		return false;
@@ -1753,36 +2315,32 @@ bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, siz
 	}
 	prune_playback_cache(track->id);
 	remove(part);
-	http_stream_t stream;
-	http_stream_options_t options = {.no_icy = true, .no_https_downgrade = true};
-	if (!http_stream_open_ex(&stream, url, YTMUSIC_TIMEOUT, &options)) {
-		set_error(error, error_size, http_last_error() ? http_last_error() : "ytmusic_stream_failed");
-		return false;
-	}
-	FILE *f = fopen(part, "wb");
-	if (!f) {
-		http_stream_close(&stream);
-		set_error(error, error_size, "ytmusic_cache_unavailable");
-		return false;
-	}
-	char *buffer = malloc(32768);
-	bool ok = buffer != NULL;
 	uint64_t downloaded = 0;
-	while (ok) {
-		int n = http_stream_read(&stream, buffer, 32768);
-		if (n < 0) { ok = false; break; }
-		if (n == 0) break;
-		if (fwrite(buffer, 1, (size_t)n, f) != (size_t)n) { ok = false; break; }
-		downloaded += (uint64_t)n;
+	bool complete = false;
+	bool ok = download_ranged(url, part, &downloaded, &complete);
+	if (!ok) {
+		// A server that will not answer a Range keeps the old behaviour: one
+		// transfer, started over, with the signature problem to live with.
+		printf("ytmusic: %.11s: ranged chunks refused, one transfer instead\n", track->id);
+		ok = download_streamed(url, part, &downloaded, &complete);
 	}
-	free(buffer);
-	if (fclose(f) != 0) ok = false;
-	if (stream.content_length64 && downloaded != stream.content_length64) ok = false;
-	http_stream_close(&stream);
 	memset(url, 0, sizeof(url));
-	if (!ok || downloaded < 1024 || rename(part, final) != 0) {
+	if (!ok || !complete || downloaded < 1024 || rename(part, final) != 0) {
 		remove(part);
-		set_error(error, error_size, "ytmusic_download_incomplete");
+		printf("ytmusic: %.11s: the download kept %llu bytes (%s, %s)\n", track->id,
+			   (unsigned long long)downloaded, ok ? "complete" : "failed",
+			   http_last_error() ? http_last_error() : "no reason given");
+		// Nothing arrived at all from a relay's /audio/: that is the relay not
+		// serving the bytes, and saying so is worth more than the HTTP layer's
+		// reason for one refused request. Bytes that stopped halfway are a
+		// different failure and say so.
+		if (downloaded == 0 && proxied) {
+			set_error(error, error_size, "ytmusic_relay_not_serving");
+		} else if (downloaded > 0) {
+			set_error(error, error_size, "ytmusic_download_incomplete");
+		} else {
+			set_error(error, error_size, http_last_error() ? http_last_error() : "ytmusic_stream_failed");
+		}
 		return false;
 	}
 	write_playback_tags(final, track);

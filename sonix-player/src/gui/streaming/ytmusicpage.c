@@ -54,6 +54,11 @@ static lv_obj_t *explore_list;
 static lv_obj_t *settings_screen;
 static lv_obj_t *sign_in_row;
 static lv_obj_t *sign_out_row;
+static lv_obj_t *source_screen;
+static lv_obj_t *source_list;
+static lv_obj_t *source_value_label;
+static ytmusic_source_t source_items[YTMUSIC_SOURCES_MAX];
+static int source_item_count;
 static lv_obj_t *login_screen;
 static lv_obj_t *login_qr;
 static lv_obj_t *login_code_label;
@@ -387,6 +392,10 @@ typedef struct {
 	ytmusic_item_t *items; // what the rows were built from, in row order
 	int count;
 	lv_obj_t *thumbs[YTMUSIC_PAGE_RESULTS]; // the cover image of each row, NULL when the entry has none
+	// The glyph each row was built with, put back while its picture is not
+	// there: a row with no cover keeps the icon it would have had anyway, and
+	// the same one it had before this page drew artwork at all.
+	const lv_image_dsc_t *placeholders[YTMUSIC_PAGE_RESULTS];
 	cover_image_t images[YTMUSIC_PAGE_RESULTS];
 	bool has_image[YTMUSIC_PAGE_RESULTS];
 	// A row that asked and got nothing -- a dead URL, an image that will not
@@ -417,8 +426,13 @@ static yt_art_list_t *art_state_for(lv_obj_t *list) {
 // Back to the glyph the row was built with. The placeholder is a themed icon,
 // so the row reads the same as every other row of the page until its picture
 // lands -- and again if one never does.
-static void art_show_placeholder(lv_obj_t *image) {
-	lv_image_set_src(image, &icon_music2);
+static void art_show_placeholder(yt_art_list_t *state, int row) {
+	lv_obj_t *image = state ? state->thumbs[row] : NULL;
+	if (!image) {
+		return;
+	}
+	const lv_image_dsc_t *glyph = state->placeholders[row] ? state->placeholders[row] : &icon_music2;
+	lv_image_set_src(image, glyph);
 	lv_obj_add_style(image, &theme_style_icon, 0);
 	lv_obj_set_style_image_recolor_opa(image, LV_OPA_COVER, 0);
 	lv_obj_set_style_radius(image, 0, 0);
@@ -460,7 +474,7 @@ static void art_wake(void) {
 static void art_give_back_pictures(yt_art_list_t *state) {
 	for (int row = 0; row < YTMUSIC_PAGE_RESULTS; row++) {
 		if (state->thumbs[row] && state->has_image[row]) {
-			art_show_placeholder(state->thumbs[row]);
+			art_show_placeholder(state, row);
 		}
 		state->has_image[row] = false;
 		cover_free(&state->images[row]);
@@ -618,6 +632,7 @@ static void art_forget_rows(yt_art_list_t *state) {
 	}
 	for (int row = 0; row < YTMUSIC_PAGE_RESULTS; row++) {
 		state->thumbs[row] = NULL;
+		state->placeholders[row] = NULL;
 		state->has_image[row] = false;
 		state->failed[row] = false;
 		cover_free(&state->images[row]);
@@ -655,14 +670,21 @@ static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int coun
 			snprintf(label, sizeof(label), "%s", items[i].title);
 		}
 		lv_obj_t *row = settingsrow_add(list, label, NULL, cb, (void *)(intptr_t)i);
-		settingsrow_name_lines(row, 2);
 		// An entry with artwork gets the shared cover slot; one without keeps
 		// the glyph it would have had anyway.
 		if (art && items[i].thumbnail[0]) {
-			art->thumbs[i] = settingsrow_add_art(row, &icon_music2, YTMUSIC_ROW_THUMB);
+			// The row's own glyph stands in until its sleeve lands, and comes
+			// back whenever the picture is given up: a song keeps its note, a
+			// show its podcast glyph, and no row changes shape on the way.
+			art->placeholders[i] = item_icon(&items[i]);
+			art->thumbs[i] = settingsrow_add_art(row, art->placeholders[i], YTMUSIC_ROW_THUMB);
 		} else {
 			settingsrow_add_icon(row, item_icon(&items[i]), item_tone(&items[i]));
 		}
+		// After the cover, not before: the name's room is worked out from what
+		// sits beside it, and asked first it started at the cover's own left
+		// edge -- the text and the sleeve drawn on top of each other.
+		settingsrow_name_lines(row, 2);
 	}
 	// A list that is already on screen -- a second search, a card opened from a
 	// card -- asks for its covers here; the screen-loaded callback covers the
@@ -1115,10 +1137,85 @@ static void build_login_page(void) {
 	switcher_attach_back_gesture(login_screen);
 }
 
+// The value beside the source row, and whether it is the chosen one.
+static void source_refresh(void) {
+	if (!source_value_label) return;
+	char active[YTMUSIC_SOURCE_MAX] = "";
+	ytmusic_source_active(active, sizeof(active));
+	const char *shown = active;
+	for (int i = 0; i < source_item_count; i++) {
+		if (strcmp(source_items[i].value, active) == 0) {
+			shown = tr(source_items[i].label);
+			break;
+		}
+	}
+	// An instance pinned by hand and no longer in the list still says what it
+	// is, without the scheme: the row's value is a host name.
+	const char *host = strstr(shown, "://");
+	lv_label_set_text(source_value_label, host ? host + 3 : shown);
+}
+
+static void source_row_build(void);
+
+static void source_pick_cb(lv_event_t *e) {
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= source_item_count) return;
+	if (!ytmusic_source_select(source_items[index].value)) {
+		toast_error("ytmusic_source_invalid");
+		return;
+	}
+	toast_success("ytmusic_source_saved");
+	source_refresh();
+	if (source_list) lv_obj_clean(source_list);
+	source_item_count = ytmusic_sources(source_items, YTMUSIC_SOURCES_MAX);
+	source_row_build();
+}
+
+static void source_row_build(void) {
+	if (!source_list) return;
+	char active[YTMUSIC_SOURCE_MAX] = "";
+	ytmusic_source_active(active, sizeof(active));
+	for (int i = 0; i < source_item_count; i++) {
+		lv_obj_t *value = NULL;
+		settingsrow_add(source_list, tr(source_items[i].label), &value, source_pick_cb,
+						(void *)(intptr_t)i);
+		if (value && strcmp(source_items[i].value, active) == 0) {
+			lv_label_set_text(value, tr("on"));
+		}
+	}
+}
+
+static void source_loaded_cb(lv_event_t *e) {
+	(void)e;
+	if (source_list) lv_obj_clean(source_list);
+	source_item_count = ytmusic_sources(source_items, YTMUSIC_SOURCES_MAX);
+	source_row_build();
+}
+
+static void open_source_cb(lv_event_t *e) {
+	(void)e;
+	switch_screen(source_screen);
+}
+
+static void build_source_page(gui_config_t *cfg) {
+	source_screen = lv_obj_create(NULL);
+	lv_obj_add_style(source_screen, &theme_style_screen, 0);
+	source_list = settingsrow_page(source_screen, cfg, "ytmusic_source");
+	player_sheet_attach_drag(source_list, true);
+	lv_obj_add_event_cb(source_screen, source_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	switcher_attach_back_gesture(source_screen);
+}
+
 static void build_settings_page(gui_config_t *cfg) {
+	build_source_page(cfg);
 	settings_screen = lv_obj_create(NULL);
 	lv_obj_add_style(settings_screen, &theme_style_screen, 0);
 	lv_obj_t *container = settingsrow_page(settings_screen, cfg, "ytmusic_settings");
+	lv_obj_t *source_row =
+		settingsrow_add(container, "ytmusic_source", &source_value_label, open_source_cb, NULL);
+	settingsrow_add_caption(source_row, "ytmusic_source_note");
+	source_item_count = ytmusic_sources(source_items, YTMUSIC_SOURCES_MAX);
+	source_refresh();
 	sign_in_row = settingsrow_action(container, "ytmusic_sign_in", login_begin_done_cb, NULL);
 	settingsrow_add_icon(sign_in_row, &icon_import, THEME_SEMANTIC_CYAN);
 	sign_out_row = settingsrow_action(container, "ytmusic_sign_out", logout_cb, NULL);

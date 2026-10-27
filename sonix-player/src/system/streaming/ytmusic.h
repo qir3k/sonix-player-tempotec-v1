@@ -124,10 +124,60 @@ int ytmusic_browse_items(const char *browse_id, ytmusic_item_t *items, int limit
 int ytmusic_explore_sections(ytmusic_section_t *sections, int limit,
 							 char *error, size_t error_size);
 
+// One track's address, and what the relay said about it. `relay_proxied`
+// (optional) is set when that address is the relay's own /audio endpoint rather
+// than one the relay merely named; see ytmusic_relay_stream_url().
 bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 					   int *duration, char *title, size_t title_size,
-					   char *artist, size_t artist_size,
+					   char *artist, size_t artist_size, bool *relay_proxied,
 					   char *error, size_t error_size);
+
+// Where the bytes of one track are fetched from, given the address the relay
+// answered with: that address when it is the relay's own, and the relay's
+// /audio/<video-id> -- the endpoint tools/ytmusic-relay.py serves -- when it is
+// somebody else's, which the player cannot fetch. `proxied` says which of the
+// two was chosen. False when there is nothing to build from.
+// `itag` is carried into the proxied address, so the relay serves the format
+// this end chose; 0 leaves it out.
+bool ytmusic_relay_stream_url(const char *base, const char *video_id, long itag, const char *reported,
+							  char *out, size_t out_size, bool *proxied);
+
+// ---------------------------------------------------------------------------
+// Where playback comes from
+//
+// Three answers, and the player chooses without being told: the device itself
+// (the player request it makes on its own -- no account, no helper machine), a
+// Piped or Invidious instance, and the LAN relay in [ytmusic] relay_base.
+//
+// "auto" is the default and tries them in that order. The other values pin one
+// first -- "direct", "relay", or an instance's https:// address -- and the
+// rest are still tried after it, because a pinned host being down should not
+// mean silence. The settings page lists exactly what these return.
+#define YTMUSIC_SOURCE_MAX 96
+#define YTMUSIC_SOURCES_MAX 12
+
+typedef struct {
+	// What the settings store keeps, and what ytmusic_source_select() takes:
+	// "auto", "direct", "relay", or the instance's base address.
+	char value[YTMUSIC_SOURCE_MAX];
+	// What the row shows: a translated tag (for the three built-in answers) or
+	// the instance's host name.
+	char label[YTMUSIC_SOURCE_MAX];
+} ytmusic_source_t;
+
+// The choices, the default first. Returns how many were written.
+int ytmusic_sources(ytmusic_source_t *out, int limit);
+// The value in force, "auto" when nothing was ever chosen.
+void ytmusic_source_active(char *out, size_t size);
+// Stores a choice from ytmusic_sources(). False when the value is not one of
+// them -- an address that is not http(s), or one too long to send.
+bool ytmusic_source_select(const char *value);
+// The instance addresses tried, in order: the configured [ytmusic] instances
+// list when there is one, the built-in public list otherwise, and the pinned
+// instance first when one is pinned. Fills `out` with the addresses and
+// returns how many: each is a base like "https://pipedapi.kavin.rocks", with
+// no trailing slash.
+int ytmusic_instance_bases(char out[][YTMUSIC_SOURCE_MAX], int limit);
 
 // Fetches one AAC/MP4 audio stream to the temporary playback cache. This is a
 // blocking operation; call from a worker, not from the UI or audio thread.

@@ -96,26 +96,65 @@ list.
 
 Selecting a track resolves an audio-only AAC stream, caches it temporarily under
 `/tmp/sonix-ytmusic`, and hands that file to the player's existing decoder, which
-reads both flat and fragmented (DASH) MP4 — the form YouTube serves.
+reads both flat and fragmented (DASH) MP4 — the form YouTube serves. The bytes
+are fetched in 256 KB ranges rather than as one long transfer: an unsigned
+`googlevideo` address is throttled to about 32 KB/s when read straight through,
+and not throttled at all when it is read in ranges, which is the difference
+between a couple of seconds and a couple of minutes for one track.
 
-## Playback and the relay
+## Playback: the device, an instance, or a relay
 
 Google demands a browser-grade attestation — a PO token its JavaScript computes —
-from every first-party client before it hands out media, and this device has no
-JavaScript engine. So playback goes through a relay you name yourself:
+before it hands out media, and this device has no JavaScript engine. What it
+does have is the phone-app player request, which still answers with plain
+`https` audio addresses the device can fetch itself. That is the default: a
+track plays with nothing else on the network, no account, no helper machine.
+
+When Google refuses that request, the player falls back, in this order:
+
+1. **An instance** — a Piped or Invidious server. The settings page lists the
+   built-in public hosts and anything in `[ytmusic] instances`, and one can be
+   pinned so it is asked first.
+2. **The relay** — `tools/ytmusic-relay.py` on a machine of your own.
+
+**Playback source** in the settings page (Streaming → YouTube Music → the cog)
+shows what is in force and opens the list: *Automatic* (the default, the order
+above), *This device only*, *Relay on my network*, or any instance. A pinned
+source is tried first and the rest are still tried after it, because a pinned
+host being down should not mean silence.
+
+### Instances
 
 ```ini
 [ytmusic]
-relay_base = http://192.168.1.20:8010
+source = https://invidious.example     # pin one; "auto" is the default
+instances = inv.example, piped.example  # replace the built-in list
 ```
 
 in `/usr/data/device_config.ini` — the same file the player writes its own
-settings to. Without one, search and browsing still work and starting a track
-says what is missing.
+settings to. The settings page writes both keys, so neither has to be edited by
+hand; a bare host name is accepted and read as `https://`.
 
-`sonix-player/tools/ytmusic-relay.py` is that relay: a single file, on any
-machine the player can reach (the PC on the same network is the natural place).
-It needs `yt-dlp`, which runs the attestation:
+What an instance can contribute depends on what it does with the bytes. A Piped
+instance answers `/streams/<id>` with addresses on Google's own hosts, which
+belong to the instance's address and are refused when fetched from here — so a
+Piped instance only helps when its answer already points at itself. An Invidious
+instance is asked for its formats reply, and the bytes are then fetched through
+its own `/latest_version?id=…&itag=…&local=true`, which makes the instance fetch
+the audio and pass it on: that is the shape that works from another machine.
+
+Most public instances are refused by YouTube on any given day (403 to every
+request), which is why this is a fallback and why a self-hosted instance is the
+reliable version of it. Nothing here logs in to an instance: the player never
+sends a Google password anywhere, and the only account it knows is the imported
+browser session above.
+
+### The relay
+
+The relay is for anyone who would rather run one job on their own machine than
+depend on an instance. `sonix-player/tools/ytmusic-relay.py` is a single file,
+on any machine the player can reach. It needs `yt-dlp`, which runs the
+attestation:
 
 ```sh
 pip install yt-dlp
@@ -126,13 +165,23 @@ It answers the two endpoints the player asks for. `/streams/<video-id>` is the
 Piped-shaped reply — title, artist, duration, and the one audio stream to fetch —
 and `/audio/<video-id>` is those audio bytes, fetched by the relay and passed on.
 
-That second endpoint is the point: the media URL `yt-dlp` resolves is bound to the
-address that resolved it, so fetched from the player — a different client on a
-different address — Google answers 403, and it is also several thousand
-characters long, past what the player's own URL buffer holds. Both of those show
-up as "could not reach the stream". A short URL on the LAN has neither problem,
-and the audio-only filter stays where it was: the relay offers m4a/AAC only, and
-never fetches the video.
+That second endpoint is the point: the media URL `yt-dlp` resolves is bound to
+the address that resolved it, and it is several thousand characters long,
+past what the player's own URL buffer holds. A short URL on the LAN has neither
+problem, and the audio-only filter stays where it was: the relay offers m4a/AAC
+only, and never fetches the video.
+
+What the player does with the reply: an audio address on the relay itself is
+fetched as it stands, and one that points anywhere else — a public instance's
+`googlevideo` URL — is not fetched at all, because fetching it cannot work; the
+player asks the relay for `/audio/<video-id>` instead. A relay that answers with
+neither is named as that ("This relay hands out YouTube addresses the player
+cannot fetch"), rather than blamed as a broken stream, and the device log records
+the address that was tried and why it failed. The relay's own console prints a
+line per request (`relay: "GET /audio/..." 200 -`), which is the first place to
+look when a track does not start. When every source has been refused, the
+message says so ("YouTube refused the audio and no instance answered") instead
+of asking for a relay, because a relay is no longer required.
 
 Search and chart results inside explicitly marked ad, sponsored or promoted
 renderers are skipped, and before playback the player checks that YouTube
