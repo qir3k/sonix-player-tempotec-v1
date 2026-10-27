@@ -8,7 +8,9 @@
 
 `.wav` `.flac` `.mp3` `.ogg` `.opus` `.m4a` `.m4b` `.mp4` `.aac` `.wv` `.wvc` `.ape` `.dsf` `.dff` `.aif` `.aiff` `.aifc` `.caf`
 
-**CUE sheets** split a single ripped disc into up to 99 tracks, taking the format from the file the sheet points at. WAVs carrying their own RIFF markers work the same way.
+**CUE sheets** split a single ripped disc into up to 99 tracks, taking the format from the file the sheet points at (and finding the audio file by stem when its extension differs from the `FILE` line). WAVs carrying their own RIFF markers work the same way.
+
+**Format & tag tolerance** - Containers and codecs are identified from file contents rather than extensions, so misnamed files scan and play cleanly. FLAC files carrying leading ID3v2 headers, broken or non-standard ID3v2 tags (v2.4 non-syncsafe sizes, unsynchronised UTF-16 frames, zlib-compressed frames, BOM-less UTF-16, chained tags), multi-page Ogg Vorbis/Opus comment headers, and APEv2/ASF/MP4/RIFF/AIFF/CAF metadata are all read reliably.
 
 **WAV and AIFF tags** are read from the ID3 chunk taggers add to them, so titles in any script and the cover come through; a WAV's own INFO list fills in whatever that leaves empty.
 
@@ -80,7 +82,7 @@
 
 ## Now playing
 
-- Artwork edge to edge across the top, and the same picture flipped, blurred and dimmed behind the controls.
+- Artwork edge to edge across the top, and the same picture flipped, blurred and dimmed behind the controls. Embedded or folder covers up to 32 MB are memory-mapped directly from the card, pre-fetched for the upcoming track, and cached as JPEGs (up to 1,000 Now Playing sleeves alongside list thumbnails) with a dedicated cache-lookup worker for near-instant skips.
 - **Alternative layout** - the progress bar becomes a **waveform**
 - **Immersive layout** - the picture itself, edge to edge across the whole panel: the sleeve fills the screen and is centre-cropped, at its own brightness, with nothing laid over it. The controls stand on a frosted band: the foot of the same photograph, lightly blurred, dimmed to the darkness the type reads on and tinted so the sleeve's colour survives in it, cut to the deck's rectangle - so the artwork is still seen through the glass, softly, while the names, the bar, the clocks and the transport are read on top; the chevron and the source marks take their chance in white over the sharp part. Anything holding artwork gets one - local files, podcasts, audiobooks, Subsonic and the streaming services alike - and without a picture the page falls back to its own colour with the controls in the theme's ink.
 - **Poster layout** - the sleeve scaled to the edges of the screen without the crop Immersive takes: the whole picture from side to side at the width of the panel, held at the top with square corners and nothing stretched, and the deck below it on its own opaque ground rather than over the artwork - as much of the sleeve as the deck leaves room for, at the largest size the screen allows. Anything holding artwork gets one, and without a picture the empty sleeve stands edge to edge in the cover's colour with the controls in the theme's ink; the favourite marker is a heart on this deck, kept a step smaller than the star it stands in for; and the foot of the sleeve fades into the deck over its last pixels instead of meeting the controls at a line.
@@ -89,6 +91,7 @@
 - **Tint controls from album art** - optional, off by default, in the same Display options: the play/pause button and the played part of the progress bar take the main colour of the playing track's artwork, in every layout, while previous and next keep their colour. The colour is the one already worked out from the decoded artwork, so nothing extra is decoded and playback is untouched; a track with no artwork keeps the theme's colours.
 - **The control centre** - pulled down from the status bar, or up from the bottom edge with **Appearance → Stock gestures** on: the round quick controls, the brightness bar under them -- or the volume, with **Screen → Volume in control centre** -- and the playing track over its transport. **Tap the title or the artist to open Now Playing** for what is playing, and the control centre closes on the way: the player comes up over the page, or is simply revealed when it was already open behind the panel. The two lines do nothing while the card says there is nothing playing.
 - **Cover Flow** - an album carousel: pull up from the bottom of the main menu and it follows the finger up over the page; drag it back down -- from anywhere on the sheet, or from the grip under the status bar -- and it goes away. With **Appearance → Stock gestures** on it comes down from the top edge of any page instead, and goes back up, as on the original firmware. Off by default in Settings → Music → Display options.
+- **Lyrics and LRCLIB** - swipe left on the artwork to show the playing track's lyrics, read from a sidecar `.lrc` or `.txt` file beside the track or from its embedded tags; synced lyrics follow the song line by line, tapping a line seeks there, and the screen stays lit while reading. On a local track with no lyrics, the same swipe offers to look them up on **LRCLIB** (and offers to turn Wi-Fi on first when Wi-Fi is off, starting the search automatically once connected), lists the ranked synced and plain matches with a full-text preview, and saves the chosen lyrics atomically as `<track>.lrc` beside the file; while lyrics are open, the corner search button looks up alternatives on LRCLIB to replace them.
 - **Queue**, **Details** and, while an audiobook is loaded, **Chapters**.
 
 ## Streaming
@@ -102,7 +105,8 @@ folder, which also takes podcasts copied there by hand — see
 [Podcasts on the card](#podcasts-on-the-card).
 - **Radio** - the radio-browser.info directory by language, country or genre,
 plus search, favourites, recently played, and **My stations** read from a
-`radio.txt` you write yourself in the card root. MP3 and AAC, HTTPS with real
+`radio.txt` you write yourself in the card root. MP3, AAC and FLAC (native,
+mid-stream join, and chained Ogg FLAC with song titles, up to 24-bit), HTTPS with real
 certificate checking (plus an opt-in relaxed mode for a server of your own with
 a self-signed certificate), and HLS.
 

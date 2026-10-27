@@ -87,6 +87,11 @@ void coverloader_request_player_id(const char *path);
 // 0 when the track has no artwork at all.
 bool coverloader_take_player_id(uint64_t *id, bool *finished);
 
+// Warms the player's cache for `path` at cover_w x cover_h on the worker,
+// behind everything the screen is actually waiting for. One job, newest wins;
+// nothing to collect.
+void coverloader_prefetch_player(const char *path, int cover_w, int cover_h);
+
 // ---------------------------------------------------------------------------
 // The screensaver's photograph -- the full-screen picture and the blurred block
 // over its lower part.

@@ -384,6 +384,8 @@ ICONS = [
     ("enter.svg", "enter", 34),
     ("year.svg", "year", 32),
     ("most-played.svg", "most_played", 32),
+    # The corner button on the lyrics sheet that looks up words on LRCLIB.
+    ("lyrics-search.svg", "lyrics_search", 32),
 ]
 
 # Main menu and section tiles, which keep their own colours and are therefore

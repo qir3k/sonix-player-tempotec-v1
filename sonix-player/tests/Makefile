@@ -179,6 +179,96 @@ $(BUILD)/test_tagdate: $(TAGDATE_SRC) $(ROOT)/src/system/library/tagdate.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(TAGDATE_SRC) $(LDFLAGS) $(LDLIBS)
 
+# LRCLIB search ranking, retry policy, free-text fallback and atomic sidecar
+# .lrc writes against a stubbed HTTP transport. Plain C, no LVGL.
+LRCLIB_SRC = test_lrclib.c $(ROOT)/src/system/core/json.c
+.PHONY: lrclib
+lrclib: $(BUILD)/test_lrclib
+	$(BUILD)/test_lrclib
+
+$(BUILD)/test_lrclib: $(LRCLIB_SRC) $(ROOT)/src/system/library/lrclib.c \
+                      $(ROOT)/src/system/library/lrclib.h $(ROOT)/src/system/core/json.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(LRCLIB_SRC) $(LDFLAGS) $(LDLIBS)
+
+# Tag reading, format sniffing, streaming Ogg comments and FLAC/Ogg ID3 skipping
+# across real containers and V1 tagdate rules. Plain C, no external codec libs.
+TAGS_DECODE_SRC = $(ROOT)/src/system/decode/decode.c \
+                  $(ROOT)/src/system/decode/sndfile.c \
+                  $(ROOT)/src/system/decode/stb_vorbis.c \
+                  $(ROOT)/src/system/decode/mp4.c \
+                  $(ROOT)/src/system/decode/apedec.c \
+                  $(ROOT)/src/system/decode/ape/apecore.c \
+                  $(ROOT)/src/system/decode/alacdec.c \
+                  $(ROOT)/src/system/decode/alac/alac.c \
+                  $(ROOT)/src/system/decode/aacdec.c \
+                  $(ROOT)/src/system/decode/dsd.c \
+                  $(ROOT)/src/system/decode/growfile.c \
+                  $(ROOT)/src/system/streaming/streambridge.c
+TAGS_SRC = test_tags.c \
+           $(ROOT)/src/system/library/metadata.c \
+           $(ROOT)/src/system/library/oggtags.c \
+           $(ROOT)/src/system/library/vorbischap.c \
+           $(ROOT)/src/system/library/tagdate.c \
+           $(ROOT)/src/system/library/cue.c \
+           $(ROOT)/src/system/image/png_scaled.c \
+           $(ROOT)/src/system/core/config.c \
+           $(ROOT)/src/system/core/utils.c
+.PHONY: tags
+tags: $(BUILD)/test_tags
+	$(BUILD)/test_tags
+
+$(BUILD)/test_tags: $(TAGS_SRC) $(TAGS_DECODE_SRC) \
+                    $(ROOT)/src/system/library/metadata.h $(ROOT)/src/system/library/oggtags.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-error=format-truncation -o $@ $(TAGS_SRC) \
+		-Wno-unused-parameter -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough -Wno-misleading-indentation $(TAGS_DECODE_SRC) \
+		$(LDFLAGS) $(LDLIBS)
+
+# SD-card mmap artwork (>8 MB), SIGBUS card-removal recovery, streaming Ogg and
+# APEv2 embedded covers, 1000-row JPEG player_covers cache and id_worker.
+COVERS_SRC = test_covers.c \
+             $(ROOT)/src/system/library/albumart.c \
+             $(ROOT)/src/system/library/oggtags.c \
+             $(ROOT)/src/system/library/cue.c \
+             $(ROOT)/src/gui/nowplaying/cover.c \
+             $(ROOT)/src/gui/nowplaying/coverloader.c \
+             $(ROOT)/src/system/image/art_shrink.c \
+             $(ROOT)/src/system/image/jpeg_scaled.c \
+             $(ROOT)/src/system/image/png_scaled.c \
+             $(ROOT)/src/system/image/stb_image_impl.c \
+             $(ROOT)/src/system/core/utils.c
+.PHONY: covers
+covers: $(BUILD)/test_covers
+	$(BUILD)/test_covers
+
+$(BUILD)/test_covers: $(COVERS_SRC) $(TAGS_DECODE_SRC) $(BUILD)/sqlite3_impl.o \
+                      $(ROOT)/src/system/library/albumart.h $(ROOT)/src/gui/nowplaying/cover.h
+	@mkdir -p $(BUILD)
+	$(CC) $(UI_CPPFLAGS) $(CFLAGS) -Wno-error=format-truncation -o $@ $(COVERS_SRC) \
+		-Wno-unused-parameter -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough -Wno-misleading-indentation $(TAGS_DECODE_SRC) \
+		$(BUILD)/sqlite3_impl.o $(LDFLAGS) $(LDLIBS)
+
+# FLAC radio stream decoding: native FLAC behind ID3v2, mid-stream 24-bit
+# relaxed join across false sync markers, chained Ogg FLAC with song titles
+# and multi-page packet assembly, and non-FLAC rejection.
+RADIOFLAC_SRC = test_radioflac.c $(ROOT)/src/system/streaming/radioflac.c
+.PHONY: radioflac sanitize-radioflac
+radioflac: $(BUILD)/test_radioflac
+	$(BUILD)/test_radioflac
+
+$(BUILD)/test_radioflac: $(RADIOFLAC_SRC) $(BUILD)/drflac_impl.o \
+                         $(ROOT)/src/system/streaming/radioflac.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(RADIOFLAC_SRC) $(BUILD)/drflac_impl.o $(LDFLAGS) $(LDLIBS)
+
+$(BUILD)/drflac_impl.o: $(ROOT)/src/system/decode/dr_flac.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -w -DDR_FLAC_IMPLEMENTATION -x c -c -o $@ $<
+
+sanitize-radioflac:
+	$(MAKE) BUILD=.build/sanitize CFLAGS='-O1 -g -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -fno-omit-frame-pointer -fsanitize=address,undefined' LDFLAGS='-Wl,--gc-sections -fsanitize=address,undefined' radioflac
+
 # The Most played list against the real library database: the play upsert
 # device_state.c runs at track start, the handle the page opens, and the
 # streaming reader the queue is built from. The card is a temporary directory
@@ -291,8 +381,23 @@ CHARGE_SRC = $(ROOT)/tests/ui/test_chargescreen.c $(ROOT)/src/gui/shell/chargesc
 CHARGE_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(CHARGE_SRC)) \
              $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
 
+# The LRCLIB results list, preview and Apply flow on the 240x320 panel across
+# all eleven shipped languages and all five V1 palettes.
+LYRICSEARCH_SRC = $(ROOT)/tests/ui/test_lyricsearch.c \
+                  $(ROOT)/src/gui/nowplaying/lyricsearch.c \
+                  $(ROOT)/src/gui/shell/settingsrow.c \
+                  $(ROOT)/src/gui/shell/theme.c \
+                  $(ROOT)/src/gui/shell/icons.c \
+                  $(ROOT)/src/gui/board_profile.c \
+                  $(ROOT)/src/system/library/lrclib.c \
+                  $(ROOT)/src/system/core/json.c \
+                  $(ROOT)/src/system/core/config.c \
+                  $(ROOT)/src/system/core/lang.c
+LYRICSEARCH_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(LYRICSEARCH_SRC)) \
+                  $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
+
 .PHONY: ui
-ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages $(BUILD)/test_wifi_pages $(BUILD)/test_chargescreen
+ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages $(BUILD)/test_wifi_pages $(BUILD)/test_chargescreen $(BUILD)/test_lyricsearch
 	$(BUILD)/test_main_menu ../../sonix-packer/assets/V1/usr/resource/sonix/language
 	$(BUILD)/test_main_menu ../../sonix-packer/assets/V1/usr/resource/sonix/language saved
 	$(BUILD)/test_screensaver ../../sonix-packer/assets/V1/usr/resource/sonix/language
@@ -300,6 +405,7 @@ ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages 
 	$(BUILD)/test_tools_pages ../../sonix-packer/assets/V1/usr/resource/sonix/language
 	$(BUILD)/test_wifi_pages ../../sonix-packer/assets/V1/usr/resource/sonix/language
 	$(BUILD)/test_chargescreen ../../sonix-packer/assets/V1/usr/resource/sonix/language
+	$(BUILD)/test_lyricsearch ../../sonix-packer/assets/V1/usr/resource/sonix/language
 
 $(BUILD)/test_main_menu: $(UI_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
@@ -316,6 +422,9 @@ $(BUILD)/test_tools_pages: $(TOOLS_OBJ)
 $(BUILD)/test_wifi_pages: $(WIFIPAGE_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
+$(BUILD)/test_lyricsearch: $(LYRICSEARCH_OBJ)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
 $(BUILD)/ui/%.o: $(ROOT)/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(UI_CPPFLAGS) $(UI_CFLAGS) -c $< -o $@
@@ -325,4 +434,4 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(UI_CPPFLAGS) $(filter-out -Werror,$(UI_CFLAGS)) -c $< -o $@
 
--include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d))
+-include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(LYRICSEARCH_OBJ:.o=.d))

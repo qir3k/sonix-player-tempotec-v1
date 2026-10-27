@@ -36,8 +36,11 @@ jobs:
       - name: HTTP, REST, buffering, playlist and ownership
         run: make -C sonix-player/tests test
       - name: Real MP3, FLAC and Opus stream decoding
-        run: make -C sonix-player/tests codecs
+        run: |
+          make -C sonix-player/tests codecs
+          make -C sonix-player/tests radioflac
       - name: Address and undefined-behavior sanitizers
         run: |
           make -C sonix-player/tests sanitize
           make -C sonix-player/tests sanitize-codecs
+          make -C sonix-player/tests sanitize-radioflac

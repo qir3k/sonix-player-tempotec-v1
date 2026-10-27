@@ -12,6 +12,7 @@
 #include "src/gui/nowplaying/coverflow.h"
 #include "src/gui/settings/ccsettings.h"
 #include "src/gui/nowplaying/chapters.h"
+#include "src/gui/nowplaying/lyricsearch.h"
 #include "src/gui/wireless/airplay.h"
 #include "src/gui/bluetooth/airpodspage.h"
 #include "src/gui/settings/appearance.h"
@@ -659,6 +660,7 @@ void gui_init(gui_config_t *cfg) {
 	audiobookcontrols_screen = lv_obj_create(NULL);
 	audiobookscan_screen = lv_obj_create(NULL);
 	chapters_screen = lv_obj_create(NULL);
+	lyricsearch_screen = lv_obj_create(NULL);
 	queue_screen = lv_obj_create(NULL);
 	details_screen = lv_obj_create(NULL);
 	wireless_screen = lv_obj_create(NULL);
@@ -781,6 +783,7 @@ void gui_init(gui_config_t *cfg) {
 	audiobookextras_init(cfg); // the bookmarks and summary pages
 	audiobooks_init(cfg);
 	chapters_init(cfg);
+	lyricsearch_init(cfg);
 	trackmenu_init(cfg);
 
 	// The leftward swipe that pulls the player in works on the browsing pages
@@ -811,6 +814,7 @@ void gui_init(gui_config_t *cfg) {
 		bootpicpage_screen, language_screen,
 		medialist_screen,  medialist_tracks_screen, medialist_albums_screen, audiobooks_screen, audiobooksettings_screen,
 		queue_screen,	  chapters_screen,		 details_screen,   audiobookcontrols_screen,
+		lyricsearch_screen,
 		wireless_screen,
 		wifisettings_screen,
 		btsettings_screen, btaudio_screen,	 airpodspage_screen, airplay_screen,   streaming_screen,
