@@ -2,6 +2,7 @@
 #define TIDALPAGE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "src/gui/shell/gui.h"
 
@@ -19,12 +20,17 @@ extern lv_obj_t *tidal_screen;
 // logged in, missing id).
 bool tidalpage_open_album(const char *album_id, const char *title);
 
+// Opens Tidal's artist results for a name from Now Playing.  Track responses
+// do not contain the artist id, so the service search is the reliable route
+// from a playing track to that artist's page.
+bool tidalpage_search_artist(const char *artist);
+
 // The list page, for callers that need to know where back leads.
 extern lv_obj_t *tidal_list_screen;
 
 // "Can this file be played right now?", for the queue. tidalpage_init()
 // registers it itself with device_state_add_prepare_cb(); it is declared here
 // because it is defined elsewhere in the file than where it is registered.
-bool tidalpage_prepare_track(const char *path);
+bool tidalpage_prepare_track(char *path, size_t path_size);
 
 #endif /* TIDALPAGE_H */

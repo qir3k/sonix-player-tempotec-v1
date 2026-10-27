@@ -990,7 +990,8 @@ static void downloading_note_async(void *user) {
 	gui_notify_popup("downloading");
 }
 
-static bool qobuz_prepare_track(const char *path) {
+static bool qobuz_prepare_track(char *path, size_t path_size) {
+	(void)path_size; // the cache writes the file under the name the queue holds
 	if (!qobuzcache_owns(path)) {
 		waiting_for_track = false;
 		return true; // not a Qobuz file

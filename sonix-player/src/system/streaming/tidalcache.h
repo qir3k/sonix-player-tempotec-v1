@@ -32,15 +32,20 @@
 
 #define TIDALCACHE_DIR ".local/tidal-cache"
 
-// The same ceiling as Qobuz. The two count separately, so in the worst case --
-// using both on the same day -- they take twice as much. That is deliberate:
-// they are two transient caches that empty themselves, and a shared budget
-// would mean listening to Tidal deletes what was being listened to on Qobuz.
+// A bounded playback cache rooted on the card, beside Qobuz's. A hi-res track
+// is a single FLAC of tens -- sometimes hundreds -- of megabytes, more than the
+// player's internal data partition can hold; the card is the only storage with
+// room for it, and the only one whose free space says whether a track fits.
+//
+// One GB is the same ceiling as Qobuz's and roughly ten hi-res albums: enough
+// not to re-download what is being listened to these days, small enough not to
+// silently fill a card. Manually kept tracks are copied to Music/Tidal by
+// streamkeep.
 #define TIDALCACHE_MAX_BYTES (1024L * 1024L * 1024L)
 
-// Where the card is. Once at startup and on every card change; NULL or empty
-// disables the cache (and with it Tidal, which cannot play anything without
-// it).
+// Where the card is. Called once at startup and on every card change; NULL or
+// empty disables the cache (and with it Tidal, which cannot play anything
+// without it). On the simulator there is no card, and /tmp stands in for one.
 void tidalcache_set_root(const char *sd_root);
 bool tidalcache_ready(void);
 
@@ -74,7 +79,15 @@ bool tidalcache_find(long track_id, char *out, size_t size);
 // starting. 0 when unknown.
 //
 // `stream` is copied: the caller can free its own as soon as this returns.
-bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_secs, char *out, size_t size);
+//
+// `foreground` says the user is waiting for this track -- they tapped it and
+// the player is holding a "downloading" notice -- rather than the prefetcher
+// getting the next one ready while the current one plays. The slow-connection
+// notice is only for a foreground start: a background prefetch that takes a
+// while is not something the listener is waiting through, and warning about it
+// was most of what made the notice look broken.
+bool tidalcache_start(long track_id, const tidal_stream_t *stream, int duration_secs, bool foreground, char *out,
+					  size_t size);
 
 // The extension this stream's file will have, without the dot. Gives the name
 // before the download begins.
@@ -98,8 +111,21 @@ void tidalcache_set_slow_start_cb(void (*cb)(int seconds));
 // previous one is no longer needed and the bandwidth belongs to this one.
 void tidalcache_abandon_all(void);
 
+// Cancels the current non-foreground transfer (bulk download or prefetch),
+// without interrupting a track whose bytes are being used for playback.
+bool tidalcache_cancel_background_download(long track_id);
+
 // The id of the track downloading right now, 0 if none.
 long tidalcache_downloading_id(void);
+
+// Where the track downloading right now is being written. The queue's path is
+// the container it guessed from the chosen quality; a DASH manifest can choose
+// another, and the file then grows under that name while the queued one does
+// not exist. False when nothing is downloading, or not for this id.
+bool tidalcache_downloading_path(long track_id, char *out, size_t out_size);
+
+// Bytes written by the active cache transfer, and the final size when known.
+void tidalcache_progress(long *done, long *total);
 
 // "Tidal needs the network", even when nothing is downloading at this instant.
 // Needed by the Wi-Fi parking logic (power.c): see the long comment on
@@ -121,16 +147,36 @@ const char *tidalcache_dir(void);
 // MP4 does not carry. Without this sidecar the player would show
 // "12345678.flac" for every hi-res track.
 void tidalcache_write_sidecars(long track_id, const char *mime, const char *title, const char *artist,
-							   const char *album, const char *album_id, int track_number, const char *cover_url);
+							   const char *album, const char *album_id, int track_number, int duration_secs,
+							   const char *cover_url);
+
+// The same, for a caller that already holds the real local path.
+//
+// Which is every caller that has just started a download: the marker beside the
+// file is still there, so tidalcache_find() answers "not downloaded" and the
+// function above would fall back to the extension the MIME type suggests --
+// ".m4a" for a hi-res DASH stream whose file is unwrapped to ".flac" -- and
+// write the tags beside a file that does not exist. The player then reads the
+// bare name back ("471624591.flac") for the whole first track.
+void tidalcache_write_sidecars_at(const char *path, const char *title, const char *artist, const char *album,
+								  const char *album_id, int track_number, int duration_secs, const char *cover_url);
 
 // The Tidal album id the track belongs to, read back from the sidecar. False if
 // the path is not from this cache or the sidecar does not say. Used by "Show
 // album" in the player.
 bool tidalcache_album_id(const char *path, char *out, size_t size);
 
+// A metadata field from the track's sidecar tags.
+bool tidalcache_tag(const char *path, const char *key, char *out, size_t size);
+
 // Why the last tidalcache_start() failed, as a sentence fit to display. Empty
 // on success. Per thread, like http_last_error().
 const char *tidalcache_last_error(void);
+
+// A transfer that continued on its own thread may fail after tidalcache_start
+// has returned. After tidalcache_wait_idle(), this retrieves that completion
+// error for the requested track id; false means no asynchronous error is saved.
+bool tidalcache_download_error(long track_id, char *out, size_t out_size);
 
 // The Tidal track id from the local path, 0 if that path is not a track of this
 // cache. The file name is the id ("12345678.flac"): a playing file always maps

@@ -1268,7 +1268,8 @@ static void resume_if_waiting_async(void *user) {
 }
 
 // Called by device_state an instant before a file is started.
-static bool podcastpage_prepare_track(const char *path) {
+static bool podcastpage_prepare_track(char *path, size_t path_size) {
+	(void)path_size; // the cache writes the episode under the name the queue holds
 	if (!podcastcache_owns(path)) {
 		waiting_for_episode = false;
 		return true; // not a podcast episode

@@ -1,5 +1,6 @@
 #include "tidal.h"
 
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -536,6 +537,17 @@ static bool token_is_fresh(void) {
 	return (long)time(NULL) + TOKEN_MARGIN_SECS < token_expires_at;
 }
 
+// The session -- the access token, the refresh token, the country -- is a
+// handful of globals with no lock of their own. The prefetcher and the track
+// the user just picked can reach Tidal together, and a token refresh in one of
+// them rewrites `access_token` while the other is building a header from it.
+// Downloads are serialised by streamturn already; the metadata requests were
+// the one place two of them could be in flight at once, so they queue here.
+//
+// The lock is not held across the download itself: this only serialises the
+// short API request (and any refresh inside it).
+static pthread_mutex_t api_lock = PTHREAD_MUTEX_INITIALIZER;
+
 // Makes the request, parses the response, and fills last_error on failure. On
 // success the caller must free *body after it is done with *doc: the document
 // points into the text rather than copying it.
@@ -544,7 +556,7 @@ static bool token_is_fresh(void) {
 // place: twenty functions must not each remember to check expiry, and the case
 // that matters is not "the token expired by the local clock" but "Tidal says
 // no" -- this device's clock can be anything after a flat battery.
-static bool api_call(const char *url, char **body, json_doc_t *doc) {
+static bool api_call_once(const char *url, char **body, json_doc_t *doc) {
 	clear_error();
 
 	if (!tidal_configured()) {
@@ -604,6 +616,12 @@ static bool api_call(const char *url, char **body, json_doc_t *doc) {
 		}
 
 		if (!json_parse(*body, doc)) {
+			// Status and size in the log, because this string is what the user
+			// sees and it says nothing about which of the two happened: a
+			// reply that is empty and a reply that is a web page both land
+			// here, and only the log can tell them apart.
+			fprintf(stderr, "tidal: unreadable reply from %s (status %d, %zu bytes)\n", url, status,
+					len);
 			free(*body);
 			*body = NULL;
 			set_error("%s", tr("tidal_unreadable_tidal_reply"));
@@ -622,10 +640,17 @@ static bool api_call(const char *url, char **body, json_doc_t *doc) {
 	return false;
 }
 
+static bool api_call(const char *url, char **body, json_doc_t *doc) {
+	pthread_mutex_lock(&api_lock);
+	bool ok = api_call_once(url, body, doc);
+	pthread_mutex_unlock(&api_lock);
+	return ok;
+}
+
 // A write: POST or DELETE with a form body, where success is read from the
 // status code rather than the content (a successful DELETE answers 204 with no
 // body).
-static bool api_write(const char *method, const char *url, const char *form) {
+static bool api_write_once(const char *method, const char *url, const char *form) {
 	clear_error();
 
 	if (!tidal_logged_in()) {
@@ -686,6 +711,13 @@ static bool api_write(const char *method, const char *url, const char *form) {
 		return ok;
 	}
 	return false;
+}
+
+static bool api_write(const char *method, const char *url, const char *form) {
+	pthread_mutex_lock(&api_lock);
+	bool ok = api_write_once(method, url, form);
+	pthread_mutex_unlock(&api_lock);
+	return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -1678,6 +1710,18 @@ bool tidal_favorite_remove_track(long track_id) {
 bool tidal_favorite_add_album(const char *album_id) { return favorite_add("albums", "albumId", album_id); }
 bool tidal_favorite_remove_album(const char *album_id) { return favorite_remove("albums", album_id); }
 
+bool tidal_favorite_add_artist(long artist_id) {
+	char id[32];
+	snprintf(id, sizeof(id), "%ld", artist_id);
+	return favorite_add("artists", "artistId", id);
+}
+
+bool tidal_favorite_remove_artist(long artist_id) {
+	char id[32];
+	snprintf(id, sizeof(id), "%ld", artist_id);
+	return favorite_remove("artists", id);
+}
+
 int tidal_favorite_track_ids(long *out, int max) {
 	if (!out || max <= 0) {
 		return -1;
@@ -1746,7 +1790,28 @@ bool tidal_playlist_delete(const char *playlist_id) {
 	return api_write("DELETE", url, NULL);
 }
 
-bool tidal_playlist_create(const char *name, char *out_id, size_t out_size) {
+// Removing is by position, not by track id: the same track may be in a playlist
+// twice, and the entry that goes is the one that was tapped. Tidal numbers the
+// entries from zero in the order tidal_playlist_tracks() returns them, which is
+// the order the page draws them in.
+bool tidal_playlist_remove_track(const char *playlist_id, int index) {
+	if (!playlist_id || !*playlist_id || index < 0) {
+		return false;
+	}
+	if (!tidal_logged_in()) {
+		set_error("%s", tr("tidal_not_signed_in"));
+		return false;
+	}
+
+	char encoded[64];
+	http_url_encode(playlist_id, encoded, sizeof(encoded));
+
+	char url[768];
+	snprintf(url, sizeof(url), "%s/playlists/%s/items/%d?countryCode=%s", api_url, encoded, index, country());
+	return api_write("DELETE", url, NULL);
+}
+
+static bool tidal_playlist_create_once(const char *name, char *out_id, size_t out_size) {
 	clear_error();
 	if (out_id && out_size) {
 		out_id[0] = '\0';
@@ -1822,6 +1887,13 @@ bool tidal_playlist_create(const char *name, char *out_id, size_t out_size) {
 	return true;
 }
 
+bool tidal_playlist_create(const char *name, char *out_id, size_t out_size) {
+	pthread_mutex_lock(&api_lock);
+	bool ok = tidal_playlist_create_once(name, out_id, out_size);
+	pthread_mutex_unlock(&api_lock);
+	return ok;
+}
+
 // Adding a track to a playlist requires that playlist's ETag.
 //
 // It is a concurrency check: Tidal wants proof that the version being modified
@@ -1834,7 +1906,7 @@ bool tidal_playlist_create(const char *name, char *out_id, size_t out_size) {
 // use. Instead "If-None-Match: *" is sent, meaning "any version will do" --
 // exactly the semantics needed here, since appending to a playlist has no
 // version it can conflict with.
-bool tidal_playlist_add_track(const char *playlist_id, long track_id) {
+static bool tidal_playlist_add_track_once(const char *playlist_id, long track_id) {
 	if (!playlist_id || !*playlist_id) {
 		return false;
 	}
@@ -1891,5 +1963,12 @@ bool tidal_playlist_add_track(const char *playlist_id, long track_id) {
 		}
 	}
 	free(body);
+	return ok;
+}
+
+bool tidal_playlist_add_track(const char *playlist_id, long track_id) {
+	pthread_mutex_lock(&api_lock);
+	bool ok = tidal_playlist_add_track_once(playlist_id, track_id);
+	pthread_mutex_unlock(&api_lock);
 	return ok;
 }

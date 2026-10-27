@@ -7,6 +7,7 @@
 
 #include "lvgl/lvgl.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,13 +81,80 @@ static void fit_title(lv_obj_t *label, int width);
 // label's own, which is what both callers of fit_title() pass.
 #define SETTINGSROW_MAX_TITLES 160
 static lv_obj_t *titles[SETTINGSROW_MAX_TITLES];
+static int title_center_y[SETTINGSROW_MAX_TITLES];
 static int title_count;
+
+// A UTF-8 codepoint reader, used only to measure the visible ink of a dynamic
+// page heading. Titles such as Tidal's album and artist names change after the
+// page has been built; the label's line box stays the same while its glyphs do
+// not, so centring the box is not the same as centring the words.
+static uint32_t title_next_codepoint(const unsigned char **text) {
+	unsigned char a = *(*text)++;
+	if (a < 0x80) return a;
+	if ((a & 0xE0) == 0xC0 && (**text & 0xC0) == 0x80) {
+		uint32_t cp = ((uint32_t)(a & 0x1F) << 6) | (**text & 0x3F);
+		(*text)++;
+		return cp;
+	}
+	if ((a & 0xF0) == 0xE0 && (*text)[0] && (*text)[1] && ((*text)[0] & 0xC0) == 0x80 &&
+		((*text)[1] & 0xC0) == 0x80) {
+		uint32_t cp = ((uint32_t)(a & 0x0F) << 12) | ((uint32_t)((*text)[0] & 0x3F) << 6) | ((*text)[1] & 0x3F);
+		*text += 2;
+		return cp;
+	}
+	if ((a & 0xF8) == 0xF0 && (*text)[0] && (*text)[1] && (*text)[2] && ((*text)[0] & 0xC0) == 0x80 &&
+		((*text)[1] & 0xC0) == 0x80 && ((*text)[2] & 0xC0) == 0x80) {
+		uint32_t cp = ((uint32_t)(a & 0x07) << 18) | ((uint32_t)((*text)[0] & 0x3F) << 12) |
+					  ((uint32_t)((*text)[1] & 0x3F) << 6) | ((*text)[2] & 0x3F);
+		*text += 3;
+		return cp;
+	}
+	return 0xFFFD;
+}
+
+// Move only Y. Re-aligning with the label's current X as an offset can feed a
+// transformed coordinate back into a padded parent and shift the title sideways.
+static void align_title_ink(lv_obj_t *label, int center_y) {
+	if (!label) return;
+	const lv_font_t *font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+	const char *text = lv_label_get_text(label);
+	int line_height = lv_font_get_line_height(font);
+	int ink_top = line_height;
+	int ink_bottom = 0;
+	bool has_ink = false;
+
+	if (text) {
+		const unsigned char *p = (const unsigned char *)text;
+		while (*p) {
+			uint32_t cp = title_next_codepoint(&p);
+			lv_font_glyph_dsc_t glyph;
+			if (lv_font_get_glyph_dsc(font, &glyph, cp, 0) && glyph.box_h > 0) {
+				int top = line_height - font->base_line - glyph.box_h - glyph.ofs_y;
+				int bottom = top + glyph.box_h;
+				if (!has_ink || top < ink_top) ink_top = top;
+				if (!has_ink || bottom > ink_bottom) ink_bottom = bottom;
+				has_ink = true;
+			}
+		}
+	}
+	if (!has_ink) {
+		ink_top = 0;
+		ink_bottom = line_height;
+	}
+
+	int ink_center = (ink_top + ink_bottom) / 2;
+	int y = center_y - ink_center - lv_obj_get_style_pad_top(label, LV_PART_MAIN) -
+			lv_obj_get_style_border_width(label, LV_PART_MAIN);
+	lv_obj_set_y(label, y);
+}
 
 static void title_deleted_cb(lv_event_t *e) {
 	lv_obj_t *label = lv_event_get_target(e);
 	for (int i = 0; i < title_count; i++) {
 		if (titles[i] == label) {
-			titles[i] = titles[--title_count];
+			int last = --title_count;
+			titles[i] = titles[last];
+			title_center_y[i] = title_center_y[last];
 			return;
 		}
 	}
@@ -118,12 +186,15 @@ lv_obj_t *settingsrow_title(lv_obj_t *screen, gui_config_t *cfg, const char *tex
 	fit_title(label, cfg->screen_width - left - cfg->padding - button - air);
 	lv_obj_align(label, LV_ALIGN_TOP_LEFT, left,
 				 cfg->top_bar_height + cfg->padding + (cfg->screen_width < 320 ? 6 : 10));
+	int center_y = cfg->top_bar_height + cfg->padding + button / 2;
 
 	if (title_count == 0) {
 		fonts_register_change(refit_titles);
 	}
 	if (title_count < SETTINGSROW_MAX_TITLES) {
-		titles[title_count++] = label;
+		titles[title_count] = label;
+		title_center_y[title_count] = center_y;
+		title_count++;
 		lv_obj_add_event_cb(label, title_deleted_cb, LV_EVENT_DELETE, NULL);
 	}
 
@@ -408,6 +479,18 @@ void settingsrow_title_corner_slots(lv_obj_t *title, gui_config_t *cfg, int butt
 	}
 	lv_obj_set_width(title, width);
 	fit_title(title, width);
+}
+
+void settingsrow_title_realign(lv_obj_t *title) {
+	if (!title) {
+		return;
+	}
+	for (int i = 0; i < title_count; i++) {
+		if (titles[i] == title) {
+			align_title_ink(title, title_center_y[i]);
+			return;
+		}
+	}
 }
 
 // Returns the heading settingsrow_page() created, for pages whose title is not

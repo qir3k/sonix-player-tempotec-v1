@@ -131,6 +131,7 @@ typedef struct {
 	char *name;
 	char *path; // the track's file; on album rows a representative track
 				// (cover source); NULL on the other name lists
+	char *artist; // supplied with an ad-hoc path list, such as Tidal downloads
 } entry_t;
 
 // One row of a query-backed list, as read back from the database. Fixed
@@ -470,6 +471,7 @@ static void model_clear(panel_t *p) {
 	for (int i = 0; i < p->entries_count; i++) {
 		free(p->entries[i].name);
 		free(p->entries[i].path);
+		free(p->entries[i].artist);
 	}
 	free(p->entries);
 	p->entries = NULL;
@@ -615,7 +617,10 @@ static bool row_at(panel_t *p, int index, const char **name_out, const char **pa
 // The artist the database gave a row, or NULL: a list of paths handed in has
 // none, and neither has a row whose artist tag is empty.
 static const char *row_artist_at(panel_t *p, int index) {
-	if (p->from_paths || index < 0 || index >= p->count || !window_cover(p, index)) {
+	if (p->from_paths) {
+		return index >= 0 && index < p->count ? p->entries[index].artist : NULL;
+	}
+	if (index < 0 || index >= p->count || !window_cover(p, index)) {
 		return NULL;
 	}
 	const char *artist = p->window[index - p->window_first].artist;
@@ -641,7 +646,6 @@ typedef struct {
 } load_ctx_t;
 
 static bool load_row_cb(const char *name, const char *path, const char *artist, void *user) {
-	(void)artist;
 	load_ctx_t *ctx = user;
 	panel_t *p = ctx->panel;
 
@@ -661,7 +665,14 @@ static bool load_row_cb(const char *name, const char *path, const char *artist, 
 
 	p->entries[p->count].name = strdup(name && name[0] ? name : tr("medialist_no_name"));
 	p->entries[p->count].path = path ? strdup(path) : NULL;
-	if (!p->entries[p->count].name) {
+	p->entries[p->count].artist = artist && artist[0] ? strdup(artist) : NULL;
+	if (!p->entries[p->count].name || (artist && artist[0] && !p->entries[p->count].artist)) {
+		free(p->entries[p->count].name);
+		free(p->entries[p->count].path);
+		free(p->entries[p->count].artist);
+		p->entries[p->count].name = NULL;
+		p->entries[p->count].path = NULL;
+		p->entries[p->count].artist = NULL;
 		return false;
 	}
 	p->count++;
@@ -912,7 +923,13 @@ static void row_update_quality(panel_t *p, row_t *row, const char *path) {
 // playlist. Not an artist's own lists, where the name is the page's title
 // already, and not the name lists, whose rows are artists or genres themselves.
 static bool panel_shows_artist(const panel_t *p) {
-	if (!show_artist || p->from_paths) {
+	// A supplied list already carries exactly the subtitle its caller wants.
+	// In particular, Tidal's Downloaded page has no library preference behind
+	// it, so it must not silently lose its artist and running time.
+	if (p->from_paths) {
+		return p->is_tracks;
+	}
+	if (!show_artist) {
 		return false;
 	}
 	if (p->kind == LIBRARY_LIST_TRACKS && p->filter == LIBRARY_FILTER_NONE) {
@@ -3596,6 +3613,8 @@ static void init_styles(void) {
 	lv_style_set_shadow_width(&style_row, 0);
 	lv_style_set_pad_all(&style_row, ROW_PAD);
 	lv_style_set_pad_column(&style_row, ROW_PAD);
+	// Add right padding to prevent text/detail overlap
+	lv_style_set_pad_right(&style_row, ROW_PAD);
 }
 
 // Coming back to a list through the back chevron. The library can have been
@@ -3707,14 +3726,17 @@ static void build_panel(panel_t *p, gui_config_t *cfg, bool is_tracks, int slot_
 	// out of the favourites or of this playlist, and leave the mode.
 	// sel_buttons_show() picks four of them.
 	p->sel_queue_btn = corner_button(p->corner, &icon_list_queue, sel_queue_cb, p);
-	p->sel_fav_btn = corner_button(p->corner, &icon_star_plus, sel_fav_cb, p);
+	// The heart, outlined for "add to the favourites" and filled for "take them
+	// out": the same pair the player and the control centre draw, instead of a
+	// star the rest of the interface no longer uses.
+	p->sel_fav_btn = corner_button(p->corner, &icon_heart_outline, sel_fav_cb, p);
 	p->sel_add_btn = corner_button(p->corner, &icon_list_plus, sel_add_cb, p);
 	// Deleting from the card, when that is allowed. Between "add to a
 	// playlist" and the way out, where a destructive action belongs: not next
 	// to the way out, which a thumb looking for it should reach without
 	// passing over this.
 	p->sel_delete_btn = corner_button(p->corner, &icon_trash, sel_delete_cb, p);
-	p->sel_unfav_btn = corner_button(p->corner, &icon_star_x, sel_unfav_cb, p);
+	p->sel_unfav_btn = corner_button(p->corner, &icon_heart_filled, sel_unfav_cb, p);
 	p->sel_unlist_btn = corner_button(p->corner, &icon_list_x, sel_unlist_cb, p);
 	p->sel_close_btn = corner_button(p->corner, &icon_close, sel_close_cb, p);
 	lv_obj_set_hidden(p->sel_queue_btn, true);
@@ -3757,6 +3779,11 @@ static void build_panel(panel_t *p, gui_config_t *cfg, bool is_tracks, int slot_
 		row->icon = lv_image_create(row->button);
 		lv_obj_set_size(row->icon, THUMB_SIZE, THUMB_SIZE);
 		lv_image_set_inner_align(row->icon, LV_IMAGE_ALIGN_CENTER);
+		// Tidal's own lists round their real covers.  Path-backed lists use this
+		// same row component, so clip the image here as well instead of giving
+		// Downloaded a second, subtly different artwork implementation.
+		lv_obj_set_style_radius(row->icon, 6, 0);
+		lv_obj_set_style_clip_corner(row->icon, true, 0);
 
 		// The title, and under it the quality badge and the artist. A column
 		// rather than the label alone: with those in the row itself they would
@@ -3860,6 +3887,10 @@ static void build_panel(panel_t *p, gui_config_t *cfg, bool is_tracks, int slot_
 			lv_image_set_src(dots, &icon_ellipsis_vertical);
 			lv_obj_add_style(dots, &theme_style_icon, 0);
 			lv_obj_set_style_image_recolor_opa(dots, LV_OPA_COVER, 0);
+			// Match Tidal's native rows exactly: both lists point at the one
+			// vertical-ellipsis asset, at the same visible 22 px size.  The old
+			// unscaled library copy made Downloaded look like it had another icon.
+			lv_image_set_scale(dots, (uint32_t)(LV_SCALE_NONE * 22 / 36));
 			lv_obj_center(dots);
 		}
 
@@ -4166,9 +4197,8 @@ static void panel_open(const char *title, library_list_t kind, library_filter_t 
 }
 
 // A track list built from paths handed in rather than queried: a playlist's
-// contents. It reuses the tracks panel wholesale -- covers, the ellipsis
-// menu, the tap that starts the whole list as the queue -- by filling the
-// model through the very callback library_for_each would have used.
+// contents. It reuses the tracks panel wholesale -- covers and row playback --
+// by filling the model through the very callback library_for_each would have used.
 void medialist_open_paths(const char *title, const char *const *paths, const char *const *names,
 						  const char *const *artists, int count, const char *playlist) {
 	panel_t *p = &panel_tracks;
@@ -4191,13 +4221,14 @@ void medialist_open_paths(const char *title, const char *const *paths, const cha
 
 	// A list handed in as paths has an order of its own -- the one whoever
 	// built it put it in -- so the buttons that reorder the list stay away.
-	// circle-play is not one of them: it orders the queue, not the list.
-	show_corner(p->play_btn, true);
+	// Row taps still start individual tracks.
+	play_menu_hide();
+	show_corner(p->play_btn, false);
 	show_corner(p->sort_btn, false);
 	show_corner(p->album_btn, false);
 	show_corner(p->reverse_btn, false);
-	p->corner_slots = 1;
-	settingsrow_title_corner_slots(p->title_label, p->cfg, 1);
+	p->corner_slots = 0;
+	settingsrow_title_corner_slots(p->title_label, p->cfg, 0);
 
 	for (int i = 0; i < ROW_POOL; i++) {
 		row_drop_thumb(p, &p->rows[i]);

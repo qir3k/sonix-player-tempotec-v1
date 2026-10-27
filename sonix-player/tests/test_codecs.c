@@ -18,7 +18,7 @@ static void track_path(const subsonic_entry_t *track, subsonic_format_t format, 
 	assert(subsonicstream_queue(track, 1, 0, paths, pointers, &count, &selected, error, sizeof(error)));
 	assert(count == 1 && selected == 0);
 	strcpy(out, paths[0]);
-	assert(subsonicstream_prepare(out));
+	assert(subsonicstream_prepare(out, 96));
 }
 
 static void decode_track(const char *id, const char *suffix, subsonic_format_t format,

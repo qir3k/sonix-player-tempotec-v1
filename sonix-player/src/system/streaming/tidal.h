@@ -292,8 +292,18 @@ int tidal_favorite_track_ids(long *out, int max);
 bool tidal_favorite_add_album(const char *album_id);
 bool tidal_favorite_remove_album(const char *album_id);
 
+// Artists are followed through the same favourites collection as tracks and
+// albums, under "artists", and are addressed by their numeric id.
+bool tidal_favorite_add_artist(long artist_id);
+bool tidal_favorite_remove_artist(long artist_id);
+
 bool tidal_playlist_delete(const char *playlist_id);
 bool tidal_playlist_create(const char *name, char *out_id, size_t out_size);
 bool tidal_playlist_add_track(const char *playlist_id, long track_id);
+
+// Removes one entry from a playlist. `index` is its position in the playlist,
+// counted from the first entry -- which is what tidal_playlist_tracks() lists,
+// so the number of the row on screen is the number wanted here.
+bool tidal_playlist_remove_track(const char *playlist_id, int index);
 
 #endif /* TIDAL_H */

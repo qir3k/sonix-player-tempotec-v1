@@ -120,7 +120,14 @@ void device_state_play_list_ordered_at(const char *const *list, int count, int s
 // all say yes. The first to say no takes charge and the walk stops there: the
 // others have nothing to say about a file that is not theirs, and asking anyway
 // would mean two preparations in flight on the same path.
-typedef bool (*device_state_prepare_cb)(const char *path);
+//
+// `path` is writable, with `path_size` bytes available, for a service that has
+// to correct the name it queued: Tidal guesses a track's container from the
+// chosen quality, and a DASH manifest can hand back another one, so the file on
+// the card can be called ".flac" while the queue points at ".m4a". A callback
+// that resolves the real file may write it back here; device_state re-reads the
+// metadata then, because it read the guess a moment earlier.
+typedef bool (*device_state_prepare_cb)(char *path, size_t path_size);
 void device_state_add_prepare_cb(device_state_prepare_cb cb);
 
 // Jump to entry `index` of the current queue.

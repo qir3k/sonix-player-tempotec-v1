@@ -186,6 +186,17 @@ void formatDoubleProgress(double current_secs, double total_secs, char *buffer, 
 	formatDoubleSeconds(total_secs, buffer, max_len);
 }
 
+void format_row_duration(int seconds, char *out, size_t size) {
+	if (size == 0 || out == NULL) {
+		return;
+	}
+	if (seconds <= 0) {
+		out[0] = '\0';
+		return;
+	}
+	snprintf(out, size, "%d:%02d", seconds / 60, seconds % 60);
+}
+
 // See utils.h. SCHED_IDLE is per-thread on Linux and needs no privileges to
 // *lower* a thread this far. The fallback nice(19)-equivalent via setpriority
 // covers kernels where pthread_setschedparam is refused.

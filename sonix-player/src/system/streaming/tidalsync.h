@@ -33,6 +33,16 @@ bool tidalsync_is_favorite(long track_id);
 void tidalsync_forget(void);
 void tidalsync_favorites_refresh(void (*done)(void));
 
+// The same answer for an album or an artist, needed for the same reason: a
+// result in a search or an artist's album list has to offer Remove when it is
+// already in the favourites, and Add when it is not. Tracks have had a mirror
+// for a while; albums and artists were taken on trust from the list they were
+// opened in, which is exactly what made a search result offer Add twice.
+bool tidalsync_album_is_favorite(long album_id);
+bool tidalsync_artist_is_favorite(long artist_id);
+void tidalsync_albums_refresh(void (*done)(void));
+void tidalsync_artists_refresh(void (*done)(void));
+
 // --- the jobs --------------------------------------------------------------
 
 typedef void (*tidalsync_done_cb)(bool ok, const char *error, void *user);
@@ -45,13 +55,18 @@ void tidalsync_favorite_toggle(long track_id, bool want, tidalsync_done_cb done,
 void tidalsync_playlist_add(const char *playlist_id, long track_id, tidalsync_done_cb done, void *user);
 void tidalsync_playlist_create_with(const char *name, long track_id, tidalsync_done_cb done, void *user);
 
-// Adds or removes an album from the favourites. Albums have no mirror like
-// tracks do: in the lists the menu already states which way it will go (add
-// among search results, remove in the favourites list), so the answer is known
-// without asking.
+// Adds or removes an album from the favourites. The mirror is updated before
+// the request, as it is for tracks, and put back if the request fails.
 void tidalsync_album_favorite(const char *album_id, bool want, tidalsync_done_cb done, void *user);
 
 void tidalsync_playlist_remove(const char *playlist_id, tidalsync_done_cb done, void *user);
+
+// Takes one entry out of a playlist, by the position it has in the playlist
+// (the row's index on the page).
+void tidalsync_playlist_track_remove(const char *playlist_id, int index, tidalsync_done_cb done, void *user);
+
+// Follows or unfollows an artist, mirrored like an album's favourite.
+void tidalsync_artist_favorite(long artist_id, bool want, tidalsync_done_cb done, void *user);
 
 // --- the account's playlists -----------------------------------------------
 

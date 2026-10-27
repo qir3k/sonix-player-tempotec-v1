@@ -31,6 +31,7 @@
 #include "src/gui/streaming/podcastpage.h"
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/qobuzcache.h"
+#include "src/system/streaming/streamkeep.h"
 #include "src/system/streaming/tidalcache.h"
 #include "src/system/library/library.h"
 #include "src/system/playback/playlist.h"
@@ -1266,6 +1267,49 @@ static void open_album_cb(void *user) {
 	switcher_set_player_return(medialist_tracks_screen);
 }
 
+// Tidal's track response only keeps the performer's readable name.  The page
+// resolves it through its artist search, then tapping the matching result
+// opens that artist's albums.  The option belongs only to Tidal: local tracks
+// already have the Music artist list, and the Qobuz cache has no equivalent
+// artist route here.
+static void open_tidal_artist_cb(void *user) {
+	(void)user;
+	device_state_t state;
+	device_state_get(&state);
+	if (!tidalcache_owns(state.current_file) || !state.metadata.artist[0]) {
+		return;
+	}
+	player_sheet_close(false);
+	if (!tidalpage_search_artist(state.metadata.artist)) {
+		gui_notify_popup("tidal_change_refused");
+		return;
+	}
+	switcher_set_player_return(tidal_list_screen);
+}
+
+// "Keep on card": the streaming caches hold a track only for as long as they
+// feel like it, and a cache sweep or a card swap takes it back. This copies the
+// download that is already on the card into the library proper, where it stays
+// and where the next scan finds it with its tags. See streamkeep.c.
+static void keep_on_card_cb(void *user) {
+	(void)user;
+	device_state_t state;
+	device_state_get(&state);
+	if (!state.current_file[0]) {
+		return;
+	}
+	player_sheet_close(false);
+	if (streamkeep_busy()) {
+		gui_notify_popup("stream_keep_busy");
+		return;
+	}
+	if (!streamkeep_keep(state.current_file, true)) {
+		char error[192] = "";
+		if (streamkeep_last_error(error, sizeof(error))) gui_notify_popup(error);
+		else gui_notify_popup(gui_card_available() ? "stream_keep_failed" : "sd_card_missing");
+	}
+}
+
 static void open_settings_cb(void *user) {
 	(void)user;
 	player_sheet_close(false);
@@ -1303,6 +1347,15 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
 	};
+	static const popover_item_t ITEMS_TIDAL[] = {
+		{"trackmenu_queue", open_queue_cb, NULL},
+		{"smartmix_start", start_genius_cb, NULL},
+		{"add_to_playlist", add_to_playlist_cb, NULL},
+		{"show_album", open_album_cb, NULL},
+		{"show_artist", open_tidal_artist_cb, NULL},
+		{"details", open_details_cb, NULL},
+		{"settings", open_settings_cb, NULL},
+	};
 	static const popover_item_t ITEMS_PODCAST[] = {
 		{"trackmenu_queue", open_queue_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
@@ -1310,15 +1363,40 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
 	};
+	// A Tidal or Qobuz track that was played from its download gains one line:
+	// the cache copies it into the library, where it stays. A table rather than
+	// a line appended at runtime for the same reason as the two above -- the
+	// string-extraction tool only reads these initialisers.
+	static const popover_item_t ITEMS_KEEP[] = {
+		{"trackmenu_queue", open_queue_cb, NULL},
+		{"smartmix_start", start_genius_cb, NULL},
+		{"add_to_playlist", add_to_playlist_cb, NULL},
+		{"show_album", open_album_cb, NULL},
+		{"trackmenu_keep_on_card", keep_on_card_cb, NULL},
+		{"details", open_details_cb, NULL},
+		{"settings", open_settings_cb, NULL},
+	};
 
 	device_state_t state;
 	device_state_get(&state);
 	bool podcast = state.current_file[0] && podcastcache_is_episode(state.current_file);
+	bool tidal_track = tidalcache_owns(state.current_file);
+	// The Tidal Downloaded list is made of files already present on the card.
+	// Offering "Download" again is both misleading and useless offline.
+	bool keepable = !podcast && !tidal_track && streamkeep_is_stream_track(state.current_file);
 
-	// The music menu carries the Smart Mix row, the episode menu does not.
-	int count = podcast ? (int)(sizeof(ITEMS_PODCAST) / sizeof(ITEMS_PODCAST[0])) :
-						  (int)(sizeof(ITEMS) / sizeof(ITEMS[0]));
-	popover_show(anchor, podcast ? ITEMS_PODCAST : ITEMS, count);
+	// Smart Mix stays available on every non-podcast menu, as upstream has it.
+	// Only the episode table omits it; the Tidal and keep-on-card tables add
+	// their own action to the upstream row set.
+	if (keepable) {
+		popover_show(anchor, ITEMS_KEEP, (int)(sizeof(ITEMS_KEEP) / sizeof(ITEMS_KEEP[0])));
+	} else if (tidal_track) {
+		popover_show(anchor, ITEMS_TIDAL, (int)(sizeof(ITEMS_TIDAL) / sizeof(ITEMS_TIDAL[0])));
+	} else if (podcast) {
+		popover_show(anchor, ITEMS_PODCAST, (int)(sizeof(ITEMS_PODCAST) / sizeof(ITEMS_PODCAST[0])));
+	} else {
+		popover_show(anchor, ITEMS, (int)(sizeof(ITEMS) / sizeof(ITEMS[0])));
+	}
 }
 
 void trackmenu_init(gui_config_t *cfg) {

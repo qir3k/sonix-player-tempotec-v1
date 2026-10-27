@@ -18,7 +18,7 @@ bool subsonicstream_queue(const subsonic_entry_t *tracks, int count, int start,
 
 // GUI thread, registered as a device_state prepare callback. Starts/promotes
 // a producer without waiting. Paths from other services cancel our fetches.
-bool subsonicstream_prepare(const char *path);
+bool subsonicstream_prepare(char *path, size_t path_size);
 void subsonicstream_prefetch(const char *path); // GUI thread, at 90% progress
 void subsonicstream_cancel(void); // any thread; no join or socket read
 void subsonicstream_reset(void); // account change: also invalidate old queue IDs

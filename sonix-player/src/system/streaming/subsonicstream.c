@@ -182,7 +182,8 @@ static int choose_slot(const char *path, bool prefetch) {
 	return free_slot;
 }
 
-bool subsonicstream_prepare(const char *path) {
+bool subsonicstream_prepare(char *path, size_t path_size) {
+	(void)path_size; // the stream is written under the name the queue already holds
 	if (!subsonicstream_owns(path)) {
 		subsonicstream_cancel();
 		return true;
