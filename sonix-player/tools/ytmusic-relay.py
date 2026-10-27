@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """A Sonix relay for YouTube Music, small enough to run on any machine.
 
-The player cannot fetch YouTube streams by itself: Google demands a
-browser-grade attestation (a PO token its JavaScript computes) from every
-first-party client, and the player has no JavaScript engine. This script is
-the relay the player asks for. It answers two endpoints:
+This is the third way for the player to get a track, after the device itself
+and a Piped or Invidious instance, and it is only needed when both of those are
+refused. Google demands a browser-grade attestation (a PO token its JavaScript
+computes) before it hands out some media, and the player has no JavaScript
+engine to run it; yt-dlp, here, has everything it needs. It answers two
+endpoints:
 
     GET /streams/<video-id>   the Piped shape the player already speaks: the
                               title, the artist, the duration, and the one

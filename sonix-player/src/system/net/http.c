@@ -967,6 +967,15 @@ static bool stream_open_once(http_stream_t *st, const char *url, int timeout_sec
 							 char *location, size_t location_size, const http_stream_options_t *options) {
 	url_t u;
 	if (!url_parse(url, &u)) {
+		// Never silent: a caller that only sees `false` has nothing to say to
+		// the user, and this one used to end as "could not reach the stream"
+		// with no reason in the log -- which is how a media address handed out
+		// by somebody else's machine went unexplained. The head of the address
+		// is enough to recognise it; the rest may be a signed query.
+		char head[72];
+		snprintf(head, sizeof(head), "%.64s", url && url[0] ? url : "(no address)");
+		fprintf(stderr, "http: cannot read the address %.64s\n", head);
+		set_last_error(tr("http_bad_address"), head);
 		return false;
 	}
 
@@ -1013,6 +1022,14 @@ static bool stream_open_once(http_stream_t *st, const char *url, int timeout_sec
 		return false;
 	}
 	if (status != 200) {
+		// The reason a stream was refused, in the log and in last_error, the
+		// way get_once() does for an ordinary request: Google answers 403 to a
+		// media address that was resolved from a different machine, and that
+		// is a thing worth reading rather than guessing at.
+		fprintf(stderr, "http: %s%.*s -> status %d\n", u.host, (int)strcspn(u.path, "?"), u.path, status);
+		if (!last_error[0]) {
+			set_last_error(tr("http_server_answered"), status);
+		}
 		conn_close(&conn);
 		return false;
 	}

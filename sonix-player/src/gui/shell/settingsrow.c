@@ -390,6 +390,19 @@ static settingsrow_leading_icon_t *leading_icon_record(lv_obj_t *row) {
 	return NULL;
 }
 
+// The room a row's leading glyph or picture takes out of its name, and 0 when
+// the row has neither. A function glyph takes its room only where the theme
+// draws it; a picture is drawn in every theme, so it always does. Every layout
+// that places a row's name asks here, so a name can never end up under the
+// cover beside it.
+static int32_t leading_icon_width(lv_obj_t *row) {
+	settingsrow_leading_icon_t *leading = leading_icon_record(row);
+	if (!leading || (!leading->art && !theme_uses_function_glyphs())) {
+		return 0;
+	}
+	return lv_obj_get_width(leading->icon) + ROW_LABEL_GAP;
+}
+
 static lv_obj_t *settingsrow_caption(lv_obj_t *row) {
 	for (int i = 0; i < caption_count; i++) {
 		if (captions[i].row == row) {
@@ -460,11 +473,7 @@ static void fit_row(lv_obj_t *row) {
 	// enabled, so Dark and Light retain their original label position.
 	// A function glyph takes its room only where the theme draws it; a picture
 	// takes it in every theme (see settingsrow_add_art).
-	settingsrow_leading_icon_t *leading = leading_icon_record(row);
-	if (!leading || (!leading->art && !theme_uses_function_glyphs())) {
-		leading = NULL;
-	}
-	int32_t leading_width = leading ? lv_obj_get_width(leading->icon) + ROW_LABEL_GAP : 0;
+	int32_t leading_width = leading_icon_width(row);
 	avail -= leading_width;
 
 	lv_obj_t *caption = settingsrow_caption(row);
@@ -1169,17 +1178,25 @@ void settingsrow_add_caption(lv_obj_t *row, const char *text) {
 // only child a caller could want back.
 lv_obj_t *settingsrow_name_label(lv_obj_t *row) { return row ? lv_obj_get_child(row, 0) : NULL; }
 
-// The name's width is whatever the row leaves beside the chevron or value.
+// The name's width is whatever the row leaves beside the chevron or value, and
+// beside whatever picture the row carries: these are the multi-line rows, and
+// the YouTube Music lists put their artwork on them. A name placed at the left
+// edge of such a row is drawn under the cover.
 static void fit_row_lines(lv_obj_t *row) {
 	lv_obj_t *label = lv_obj_get_child(row, 0);
 	if (!label || !lv_obj_check_type(label, &lv_label_class)) {
 		return;
 	}
-	int32_t avail = lv_obj_get_content_width(row);
+	int32_t leading_width = leading_icon_width(row);
+	int32_t avail = lv_obj_get_content_width(row) - leading_width;
 	lv_obj_t *right = lv_obj_get_child(row, 1);
 	if (right) {
 		avail -= lv_obj_get_width(right) + ROW_LABEL_GAP;
 	}
+	// Left-middle, as settingsrow_add() places it, only moved clear of the
+	// picture. The vertical position is untouched: these labels grow downward
+	// from the middle of the row and keep doing so.
+	lv_obj_align(label, LV_ALIGN_LEFT_MID, leading_width, 0);
 	if (avail > 0 && lv_obj_get_style_width(label, LV_PART_MAIN) != avail) {
 		lv_obj_set_width(label, avail);
 	}

@@ -123,14 +123,34 @@ HTTP layer, so the resolver runs end to end on any host, and replays whole
 responses the device received (`tests/fixtures/`): a search page, the charts,
 the Explore page and the signed-out liked-songs page.
 
-It pins what the resolver does with them: the relay's reply is chosen by
-mime and bitrate (m4a/AAC only, never a webm, never anything over the cap); the
-phone-app player's refusal does not end the search, and the actionable error is
-the one left standing; and each fixture parses into the rows the page showed
+It pins what the resolver does with them: the reply is chosen by mime and
+bitrate (m4a/AAC only, never a webm, never anything over the cap); the
+phone-app player's refusal does not end the search, while a reply that is
+playable is used as it stands -- that is the standalone path, and the fixture is
+the reply the device's own request shape really got; and each fixture parses
+into the rows the page showed
 once the faults it guarded against were fixed -- twenty songs from a search
 page, the charts, three *named* Explore carousels (a heading that failed to read
 drew three rows all labelled Explore), the artwork URL of every card, and the
 library page answering that the imported session is what Favourites is missing.
+
+It also pins where the bytes are fetched from, because a relay's answer is not
+always fetchable: an audio address on the relay's own base is used as it stands,
+an address on somebody else's machine -- what a public Piped or Invidious
+instance answers with, bound to that machine and too long for the player's URL
+buffer -- is replaced with the relay's `/audio/<video-id>`, and a relay with no
+such endpoint answers `ytmusic_relay_not_serving` instead of the old
+"could not reach the stream".
+
+Instances are pinned the same way. A pinned Invidious host's formats reply
+(`/api/v1/videos/{id}`) is turned into that host's own
+`/latest_version?id=...&itag=140&local=true` -- the endpoint that fetches the
+audio and passes it on, which is the only instance shape that works from a
+different machine; a Piped host is used only when its answer already points at
+itself; and one that merely names a `googlevideo` address is passed over rather
+than handed to the downloader. The settings list is checked too: the default,
+the device on its own, the relay only once one is configured, and the built-in
+instances, so the page offers something on a player that was never set up.
 
 ## The YouTube Music relay
 
@@ -149,6 +169,12 @@ address: Google answers that with 403, and the URL is longer than the player's
 own buffer. Both arrive at the device as "could not reach the stream". The
 relay now serves the audio from itself, and the suite checks that the reply names
 the relay -- the address the player already reached it on -- and stays short.
+
+The player's side of that contract is checked in the C suite above: it never
+fetches a media address the relay only pointed at, which is what made a public
+instance look like a broken stream. Neither the relay nor an instance is needed
+for playback any more -- both are fallbacks for when Google refuses the device's
+own player request.
 
 ## Real codec integration
 
