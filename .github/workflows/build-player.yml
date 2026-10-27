@@ -72,5 +72,8 @@ jobs:
       - name: Check LRCLIB search, ranking and sidecar save
         run: make -C sonix-player/tests lrclib
 
+      - name: Check tag reading, format sniffing and 1000-cover cache
+        run: make -C sonix-player/tests tags covers
+
       - name: Run stock-firmware credential extractor tests
         run: make -C sonix-player/tests extractkeys

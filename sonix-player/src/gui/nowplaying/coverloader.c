@@ -64,6 +64,17 @@ static dual_job_t player_job;
 static dual_job_t saver_job;
 static dual_job_t frame_job; // one picture, the second slot stays empty
 
+// The next track's cover, decoded ahead of time into the cache: nothing kept
+// here once it has run, and run only when nothing on screen is waiting.
+typedef struct {
+	char path[512];
+	int w, h;
+	bool pending;
+	bool running;
+} prefetch_job_t;
+
+static prefetch_job_t prefetch_job;
+
 // The framed screensaver's loader, in the dual job's shape. The second image
 // is never asked for; it is zeroed so the shared bookkeeping can free it like
 // any other without looking.
@@ -77,6 +88,7 @@ static bool load_framed(const char *path, int w, int h, cover_image_t *first_out
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wakeup = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t id_wakeup = PTHREAD_COND_INITIALIZER;
 static bool started;
 
 // Picks up the next slot waiting to be decoded. Called with the lock held.
@@ -133,6 +145,42 @@ static void run_dual_job(dual_job_t *job, dual_loader_t load) {
 	pthread_mutex_unlock(&lock);
 }
 
+// Answers player_id_job on its own thread. Decoding a cover on the main worker
+// takes up to a second, and a track skipped past while that decode is running
+// has no reason to wait behind it just to learn whether the new track shares
+// the sleeve already on screen.
+static void *id_worker(void *arg) {
+	(void)arg;
+	thread_be_low_priority("coverloader-id");
+
+	for (;;) {
+		thread_set_background_level(power_screen_is_on());
+
+		pthread_mutex_lock(&lock);
+		while (!(player_id_job.pending && !player_id_job.running)) {
+			pthread_cond_wait(&id_wakeup, &lock);
+		}
+
+		char path[sizeof(player_id_job.path)];
+		memcpy(path, player_id_job.path, sizeof(path));
+		uint32_t generation = player_id_job.generation;
+		player_id_job.pending = false;
+		player_id_job.running = true;
+		pthread_mutex_unlock(&lock);
+
+		uint64_t id = cover_source_id(path);
+
+		pthread_mutex_lock(&lock);
+		player_id_job.running = false;
+		if (player_id_job.generation == generation) {
+			player_id_job.id = id;
+			player_id_job.done = true;
+		}
+		pthread_mutex_unlock(&lock);
+	}
+	return NULL;
+}
+
 static void *worker(void *arg) {
 	(void)arg;
 
@@ -158,33 +206,10 @@ static void *worker(void *arg) {
 
 		pthread_mutex_lock(&lock);
 
-		while (next_pending() < 0 && !(player_id_job.pending && !player_id_job.running) &&
-			   !(player_job.pending && !player_job.running) && !(saver_job.pending && !saver_job.running) &&
-			   !(frame_job.pending && !frame_job.running)) {
+		while (next_pending() < 0 && !(player_job.pending && !player_job.running) &&
+			   !(saver_job.pending && !saver_job.running) && !(frame_job.pending && !frame_job.running) &&
+			   !(prefetch_job.pending && !prefetch_job.running)) {
 			pthread_cond_wait(&wakeup, &lock);
-		}
-
-		// First of all: the question that can spare every other piece of work
-		// on this list. It reads a picture and hashes it, which is a fraction
-		// of what decoding one costs.
-		if (player_id_job.pending && !player_id_job.running) {
-			char path[sizeof(player_id_job.path)];
-			memcpy(path, player_id_job.path, sizeof(path));
-			uint32_t generation = player_id_job.generation;
-			player_id_job.pending = false;
-			player_id_job.running = true;
-			pthread_mutex_unlock(&lock);
-
-			uint64_t id = cover_source_id(path);
-
-			pthread_mutex_lock(&lock);
-			player_id_job.running = false;
-			if (player_id_job.generation == generation) {
-				player_id_job.id = id;
-				player_id_job.done = true;
-			}
-			pthread_mutex_unlock(&lock);
-			continue;
 		}
 
 		// The player's artwork is the picture the user is actually looking
@@ -206,9 +231,26 @@ static void *worker(void *arg) {
 
 		int index = next_pending();
 		if (index < 0 && saver_job.pending && !saver_job.running) {
-			// Last: it is a picture for a screen that is off, and nothing on
-			// screen is waiting for it.
+			// A picture for a screen that is off, and nothing on screen is
+			// waiting for it.
 			run_dual_job(&saver_job, cover_load_screensaver_images); // returns unlocked
+			continue;
+		}
+		if (index < 0 && prefetch_job.pending && !prefetch_job.running) {
+			// Last of all: the next track's cover, wanted only if that track
+			// actually plays.
+			char path[sizeof(prefetch_job.path)];
+			memcpy(path, prefetch_job.path, sizeof(path));
+			int w = prefetch_job.w, h = prefetch_job.h;
+			prefetch_job.pending = false;
+			prefetch_job.running = true;
+			pthread_mutex_unlock(&lock);
+
+			cover_prefetch_player(path, w, h);
+
+			pthread_mutex_lock(&lock);
+			prefetch_job.running = false;
+			pthread_mutex_unlock(&lock);
 			continue;
 		}
 		if (index < 0) {
@@ -274,6 +316,11 @@ void coverloader_start(void) {
 		return;
 	}
 	pthread_detach(thread);
+
+	pthread_t id_thread;
+	if (pthread_create(&id_thread, NULL, id_worker, NULL) == 0) {
+		pthread_detach(id_thread);
+	}
 }
 
 // Drops whatever the slot is holding. Called with the lock held.
@@ -452,7 +499,7 @@ void coverloader_request_player_id(const char *path) {
 	player_id_job.id = 0;
 	snprintf(player_id_job.path, sizeof(player_id_job.path), "%s", path ? path : "");
 	player_id_job.pending = true;
-	pthread_cond_signal(&wakeup);
+	pthread_cond_signal(&id_wakeup);
 	pthread_mutex_unlock(&lock);
 }
 
@@ -473,6 +520,19 @@ bool coverloader_take_player_id(uint64_t *id, bool *finished) {
 	}
 	pthread_mutex_unlock(&lock);
 	return done;
+}
+
+void coverloader_prefetch_player(const char *path, int cover_w, int cover_h) {
+	if (!path || !path[0] || cover_w <= 0 || cover_h <= 0) {
+		return;
+	}
+	pthread_mutex_lock(&lock);
+	snprintf(prefetch_job.path, sizeof(prefetch_job.path), "%s", path);
+	prefetch_job.w = cover_w;
+	prefetch_job.h = cover_h;
+	prefetch_job.pending = true;
+	pthread_cond_signal(&wakeup);
+	pthread_mutex_unlock(&lock);
 }
 
 void coverloader_request_screensaver(const char *path, int w, int h, int strip_w, int strip_h) {

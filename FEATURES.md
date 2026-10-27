@@ -8,7 +8,9 @@
 
 `.wav` `.flac` `.mp3` `.ogg` `.opus` `.m4a` `.m4b` `.mp4` `.aac` `.wv` `.wvc` `.ape` `.dsf` `.dff` `.aif` `.aiff` `.aifc` `.caf`
 
-**CUE sheets** split a single ripped disc into up to 99 tracks, taking the format from the file the sheet points at. WAVs carrying their own RIFF markers work the same way.
+**CUE sheets** split a single ripped disc into up to 99 tracks, taking the format from the file the sheet points at (and finding the audio file by stem when its extension differs from the `FILE` line). WAVs carrying their own RIFF markers work the same way.
+
+**Format & tag tolerance** - Containers and codecs are identified from file contents rather than extensions, so misnamed files scan and play cleanly. FLAC files carrying leading ID3v2 headers, broken or non-standard ID3v2 tags (v2.4 non-syncsafe sizes, unsynchronised UTF-16 frames, zlib-compressed frames, BOM-less UTF-16, chained tags), multi-page Ogg Vorbis/Opus comment headers, and APEv2/ASF/MP4/RIFF/AIFF/CAF metadata are all read reliably.
 
 **WAV and AIFF tags** are read from the ID3 chunk taggers add to them, so titles in any script and the cover come through; a WAV's own INFO list fills in whatever that leaves empty.
 
@@ -80,7 +82,7 @@
 
 ## Now playing
 
-- Artwork edge to edge across the top, and the same picture flipped, blurred and dimmed behind the controls.
+- Artwork edge to edge across the top, and the same picture flipped, blurred and dimmed behind the controls. Embedded or folder covers up to 32 MB are memory-mapped directly from the card, pre-fetched for the upcoming track, and cached as JPEGs (up to 1,000 Now Playing sleeves alongside list thumbnails) with a dedicated cache-lookup worker for near-instant skips.
 - **Alternative layout** - the progress bar becomes a **waveform**
 - **Immersive layout** - the picture itself, edge to edge across the whole panel: the sleeve fills the screen and is centre-cropped, at its own brightness, with nothing laid over it. The controls stand on a frosted band: the foot of the same photograph, lightly blurred, dimmed to the darkness the type reads on and tinted so the sleeve's colour survives in it, cut to the deck's rectangle - so the artwork is still seen through the glass, softly, while the names, the bar, the clocks and the transport are read on top; the chevron and the source marks take their chance in white over the sharp part. Anything holding artwork gets one - local files, podcasts, audiobooks, Subsonic and the streaming services alike - and without a picture the page falls back to its own colour with the controls in the theme's ink.
 - **Poster layout** - the sleeve scaled to the edges of the screen without the crop Immersive takes: the whole picture from side to side at the width of the panel, held at the top with square corners and nothing stretched, and the deck below it on its own opaque ground rather than over the artwork - as much of the sleeve as the deck leaves room for, at the largest size the screen allows. Anything holding artwork gets one, and without a picture the empty sleeve stands edge to edge in the cover's colour with the controls in the theme's ink; the favourite marker is a heart on this deck, kept a step smaller than the star it stands in for; and the foot of the sleeve fades into the deck over its last pixels instead of meeting the controls at a line.

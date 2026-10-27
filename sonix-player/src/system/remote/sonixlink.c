@@ -1837,6 +1837,12 @@ static void *art_worker(void *unused) {
 					}
 				}
 			}
+			// A card pulled out under the read: zeros, not artwork.
+			if (data && albumart_faulted(&art)) {
+				free(data);
+				data = NULL;
+				missing = true;
+			}
 			albumart_free(&art);
 		}
 
@@ -1948,7 +1954,15 @@ static void route_art(client_t *c, const char *query) {
 	}
 	// What it is, from the bytes rather than from a file name: an embedded
 	// picture has no name to read an extension off.
+	size_t before = c->out.len;
 	reply_art_bytes(c, art_type_of(art.data, art.size), art.data, art.size);
+	if (albumart_faulted(&art)) {
+		// A card pulled out under the copy: zeros, not artwork.
+		c->out.len = before;
+		albumart_free(&art);
+		reply_status(c, "404 Not Found", "no artwork");
+		return;
+	}
 	albumart_free(&art);
 }
 

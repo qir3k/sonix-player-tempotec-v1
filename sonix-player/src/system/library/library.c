@@ -4550,7 +4550,11 @@ static bool scan_folder_chosen(const char *name) {
 }
 
 static void scan_directory(const char *path, int depth) {
-	if (scan_cancel || depth > SCAN_MAX_DEPTH) {
+	if (scan_cancel) {
+		return;
+	}
+	if (depth > SCAN_MAX_DEPTH) {
+		printf("library: %s is more than %d folders deep, skipped\n", path, SCAN_MAX_DEPTH);
 		return;
 	}
 
@@ -4589,7 +4593,13 @@ static void scan_directory(const char *path, int depth) {
 
 		char child[512];
 		if (snprintf(child, sizeof(child), "%s/%s", path, de->d_name) >= (int)sizeof(child)) {
-			continue; // path too long to be useful
+			// Every path the player keeps is at most this long. A track or a
+			// folder left out is said in the log, so it can be told from one
+			// never read.
+			if (de->d_type != DT_REG || is_playable(de->d_name)) {
+				printf("library: %s/%s is a path too long to keep, skipped\n", path, de->d_name);
+			}
+			continue;
 		}
 
 		// lstat() rather than stat(): a symlink pointing at an ancestor
