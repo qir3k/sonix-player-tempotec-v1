@@ -1108,14 +1108,24 @@ static const char *json_compound_end(const char *start) {
 }
 
 static bool track_renderer_is_ad(const json_doc_t *doc, int renderer) {
-	for (int i = renderer + 1; i < doc->count; i++) {
-		int object = doc->toks[i].parent;
-		if (doc->toks[i].type != JSON_STRING || object < 0 || doc->toks[object].type != JSON_OBJECT) continue;
+	// Ad markers are keys of the renderer itself -- "adSlot", "promoted" and
+	// their kin. They are never anything nested inside it, and reading that
+	// deep once flagged every real row on the page: the action menu each row
+	// carries holds "signInEndpoint":{"hack":true}, and a boolean called
+	// "hack" read exactly like the ad this check went looking for. So the
+	// scan stays on the renderer's own keys, and only the known names count.
+	int end_char = doc->toks[renderer].end;
+	for (int i = renderer + 1; i < doc->count && doc->toks[i].start < end_char; i++) {
+		if (doc->toks[i].parent != renderer || doc->toks[i].type != JSON_STRING) {
+			continue; // a value, or a key of something nested deeper in
+		}
 		char key[128];
 		if (!json_str(doc, i, key, sizeof(key))) continue;
 		if (strcasestr(key, "adSlot") || strcasestr(key, "adPlacement") ||
 			strcasestr(key, "displayAd") || strcasestr(key, "promoted") ||
-			strcasestr(key, "sponsored") || json_obj_bool(doc, object, key, false)) return true;
+			strcasestr(key, "sponsored")) {
+			return true;
+		}
 	}
 	return false;
 }
