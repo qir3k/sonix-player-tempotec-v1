@@ -234,8 +234,9 @@ static void test_atomic_save_and_sidecar_paths(void) {
 	f = fopen(lrc_path, "rb");
 	assert(f != NULL);
 	memset(buf, 0, sizeof(buf));
-	fread(buf, 1, sizeof(buf) - 1, f);
+	n = fread(buf, 1, sizeof(buf) - 1, f);
 	fclose(f);
+	assert(n == strlen("[00:02.00] Already newline\n"));
 	assert(strcmp(buf, "[00:02.00] Already newline\n") == 0);
 	unlink(lrc_path);
 
