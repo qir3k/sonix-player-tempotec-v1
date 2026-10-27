@@ -229,10 +229,11 @@ typedef struct {
 	int bitrate;
 	int sample_rate;
 	int channels;
+	int bits; // 0 for MP3 and AAC, the sample depth for FLAC
 	// What is actually coming down the wire, filled in when the decoder is
-	// chosen: "MP3" or "AAC". The directory's own codec field is a claim and is
-	// often wrong -- an AAC station listed as MP3 is the common case -- so the
-	// player shows this one and not that.
+	// chosen: "MP3", "AAC" or "FLAC". The directory's own codec field is a
+	// claim and is often wrong -- an AAC station listed as MP3 is the common
+	// case -- so the player shows this one and not that.
 	char codec[8];
 } radio_now_t;
 

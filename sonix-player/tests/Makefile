@@ -249,6 +249,26 @@ $(BUILD)/test_covers: $(COVERS_SRC) $(TAGS_DECODE_SRC) $(BUILD)/sqlite3_impl.o \
 		-Wno-unused-parameter -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough -Wno-misleading-indentation $(TAGS_DECODE_SRC) \
 		$(BUILD)/sqlite3_impl.o $(LDFLAGS) $(LDLIBS)
 
+# FLAC radio stream decoding: native FLAC behind ID3v2, mid-stream 24-bit
+# relaxed join across false sync markers, chained Ogg FLAC with song titles
+# and multi-page packet assembly, and non-FLAC rejection.
+RADIOFLAC_SRC = test_radioflac.c $(ROOT)/src/system/streaming/radioflac.c
+.PHONY: radioflac sanitize-radioflac
+radioflac: $(BUILD)/test_radioflac
+	$(BUILD)/test_radioflac
+
+$(BUILD)/test_radioflac: $(RADIOFLAC_SRC) $(BUILD)/drflac_impl.o \
+                         $(ROOT)/src/system/streaming/radioflac.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(RADIOFLAC_SRC) $(BUILD)/drflac_impl.o $(LDFLAGS) $(LDLIBS)
+
+$(BUILD)/drflac_impl.o: $(ROOT)/src/system/decode/dr_flac.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -w -DDR_FLAC_IMPLEMENTATION -x c -c -o $@ $<
+
+sanitize-radioflac:
+	$(MAKE) BUILD=.build/sanitize CFLAGS='-O1 -g -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -fno-omit-frame-pointer -fsanitize=address,undefined' LDFLAGS='-Wl,--gc-sections -fsanitize=address,undefined' radioflac
+
 # The Most played list against the real library database: the play upsert
 # device_state.c runs at track start, the handle the page opens, and the
 # streaming reader the queue is built from. The card is a temporary directory

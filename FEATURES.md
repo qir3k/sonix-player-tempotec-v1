@@ -105,7 +105,8 @@ folder, which also takes podcasts copied there by hand — see
 [Podcasts on the card](#podcasts-on-the-card).
 - **Radio** - the radio-browser.info directory by language, country or genre,
 plus search, favourites, recently played, and **My stations** read from a
-`radio.txt` you write yourself in the card root. MP3 and AAC, HTTPS with real
+`radio.txt` you write yourself in the card root. MP3, AAC and FLAC (native,
+mid-stream join, and chained Ogg FLAC with song titles, up to 24-bit), HTTPS with real
 certificate checking (plus an opt-in relaxed mode for a server of your own with
 a self-signed certificate), and HLS.
 

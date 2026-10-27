@@ -75,5 +75,8 @@ jobs:
       - name: Check tag reading, format sniffing and 1000-cover cache
         run: make -C sonix-player/tests tags covers
 
+      - name: Check FLAC radio streams (native, mid-stream join, chained Ogg FLAC)
+        run: make -C sonix-player/tests radioflac
+
       - name: Run stock-firmware credential extractor tests
         run: make -C sonix-player/tests extractkeys

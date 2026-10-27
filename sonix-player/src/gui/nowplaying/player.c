@@ -3029,10 +3029,18 @@ static const lv_image_dsc_t *studio_quality_mark(const device_state_t *state) {
 	if (!state->live && podcastcache_is_episode(state->current_file)) {
 		return NULL;
 	}
+	if (state->live) {
+		radio_now_t now;
+		radio_get_now(&now);
+		if (now.bits > 0 && now.sample_rate > 0) {
+			return (now.sample_rate > 48000 || now.bits > 16) ? &icon_quality_hifi : &icon_quality_cd;
+		}
+		return &icon_quality_lossy;
+	}
 	if (audio_get_dsd_multiple() > 0) {
 		return &icon_quality_dsd;
 	}
-	if (state->live || audio_stream_is_lossy()) {
+	if (audio_stream_is_lossy()) {
 		return &icon_quality_lossy;
 	}
 	int rate = 0, channels = 0;
@@ -5489,15 +5497,17 @@ static void update_format_label(const device_state_t *state) {
 	}
 
 	if (state->live) {
-		// No bit depth to quote on a stream: what a station is, is its
-		// bitrate. Nothing at all until the first frame has been decoded.
+		// Nothing at all until the first frame has been decoded. A FLAC
+		// station is shown like a track ("16/44.1 FLAC"), the rest by bitrate.
 		radio_now_t now;
 		radio_get_now(&now);
 		// The format was written "MP3" because that was the only thing the
-		// stream path could decode. It reads AAC too now, and a station that
-		// says MP3 while an AAC decoder is running on it is a lie the log
-		// cannot correct.
-		if (now.bitrate > 0) {
+		// stream path could decode. It reads AAC and FLAC too now, and a
+		// station that says MP3 while another decoder is running on it is a
+		// lie the log cannot correct.
+		if (now.bits > 0 && now.sample_rate > 0 && now.codec[0]) {
+			lv_label_set_text_fmt(format_label, "%d/%g %s", now.bits, now.sample_rate / 1000.0, now.codec);
+		} else if (now.bitrate > 0) {
 			lv_label_set_text_fmt(format_label, "%d kbps %s", now.bitrate, now.codec[0] ? now.codec : "MP3");
 		} else if (now.codec[0]) {
 			lv_label_set_text(format_label, now.codec);
@@ -5837,8 +5847,17 @@ static void update_progress(void) {
 	// The status LED follows playback promptly from here (the battery poll
 	// only comes round once a minute). Only writes when the colour changes.
 	// A podcast lights purple instead of the sample-rate colour.
+	bool live_lossy = true;
+	int live_bits = 0;
+	if (state.live) {
+		radio_now_t now;
+		radio_get_now(&now);
+		live_lossy = now.bits == 0;
+		live_bits = now.bits;
+	}
 	led_update_playback(state.status == AUDIO_STATUS_PLAYING, state.stream_sample_rate,
-						audio_stream_is_lossy(), audio_get_stream_bits(),
+						state.live ? live_lossy : audio_stream_is_lossy(),
+						state.live ? live_bits : audio_get_stream_bits(),
 						!state.live && podcastcache_is_episode(state.current_file),
 						!state.live && audio_get_dsd_multiple() > 0);
 
