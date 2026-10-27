@@ -830,6 +830,13 @@ static void card_databases_detach(void) {
 	}
 	card_attached = false;
 
+	// The Tidal cache is on the card now, so with the card gone there is
+	// nowhere to download to. Clearing its root also keeps a transfer that was
+	// already running from writing to the bare mount point: after the unmount
+	// that is a directory on the player's own UBIFS, which is precisely the
+	// storage the cache must not fill.
+	tidalcache_set_root(NULL);
+
 	// Playback first. The playback thread keeps the track's descriptor open for
 	// the whole track -- and with "remember track" a track is loaded and paused
 	// from boot -- so without this the card is busy essentially always, the
@@ -885,6 +892,9 @@ static void card_databases_attach(const char *root) {
 	peq_presets_set_dir(root);
 	mseb_presets_set_dir(root);
 	qobuzcache_set_root(root);
+	// Tidal's playback cache lives on the card as well: a whole hi-res track
+	// does not fit the internal data partition, so the card has to be the
+	// storage that is measured and filled.
 	tidalcache_set_root(root);
 	podcastcache_set_root(root);
 	podcastsubs_set_root(root);

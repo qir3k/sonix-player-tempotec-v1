@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "src/gui/shell/gui.h"
+#include "src/system/core/lang.h"
 #include "src/system/core/utils.h"
 #include "src/system/decode/growfile.h"
 #include "src/system/device/system.h"

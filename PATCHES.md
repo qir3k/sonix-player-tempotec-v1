@@ -1439,3 +1439,29 @@ The UI tests that walk the language folder asserted ten files; they now
 assert eleven, and a twelfth language is meant to fail them until its texts
 are checked the same way. The main-menu test switches into Russian as it does
 into Ukrainian, and checks the name the file declares for itself.
+
+## Tidal port from qir3k's fork
+
+The Tidal work from `qir3k/sonix-player-tempotec-v1` is replayed here as
+22 path-filtered cherry-picks. Each keeps its original author, message and a
+`(cherry picked from commit …)` trailer, but carries only the Tidal modules and
+their two new helpers (`listcache` and `streamkeep`): `dfa8a97`, `e8cbce0`,
+`870cbb8`, `1e1e101`, `54b9f46`, `1fa0648`, `50a838d`, `9f305ed`, `ac35cf9`,
+`c0f8ea5`, `05d8710`, `c6e7d53`, `c20256c`, `b1baa7c`, `0865ab5`, `6a65666`,
+`d135561`, `e314702`, `c9becf9`, `e8b4c21`, `339b433` and `b008638`. Unrelated
+fork work — YouTube Music, radio and podcast redesigns, Bluetooth, themes and
+release machinery — is deliberately not part of the port.
+
+Together those commits bring the 240 px Tidal layout, a search page with its
+last eight queries, favourite artists, playlist-track removal, configurable
+home rows, card-backed list caches, bulk row selection, serialized API and sync
+workers, queued/cancellable downloads, a Downloaded browser, "Keep on card"
+saving with tags and artwork, storage-failure reporting, and an SD-card-backed
+playback cache for hi-res DASH streams.
+
+The integration commit adds the shared hooks the filtered commits need on this
+newer upstream: a writable `device_state` prepare callback (and matching Qobuz,
+podcast and Subsonic signatures), the track-menu actions, path-backed media-list
+subtitles, dynamic-title realignment, the shared row-duration formatter, cache
+cleanup at startup and card removal, and the new translation keys in every
+language file. It also adds the `lang.h` include `streamkeep.c` needs for `tr()`.

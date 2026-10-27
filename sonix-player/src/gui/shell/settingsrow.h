@@ -30,6 +30,9 @@ lv_obj_t *settingsrow_page(lv_obj_t *screen, gui_config_t *cfg, const char *titl
 // page with no corner buttons the whole width back.
 void settingsrow_title_corner_slots(lv_obj_t *title, gui_config_t *cfg, int buttons);
 
+// Re-centers a page heading on its visible glyphs after its text changes.
+void settingsrow_title_realign(lv_obj_t *title);
+
 // Shared title-row control geometry. The V1 uses 36 px controls; the HiBy
 // layouts keep their original 56 px targets. New and migrated pages should use
 // settingsrow_place_corner_button() rather than repeating those constants.
