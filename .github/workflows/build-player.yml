@@ -69,5 +69,8 @@ jobs:
       - name: Run Subsonic and stream-bridge tests
         run: make -C sonix-player/tests test
 
+      - name: Check LRCLIB search, ranking and sidecar save
+        run: make -C sonix-player/tests lrclib
+
       - name: Run stock-firmware credential extractor tests
         run: make -C sonix-player/tests extractkeys

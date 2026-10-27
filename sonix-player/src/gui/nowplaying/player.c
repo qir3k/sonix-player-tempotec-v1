@@ -13,9 +13,11 @@
 #include "src/gui/nowplaying/aamlayout.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/nowplaying/coverloader.h"
+#include "src/gui/nowplaying/lyricsearch.h"
 #include "src/gui/library/medialist.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/board_profile.h"
+#include "src/gui/shell/confirm.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/popover.h"
@@ -26,6 +28,7 @@
 #include "src/gui/nowplaying/trackmenu.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
+#include "src/gui/shell/toast.h"
 #include "src/gui/shell/topbar.h"
 #include "src/system/device/power.h"
 #include "src/system/playback/sleeptimer.h"
@@ -40,6 +43,7 @@
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/library/library.h"
+#include "src/system/library/lrclib.h"
 #include "src/system/library/lyrics.h"
 #include "src/system/device/led.h"
 #include "src/system/playback/playlist.h"
@@ -53,6 +57,7 @@
 #include "src/system/streaming/tidalsync.h"
 #include "src/system/core/utils.h"
 #include "src/system/audio/waveform.h"
+#include "src/system/net/wifi.h"
 
 #include "lvgl/src/core/lv_obj_event_private.h"
 #include "lvgl/lvgl.h"
@@ -1746,6 +1751,11 @@ static int immersive_menu_index;
 // at a time; a finger scrolling them takes over for a few seconds, and a tap
 // on a line plays from there. The column fades out at its top and bottom
 // edges the way a scrolling title does at its ends.
+//
+// The swipe is there on every file, words or not. On one without, it asks
+// whether to look for them on LRCLIB (lrclib.h); what is found is listed to
+// pick from (lyricsearch.h), the one picked is saved beside the file, and the
+// page comes in with it.
 // ---------------------------------------------------------------------------
 
 #define LYRICS_FADE_PX 56
@@ -1767,8 +1777,12 @@ static bool lyrics_allowed; // wanted, and a file on the card playing
 static bool lyrics_now;		// on screen: allowed, and the file has words
 static lv_obj_t *lyrics_pane; // the page: the column and the note
 static lv_obj_t *lyrics_head; // the title and artist at the top while the words are up
+static lv_obj_t *lyrics_head_col;
 static lv_obj_t *lyrics_head_title;
 static lv_obj_t *lyrics_head_artist;
+static lv_obj_t *lyrics_find_btn;
+static lv_obj_t *lyrics_find_icon;
+static lv_obj_t *lyrics_find_narrowed; // the names' column, made room in
 static cover_image_t lyrics_screen_pic; // the blurred sleeve at the shape of the screen
 static unsigned lyrics_bg_generation;
 static int32_t lyrics_progress; // 0 the sleeve, LYRICS_FULL the words
@@ -1934,8 +1948,9 @@ static bool lyrics_on_screen(void) { return lyrics_pane && !lv_obj_is_hidden(lyr
 // nothing.
 static void lyrics_screen_hold_update(void) { power_hold_screen_for_view(sheet_open && lyrics_on_screen()); }
 
-// The words of the file playing are known before any swipe: a track with
-// none cannot be swiped to them, and the page goes away by itself on one.
+// The words of the file playing are known before any swipe: on a track with
+// none the swipe asks to download them, and the page goes away by itself on
+// one.
 static bool lyrics_has_words(void) { return lyrics_loaded && lyrics_cur.count > 0; }
 
 // The lyrics of the file playing, read on a thread of their own as soon as it
@@ -2146,6 +2161,9 @@ static void lyrics_look(bool on) {
 	lv_obj_set_style_text_color(lyrics_note, ink, 0);
 	lv_obj_set_style_text_color(lyrics_head_title, ink, 0);
 	lv_obj_set_style_text_color(lyrics_head_artist, lyrics_backdrop() ? lv_color_make(200, 200, 200) : theme()->text_secondary, 0);
+	if (lyrics_find_icon) {
+		lv_obj_set_style_image_recolor(lyrics_find_icon, ink, 0);
+	}
 }
 
 // What travels with the sleeve: it goes out to the left as the words come in.
@@ -2179,6 +2197,57 @@ static void lyrics_star_to_head(bool up) {
 	}
 }
 
+// The button at the top right while the words are all the way in: it looks them
+// up on LRCLIB again, to pick others in their place. Beside the star or the
+// ellipsis where an arrangement keeps one up there, in the corner otherwise.
+#define LYRICS_FIND_BTN bp_pick(COMPACT_CORNER_BTN, 56)
+
+// The names at the top give up the button's width on both sides, so a long
+// title stays centred and stops short of it.
+static void lyrics_find_make_room(lv_obj_t *col) {
+	if (col == lyrics_find_narrowed) {
+		return;
+	}
+	if (lyrics_find_narrowed) {
+		int32_t w = lv_obj_get_style_width(lyrics_find_narrowed, 0);
+		lv_obj_set_width(lyrics_find_narrowed, w + 2 * LYRICS_FIND_BTN);
+	}
+	if (col) {
+		int32_t w = lv_obj_get_style_width(col, 0);
+		lv_obj_set_width(col, w - 2 * LYRICS_FIND_BTN);
+	}
+	lyrics_find_narrowed = col;
+}
+
+static void lyrics_find_sync(bool full) {
+	if (!lyrics_find_btn) {
+		return;
+	}
+	bool show = full && lyrics_now;
+	if (!show) {
+		lv_obj_set_hidden(lyrics_find_btn, true);
+		lyrics_find_make_room(NULL);
+		return;
+	}
+	int right = lv_obj_get_x(cover_panel) + (layout_studio_now ? studio_box_w : cover_box_w);
+	int beside = 0;
+	if (layout_studio_now && more_btn_obj) {
+		beside = lv_obj_get_width(more_btn_obj);
+	} else if (layout_alt_now && fav_btn_obj) {
+		beside = lv_obj_get_width(fav_btn_obj);
+	}
+	// Album Art Max already fills its header row (format, repeat, menu, star);
+	// park the search mark just inside the top-right corner of the lyrics box.
+	int btn_y = layout_aam_now ? lv_obj_get_y(cover_panel) + 2 : back_btn_centre_y() - LYRICS_FIND_BTN / 2;
+	lv_obj_set_pos(lyrics_find_btn, right - STUDIO_INFO_MARGIN - beside - LYRICS_FIND_BTN, btn_y);
+	lyrics_find_make_room(layout_studio_now ? studio_text_col : layout_alt_now ? lyrics_head_col : NULL);
+	// The ink of the names beside it: white over the blurred sleeve, the
+	// theme's own over the page's background.
+	lv_obj_set_style_image_recolor(lyrics_find_icon, lyrics_backdrop() ? lv_color_white() : theme()->text_primary, 0);
+	lv_obj_set_hidden(lyrics_find_btn, false);
+	lv_obj_move_foreground(lyrics_find_btn);
+}
+
 // Everything the swipe moves, at `progress` of the way from the sleeve (0)
 // to the words (LYRICS_FULL). Only positions change from one frame to the
 // next; at 0 every style touched is handed back, so the arrangement is
@@ -2194,6 +2263,7 @@ static void lyrics_progress_apply(int32_t progress) {
 		progress = LYRICS_FULL;
 	}
 	lyrics_progress = progress;
+	lyrics_find_sync(progress == LYRICS_FULL);
 	bool rest = progress == 0;
 	int32_t travel = cover_box_w - lyrics_pane_x;
 
@@ -2234,6 +2304,9 @@ static void lyrics_progress_apply(int32_t progress) {
 		lyrics_head_sync();
 		lv_obj_set_hidden(lyrics_head, false);
 		lv_obj_move_foreground(lyrics_head);
+		if (lyrics_find_btn && !lv_obj_is_hidden(lyrics_find_btn)) {
+			lv_obj_move_foreground(lyrics_find_btn);
+		}
 	} else {
 		lv_obj_set_hidden(lyrics_head, true);
 	}
@@ -2389,6 +2462,244 @@ static void lyrics_settle(void) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Words from LRCLIB, for a file with none
+// ---------------------------------------------------------------------------
+
+typedef struct {
+	char path[1024];
+	char title[256];
+	char artist[256];
+	char album[256];
+	int duration;
+	lrclib_result_t result;
+	lrclib_record_t *records;
+	int count;
+} lyrics_fetch_t;
+
+static bool lyrics_fetching; // one search at a time
+
+void player_lyrics_reload(const char *path) {
+	device_state_t state;
+	device_state_get(&state);
+	if (!path || strcmp(state.current_file, path) != 0) {
+		return;
+	}
+	// Read again, from the .lrc now beside the file. Words that were up stay up
+	// and change in place; otherwise the page is wanted, and comes in when the
+	// words arrive (lyrics_settle()).
+	bool up = lyrics_now;
+	lyrics_path[0] = '\0';
+	lyrics_request(&state);
+	if (!up) {
+		lyrics_commit(true);
+	}
+}
+
+static void lyrics_fetched(void *user) {
+	lyrics_fetch_t *job = user;
+	lyrics_fetching = false;
+	toast_busy_end();
+
+	switch (job->result) {
+	case LRCLIB_OK: {
+		// The list is for the track it was asked about, over the player it was
+		// asked from; with either gone it is no longer wanted.
+		device_state_t state;
+		device_state_get(&state);
+		if (sheet_open && strcmp(state.current_file, job->path) == 0) {
+			lyricsearch_open(job->path, job->records, job->count);
+			job->records = NULL;
+		}
+		break;
+	}
+	case LRCLIB_INSTRUMENTAL:
+		toast_plain("lyrics_instrumental");
+		break;
+	case LRCLIB_NOT_FOUND:
+		toast_plain("lyrics_not_found");
+		break;
+	case LRCLIB_NO_TAGS:
+		toast_error("lyrics_no_tags");
+		break;
+	default:
+		toast_error("lyrics_download_failed");
+		break;
+	}
+	lrclib_free(job->records, job->count);
+	free(job);
+}
+
+static void *lyrics_fetch_worker(void *arg) {
+	lyrics_fetch_t *job = arg;
+	job->result = lrclib_search(job->title, job->artist, job->album, job->duration, &job->records, &job->count);
+	if (!gui_post(lyrics_fetched, job)) {
+		lrclib_free(job->records, job->count);
+		free(job);
+	}
+	return NULL;
+}
+
+static void lyrics_search_run(void);
+
+// ---------------------------------------------------------------------------
+// Wi-Fi switched on for a search
+//
+// With Wi-Fi off the question offers to switch it on instead of searching; the
+// search then starts by itself once the link has an address, for the file that
+// was playing when the question was answered.
+// ---------------------------------------------------------------------------
+
+#define LYRICS_WIFI_POLL_MS 500
+#define LYRICS_WIFI_WAIT_MS 30000
+
+static lv_timer_t *lyrics_wifi_timer;
+static uint32_t lyrics_wifi_since;
+static char lyrics_wifi_path[1024];
+
+static bool lyrics_wifi_online(void) {
+	wifi_status_t wifi;
+	wifi_get_status(&wifi);
+	return wifi.state == WIFI_STATE_CONNECTED && wifi.ip[0] != '\0';
+}
+
+static void lyrics_wifi_wait_end(void) {
+	if (lyrics_wifi_timer) {
+		lv_timer_delete(lyrics_wifi_timer);
+		lyrics_wifi_timer = NULL;
+	}
+}
+
+static void lyrics_wifi_tick_cb(lv_timer_t *t) {
+	(void)t;
+	device_state_t state;
+	device_state_get(&state);
+	// Another track, or Wi-Fi switched off again: the search is no longer wanted.
+	if (!wifi_get_enabled() || strcmp(state.current_file, lyrics_wifi_path) != 0) {
+		lyrics_wifi_wait_end();
+		toast_busy_end();
+		return;
+	}
+	if (lyrics_wifi_online()) {
+		lyrics_wifi_wait_end();
+		toast_busy_end();
+		lyrics_search_run();
+		return;
+	}
+	if (lv_tick_elaps(lyrics_wifi_since) >= LYRICS_WIFI_WAIT_MS) {
+		lyrics_wifi_wait_end();
+		toast_busy_end();
+		toast_error("lyrics_wifi_failed");
+	}
+}
+
+static void lyrics_enable_wifi_cb(void *user) {
+	(void)user;
+	device_state_t state;
+	device_state_get(&state);
+	if (!state.current_file[0] || !playing_local_file(&state)) {
+		return;
+	}
+	snprintf(lyrics_wifi_path, sizeof(lyrics_wifi_path), "%s", state.current_file);
+	wifi_set_enabled(true);
+	lyrics_wifi_since = lv_tick_get();
+	if (!lyrics_wifi_timer) {
+		lyrics_wifi_timer = lv_timer_create(lyrics_wifi_tick_cb, LYRICS_WIFI_POLL_MS, NULL);
+	}
+	toast_busy_dismissable("lyrics_wifi_connecting");
+}
+
+// Wi-Fi is off and can be switched on: the question offers that in place of
+// the search.
+static bool lyrics_offer_wifi(void) {
+	if (lyrics_wifi_timer) {
+		toast_busy_dismissable("lyrics_wifi_connecting");
+		return true;
+	}
+	if (wifi_get_enabled() || !wifi_available()) {
+		return false;
+	}
+	confirm_show("lyrics_download_title", "lyrics_wifi_off_note", "lyrics_enable_wifi", lyrics_enable_wifi_cb, NULL);
+	return true;
+}
+
+// The file playing looked up on LRCLIB, on a thread of its own; what is found
+// is listed to pick from.
+static void lyrics_search_start(void) {
+	if (!lyrics_fetching && lyrics_offer_wifi()) {
+		return;
+	}
+	lyrics_search_run();
+}
+
+static void lyrics_search_run(void) {
+	if (lyrics_fetching) {
+		toast_busy_dismissable("lyrics_downloading");
+		return;
+	}
+	wifi_status_t wifi;
+	wifi_get_status(&wifi);
+	if (wifi.state != WIFI_STATE_CONNECTED) {
+		toast_error("lyrics_no_wifi");
+		return;
+	}
+	device_state_t state;
+	device_state_get(&state);
+	if (!state.current_file[0] || !playing_local_file(&state)) {
+		return;
+	}
+
+	lyrics_fetch_t *job = calloc(1, sizeof(*job));
+	if (!job) {
+		return;
+	}
+	snprintf(job->path, sizeof(job->path), "%s", state.current_file);
+	snprintf(job->title, sizeof(job->title), "%s", state.metadata.title);
+	// The track's own performer is who LRCLIB files it under; the album's
+	// artist only when the track names none.
+	snprintf(job->artist, sizeof(job->artist), "%s", state.metadata.artist[0] ? state.metadata.artist : state.metadata.album_artist);
+	snprintf(job->album, sizeof(job->album), "%s", state.metadata.album);
+	job->duration = (int)(state.progress_total_secs + 0.5);
+
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, lyrics_fetch_worker, job) != 0) {
+		free(job);
+		return;
+	}
+	pthread_detach(thread);
+	lyrics_fetching = true;
+	// A tap puts the spinner away while LRCLIB is asked again after a failure;
+	// the list still opens when the answer comes.
+	toast_busy_dismissable("lyrics_downloading");
+}
+
+// The answer to the question below.
+static void lyrics_download_cb(void *user) {
+	(void)user;
+	lyrics_search_start();
+}
+
+// The button over the words: other words for the same file, in their place.
+static void lyrics_find_cb(lv_event_t *e) {
+	(void)e;
+	if (player_sheet_drag_active()) {
+		return;
+	}
+	lyrics_search_start();
+}
+
+// A swipe to the words of a file that has none.
+static void lyrics_offer_download(void) {
+	if (lyrics_fetching) {
+		toast_busy_dismissable("lyrics_downloading");
+		return;
+	}
+	if (lyrics_offer_wifi()) {
+		return;
+	}
+	confirm_show("lyrics_download_title", "lyrics_download_note", "lyrics_download", lyrics_download_cb, NULL);
+}
+
 // The swipe that pulls the page in (on the sleeve, right to left) or pushes it
 // out (on the words, left to right). `opening` is the user data. Sideways
 // only: a movement that reads as vertical is the column being scrolled, and
@@ -2404,6 +2715,7 @@ static void lyrics_drag_cb(lv_event_t *e) {
 	static lv_point_t start;
 	static bool tracking;
 	static bool engaged;
+	static bool asking; // no words to pull in: the swipe offers to download them
 
 	bool opening = (bool)(uintptr_t)lv_event_get_user_data(e);
 	lv_event_code_t code = lv_event_get_code(e);
@@ -2413,7 +2725,8 @@ static void lyrics_drag_cb(lv_event_t *e) {
 	}
 
 	if (code == LV_EVENT_PRESSED) {
-		tracking = opening ? !lyrics_now && lyrics_available() && lyrics_has_words() : lyrics_now;
+		tracking = opening ? !lyrics_now && lyrics_available() && lyrics_loaded : lyrics_now;
+		asking = opening && !lyrics_has_words();
 		engaged = false;
 		lv_indev_get_point(indev, &start);
 		return;
@@ -2446,6 +2759,9 @@ static void lyrics_drag_cb(lv_event_t *e) {
 			}
 			engaged = true;
 			lyrics_swiped = true;
+			if (asking) {
+				return; // the sleeve stays: there is no page to bring
+			}
 			lv_anim_delete(lyrics_pane, lyrics_progress_exec);
 			lyrics_fade(false);
 			if (opening) {
@@ -2455,6 +2771,9 @@ static void lyrics_drag_cb(lv_event_t *e) {
 				lyrics_request(&state);
 				lyrics_follow(state.progress_current_secs);
 			}
+		}
+		if (asking) {
+			return;
 		}
 		int32_t moved = (int32_t)dx * LYRICS_FULL / cover_box_w;
 		lyrics_progress_apply(opening ? -moved : LYRICS_FULL - moved);
@@ -2468,7 +2787,13 @@ static void lyrics_drag_cb(lv_event_t *e) {
 		}
 		engaged = false;
 		bool far = LV_ABS(dx) > cover_box_w / LYRICS_COMMIT_FRACTION;
-		lyrics_commit(opening ? far : !far);
+		if (asking) {
+			if (far) {
+				lyrics_offer_download();
+			}
+		} else {
+			lyrics_commit(opening ? far : !far);
+		}
 		// Cleared after this gesture's CLICKED has been seen, as for the sheet.
 		lv_async_call(lyrics_swiped_clear_cb, NULL);
 	}
@@ -2553,6 +2878,7 @@ static void lyrics_build(void) {
 	lv_obj_set_hidden(lyrics_head, true);
 
 	lv_obj_t *col = lv_obj_create(lyrics_head);
+	lyrics_head_col = col;
 	lv_obj_remove_style_all(col);
 	lv_obj_set_size(col, cover_box_w - 2 * STUDIO_INFO_MARGIN - 2 * STUDIO_HEAD_SIDE_ROOM, LV_SIZE_CONTENT);
 	lv_obj_align(col, LV_ALIGN_CENTER, 0, 0);
@@ -2575,6 +2901,22 @@ static void lyrics_build(void) {
 	lv_obj_set_style_text_font(lyrics_head_artist, lv_obj_get_style_text_font(song_artist_label, 0), 0);
 	lv_obj_set_style_text_color(lyrics_head_artist, lv_color_make(200, 200, 200), 0);
 	scrolltext_apply(lyrics_head_artist);
+
+	lyrics_find_btn = lv_btn_create(player_screen);
+	lv_obj_set_ignore_layout(lyrics_find_btn, true);
+	lv_obj_set_size(lyrics_find_btn, LYRICS_FIND_BTN, LYRICS_FIND_BTN);
+	lv_obj_set_style_bg_opa(lyrics_find_btn, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_shadow_width(lyrics_find_btn, 0, 0);
+	lv_obj_set_style_border_width(lyrics_find_btn, 0, 0);
+	lv_obj_set_ext_click_area(lyrics_find_btn, bp_pick(COMPACT_CORNER_BTN_EXT_CLICK, CORNER_BTN_EXT_CLICK));
+	lv_obj_add_event_cb(lyrics_find_btn, lyrics_find_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_set_hidden(lyrics_find_btn, true);
+	lyrics_find_icon = lv_image_create(lyrics_find_btn);
+	lv_image_set_src(lyrics_find_icon, &icon_lyrics_search);
+	lv_image_set_scale(lyrics_find_icon, bp_pick(192, 256));
+	lv_obj_add_style(lyrics_find_icon, &theme_style_icon, 0);
+	lv_obj_set_style_image_recolor_opa(lyrics_find_icon, LV_OPA_COVER, 0);
+	lv_obj_center(lyrics_find_icon);
 
 	// The sleeve is where the page is pulled in from.
 	lv_obj_add_event_cb(cover_panel, lyrics_drag_cb, LV_EVENT_PRESSED, (void *)(uintptr_t) true);

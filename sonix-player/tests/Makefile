@@ -179,6 +179,18 @@ $(BUILD)/test_tagdate: $(TAGDATE_SRC) $(ROOT)/src/system/library/tagdate.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(TAGDATE_SRC) $(LDFLAGS) $(LDLIBS)
 
+# LRCLIB search ranking, retry policy, free-text fallback and atomic sidecar
+# .lrc writes against a stubbed HTTP transport. Plain C, no LVGL.
+LRCLIB_SRC = test_lrclib.c $(ROOT)/src/system/core/json.c
+.PHONY: lrclib
+lrclib: $(BUILD)/test_lrclib
+	$(BUILD)/test_lrclib
+
+$(BUILD)/test_lrclib: $(LRCLIB_SRC) $(ROOT)/src/system/library/lrclib.c \
+                      $(ROOT)/src/system/library/lrclib.h $(ROOT)/src/system/core/json.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(LRCLIB_SRC) $(LDFLAGS) $(LDLIBS)
+
 # The Most played list against the real library database: the play upsert
 # device_state.c runs at track start, the handle the page opens, and the
 # streaming reader the queue is built from. The card is a temporary directory
@@ -291,8 +303,23 @@ CHARGE_SRC = $(ROOT)/tests/ui/test_chargescreen.c $(ROOT)/src/gui/shell/chargesc
 CHARGE_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(CHARGE_SRC)) \
              $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
 
+# The LRCLIB results list, preview and Apply flow on the 240x320 panel across
+# all eleven shipped languages and all five V1 palettes.
+LYRICSEARCH_SRC = $(ROOT)/tests/ui/test_lyricsearch.c \
+                  $(ROOT)/src/gui/nowplaying/lyricsearch.c \
+                  $(ROOT)/src/gui/shell/settingsrow.c \
+                  $(ROOT)/src/gui/shell/theme.c \
+                  $(ROOT)/src/gui/shell/icons.c \
+                  $(ROOT)/src/gui/board_profile.c \
+                  $(ROOT)/src/system/library/lrclib.c \
+                  $(ROOT)/src/system/core/json.c \
+                  $(ROOT)/src/system/core/config.c \
+                  $(ROOT)/src/system/core/lang.c
+LYRICSEARCH_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(LYRICSEARCH_SRC)) \
+                  $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
+
 .PHONY: ui
-ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages $(BUILD)/test_wifi_pages $(BUILD)/test_chargescreen
+ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages $(BUILD)/test_wifi_pages $(BUILD)/test_chargescreen $(BUILD)/test_lyricsearch
 	$(BUILD)/test_main_menu ../../sonix-packer/assets/V1/usr/resource/sonix/language
 	$(BUILD)/test_main_menu ../../sonix-packer/assets/V1/usr/resource/sonix/language saved
 	$(BUILD)/test_screensaver ../../sonix-packer/assets/V1/usr/resource/sonix/language
@@ -300,6 +327,7 @@ ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages 
 	$(BUILD)/test_tools_pages ../../sonix-packer/assets/V1/usr/resource/sonix/language
 	$(BUILD)/test_wifi_pages ../../sonix-packer/assets/V1/usr/resource/sonix/language
 	$(BUILD)/test_chargescreen ../../sonix-packer/assets/V1/usr/resource/sonix/language
+	$(BUILD)/test_lyricsearch ../../sonix-packer/assets/V1/usr/resource/sonix/language
 
 $(BUILD)/test_main_menu: $(UI_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
@@ -316,6 +344,9 @@ $(BUILD)/test_tools_pages: $(TOOLS_OBJ)
 $(BUILD)/test_wifi_pages: $(WIFIPAGE_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
+$(BUILD)/test_lyricsearch: $(LYRICSEARCH_OBJ)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
 $(BUILD)/ui/%.o: $(ROOT)/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(UI_CPPFLAGS) $(UI_CFLAGS) -c $< -o $@
@@ -325,4 +356,4 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(UI_CPPFLAGS) $(filter-out -Werror,$(UI_CFLAGS)) -c $< -o $@
 
--include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d))
+-include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(LYRICSEARCH_OBJ:.o=.d))
