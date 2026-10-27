@@ -15,6 +15,8 @@ make -C sonix-player/tests mostplayed
 make -C sonix-player/tests aamlayout
 make -C sonix-player/tests podcastplayed
 make -C sonix-player/tests extractkeys
+make -C sonix-player/tests ytmusic
+make -C sonix-player/tests relay
 ```
 
 These require only a C compiler, Make and Python 3 (plus standard pthread/dl/math libraries). They **do not require LVGL, ALSA, a MIPS toolchain, a music server, a real account, or downloaded audio**.
@@ -113,6 +115,40 @@ are stubbed; `tests/stubs/` carries the two LVGL typedefs `power.h` needs so
 this stays a plain-C suite. The Wi-Fi page itself -- the "Add hidden network"
 row and the manual-entry page behind it -- is covered by `test_wifi_pages`
 in the headless UI suite below.
+
+## YouTube Music, against pages the device really received
+
+`make -C sonix-player/tests ytmusic` links the real `ytmusic.c` against a fake
+HTTP layer, so the resolver runs end to end on any host, and replays whole
+responses the device received (`tests/fixtures/`): a search page, the charts,
+the Explore page and the signed-out liked-songs page.
+
+It pins what the resolver does with them: the relay's reply is chosen by
+mime and bitrate (m4a/AAC only, never a webm, never anything over the cap); the
+phone-app player's refusal does not end the search, and the actionable error is
+the one left standing; and each fixture parses into the rows the page showed
+once the faults it guarded against were fixed -- twenty songs from a search
+page, the charts, three *named* Explore carousels (a heading that failed to read
+drew three rows all labelled Explore), the artwork URL of every card, and the
+library page answering that the imported session is what Favourites is missing.
+
+## The YouTube Music relay
+
+`make -C sonix-player/tests relay` builds nothing: it runs
+`test_ytmusic_relay.py`, which drives the relay the player asks for when a track
+is played (`tools/ytmusic-relay.py`) with its network taken out. The yt-dlp call
+is a canned record, so the suite pins what the relay does with one: which streams
+it will offer (m4a/AAC only, best first, never anything carrying a video track),
+what URL it hands the player, and that the audio endpoint serves the upstream
+bytes with the upstream's own `Content-Length` -- which is what the player's
+download-complete check compares against.
+
+What it exists for is the URL it hands over. The relay used to pass on the
+googlevideo URL yt-dlp resolved, which the player then fetched from another
+address: Google answers that with 403, and the URL is longer than the player's
+own buffer. Both arrive at the device as "could not reach the stream". The
+relay now serves the audio from itself, and the suite checks that the reply names
+the relay -- the address the player already reached it on -- and stays short.
 
 ## Real codec integration
 

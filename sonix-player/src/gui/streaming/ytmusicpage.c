@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "src/gui/board_profile.h"
+#include "src/gui/nowplaying/cover.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/shell/settingsrow.h"
@@ -15,7 +17,9 @@
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/wireless/wifisettings.h"
+#include "src/gui/streaming/qobuzart.h"
 #include "src/system/core/lang.h"
+#include "src/system/device/system.h"
 #include "src/system/net/wifi.h"
 #include "src/system/streaming/ytmusic.h"
 
@@ -358,7 +362,286 @@ static theme_semantic_t item_tone(const ytmusic_item_t *item) {
 	return THEME_SEMANTIC_PURPLE;
 }
 
+// ---------------------------------------------------------------------------
+// row artwork
+// ---------------------------------------------------------------------------
+//
+// A row is drawn with the picture its entry came with -- an album card's
+// sleeve, a song's cover -- rather than a fixed glyph, so this tab reads like
+// the Tidal one. The loader is the shared one (see qobuzart.h): twelve slots,
+// the download and the decode on its own thread, and each image kept on the
+// card under .local/qobuz-art named by the MD5 of its URL, so a second look at
+// the same list downloads nothing.
+//
+// Two lists carry rows -- a search's or a chart's results, and the contents of
+// a card -- and each keeps its own state, because both stay alive: coming back
+// from a track finds the results list where it was left, and freeing a hidden
+// list's pixels would leave its rows pointing at nothing. The twelve slots are
+// shared, so they belong to the list that is on screen; leaving one hands its
+// requests back, and returning asks for them again (the card's cache answers
+// at once).
+#define YTMUSIC_ROW_THUMB bp_pick(38, 60)
+
+typedef struct {
+	lv_obj_t *list;        // the container the rows live in
+	ytmusic_item_t *items; // what the rows were built from, in row order
+	int count;
+	lv_obj_t *thumbs[YTMUSIC_PAGE_RESULTS]; // the cover image of each row, NULL when the entry has none
+	cover_image_t images[YTMUSIC_PAGE_RESULTS];
+	bool has_image[YTMUSIC_PAGE_RESULTS];
+	// A row that asked and got nothing -- a dead URL, an image that will not
+	// decode, a host that does not answer -- is not asked again: a freed slot
+	// restarts the pass over every row, and one broken row would otherwise keep
+	// taking a slot from the rows that can be served.
+	bool failed[YTMUSIC_PAGE_RESULTS];
+} yt_art_list_t;
+
+static yt_art_list_t art_results, art_tracks;
+static yt_art_list_t *art_active;
+// The token claiming the shared slots for this page: only its address matters,
+// and it differs from the other pages'. See qobuzart.h.
+static const char ytmusic_art_owner;
+static int art_slot_row[QOBUZART_SLOTS]; // row of the active list in each slot, -1 = free
+static lv_timer_t *art_timer;
+
+static yt_art_list_t *art_state_for(lv_obj_t *list) {
+	if (list == results_list) {
+		return &art_results;
+	}
+	if (list == tracks_list) {
+		return &art_tracks;
+	}
+	return NULL;
+}
+
+// Back to the glyph the row was built with. The placeholder is a themed icon,
+// so the row reads the same as every other row of the page until its picture
+// lands -- and again if one never does.
+static void art_show_placeholder(lv_obj_t *image) {
+	lv_image_set_src(image, &icon_music2);
+	lv_obj_add_style(image, &theme_style_icon, 0);
+	lv_obj_set_style_image_recolor_opa(image, LV_OPA_COVER, 0);
+	lv_obj_set_style_radius(image, 0, 0);
+	lv_obj_set_style_clip_corner(image, false, 0);
+}
+
+static void art_release_slots(void) {
+	for (int slot = 0; slot < QOBUZART_SLOTS; slot++) {
+		if (art_slot_row[slot] >= 0) {
+			qobuzart_release(&ytmusic_art_owner, slot);
+			art_slot_row[slot] = -1;
+		}
+	}
+}
+
+static bool art_any_pending(void) {
+	for (int slot = 0; slot < QOBUZART_SLOTS; slot++) {
+		if (art_slot_row[slot] >= 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void art_wake(void) {
+	if (art_timer) {
+		lv_timer_resume(art_timer);
+	}
+}
+
+// The pictures of a list that is no longer on screen are given back. Its rows
+// stay -- coming back finds the list where it was left -- so each one goes back
+// to its glyph first and the pixels are freed with nothing pointing at them.
+//
+// Held only while the list showing them is up: twenty-four decoded covers are
+// tens of kilobytes apiece on the card's side of the screen, and the list that
+// is not being looked at has no use for them. Returning asks for them again,
+// which the loader's cache on the card answers at once.
+static void art_give_back_pictures(yt_art_list_t *state) {
+	for (int row = 0; row < YTMUSIC_PAGE_RESULTS; row++) {
+		if (state->thumbs[row] && state->has_image[row]) {
+			art_show_placeholder(state->thumbs[row]);
+		}
+		state->has_image[row] = false;
+		cover_free(&state->images[row]);
+	}
+}
+
+static void art_request_visible(void);
+
+// Finished covers are collected here, in the same shape as the player's own
+// cover loader: the thread works, the list draws, and whatever is ready appears
+// on the next pass.
+static void art_poll_cb(lv_timer_t *timer) {
+	if (!art_active || !art_any_pending()) {
+		lv_timer_pause(timer); // nothing in flight: art_wake() resumes it
+		return;
+	}
+
+	bool freed = false;
+	for (int slot = 0; slot < QOBUZART_SLOTS; slot++) {
+		int row = art_slot_row[slot];
+		if (row < 0 || row >= YTMUSIC_PAGE_RESULTS) {
+			continue;
+		}
+		lv_obj_t *image = art_active->thumbs[row];
+		if (!image) {
+			art_slot_row[slot] = -1;
+			freed = true;
+			continue;
+		}
+		cover_image_t cover;
+		bool finished = false;
+		if (!qobuzart_take(&ytmusic_art_owner, slot, &cover, &finished)) {
+			if (finished) {
+				art_active->failed[row] = true;
+				art_slot_row[slot] = -1; // nothing to show: the slot goes back
+				freed = true;
+			}
+			continue;
+		}
+
+		cover_free(&art_active->images[row]);
+		art_active->images[row] = cover;
+		art_active->has_image[row] = true;
+		// The placeholder was recoloured by the theme; a sleeve keeps its own
+		// colours, or it comes out a solid square.
+		lv_obj_remove_style(image, &theme_style_icon, 0);
+		lv_obj_set_style_image_recolor_opa(image, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_radius(image, 6, 0);
+		lv_obj_set_style_clip_corner(image, true, 0);
+		lv_image_set_src(image, &art_active->images[row].dsc);
+		art_slot_row[slot] = -1;
+		freed = true;
+	}
+
+	// A freed slot is handed out again at once. There are more rows than slots,
+	// so a pass serves what it can and returns; without this the rows beyond the
+	// twelfth would wait for the next scroll, and never be asked for at all if
+	// the last scroll happened while every slot was busy.
+	if (freed) {
+		art_request_visible();
+	}
+}
+
+// Asks for the covers of the visible rows plus a margin above and below, so a
+// slow scroll finds them already there. Called on activation and on every
+// scroll.
+static void art_request_visible(void) {
+	if (!art_active || !art_active->list) {
+		return;
+	}
+	lv_obj_t *list = art_active->list;
+	int32_t view_top = lv_obj_get_scroll_y(list);
+	int32_t view_height = lv_obj_get_height(list);
+	int32_t margin = view_height / 2;
+
+	uint32_t children = lv_obj_get_child_count(list);
+	for (uint32_t c = 0; c < children && c < YTMUSIC_PAGE_RESULTS; c++) {
+		int row = (int)c;
+		lv_obj_t *image = art_active->thumbs[row];
+		if (!image || art_active->has_image[row] || art_active->failed[row]) {
+			continue;
+		}
+		if (row >= art_active->count || !art_active->items[row].thumbnail[0]) {
+			continue;
+		}
+
+		lv_obj_t *widget = lv_obj_get_child(list, row);
+		int32_t y = lv_obj_get_y(widget);
+		int32_t h = lv_obj_get_height(widget);
+		if (y + h < view_top - margin || y > view_top + view_height + margin) {
+			continue; // too far away to be worth a request
+		}
+
+		bool queued = false;
+		for (int slot = 0; slot < QOBUZART_SLOTS && !queued; slot++) {
+			queued = art_slot_row[slot] == row;
+		}
+		if (queued) {
+			continue;
+		}
+
+		int free_slot = -1;
+		for (int slot = 0; slot < QOBUZART_SLOTS && free_slot < 0; slot++) {
+			if (art_slot_row[slot] < 0) {
+				free_slot = slot;
+			}
+		}
+		if (free_slot < 0) {
+			return; // all busy: the rest on the next pass
+		}
+
+		art_slot_row[free_slot] = row;
+		art_wake();
+		qobuzart_request(&ytmusic_art_owner, free_slot, art_active->items[row].thumbnail, YTMUSIC_ROW_THUMB);
+	}
+}
+
+// The list that is on screen owns the slots, and the pictures -- the one it
+// replaced gives its own back.
+static void art_activate(yt_art_list_t *state, lv_obj_t *list, ytmusic_item_t *items, int count) {
+	if (art_active && art_active != state) {
+		art_release_slots();
+		art_give_back_pictures(art_active);
+	}
+	state->list = list;
+	state->items = items;
+	state->count = count;
+	art_active = state;
+	art_request_visible();
+}
+
+static void art_deactivate(void) {
+	if (!art_active) {
+		return;
+	}
+	art_release_slots();
+	art_give_back_pictures(art_active);
+	art_active = NULL;
+}
+
+// A page with no rows of its own: the covers are given back while it is up.
+static void no_art_loaded_cb(lv_event_t *e) {
+	(void)e;
+	art_deactivate();
+}
+
+// The rows of one list are about to be rebuilt and their pictures with them.
+// Called before lv_obj_clean(), which is what makes freeing the pixels safe.
+static void art_forget_rows(yt_art_list_t *state) {
+	if (!state) {
+		return;
+	}
+	if (art_active == state) {
+		art_release_slots();
+	}
+	for (int row = 0; row < YTMUSIC_PAGE_RESULTS; row++) {
+		state->thumbs[row] = NULL;
+		state->has_image[row] = false;
+		state->failed[row] = false;
+		cover_free(&state->images[row]);
+	}
+}
+
+static void art_scrolled_cb(lv_event_t *e) {
+	(void)e;
+	art_request_visible();
+}
+
+static void results_loaded_cb(lv_event_t *e) {
+	(void)e;
+	art_activate(&art_results, results_list, result_items, result_count);
+}
+
+static void tracks_loaded_cb(lv_event_t *e) {
+	(void)e;
+	art_activate(&art_tracks, tracks_list, track_items, track_count);
+}
+
 static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int count, lv_event_cb_t cb) {
+	yt_art_list_t *art = art_state_for(list);
+	art_forget_rows(art);
 	lv_obj_clean(list);
 	if (count <= 0) {
 		settingsrow_add(list, "no_results", NULL, NULL, NULL);
@@ -373,7 +656,24 @@ static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int coun
 		}
 		lv_obj_t *row = settingsrow_add(list, label, NULL, cb, (void *)(intptr_t)i);
 		settingsrow_name_lines(row, 2);
-		settingsrow_add_icon(row, item_icon(&items[i]), item_tone(&items[i]));
+		// An entry with artwork gets the shared cover slot; one without keeps
+		// the glyph it would have had anyway.
+		if (art && items[i].thumbnail[0]) {
+			art->thumbs[i] = settingsrow_add_art(row, &icon_music2, YTMUSIC_ROW_THUMB);
+		} else {
+			settingsrow_add_icon(row, item_icon(&items[i]), item_tone(&items[i]));
+		}
+	}
+	// A list that is already on screen -- a second search, a card opened from a
+	// card -- asks for its covers here; the screen-loaded callback covers the
+	// other case, where the list is about to be shown for the first time.
+	if (art) {
+		art->list = list;
+		art->items = (ytmusic_item_t *)items;
+		art->count = count;
+		if (art_active == art) {
+			art_request_visible();
+		}
 	}
 }
 
@@ -715,6 +1015,7 @@ static void build_search_page(void) {
 	lv_obj_add_event_cb(search_field, search_field_cb, LV_EVENT_CLICKED, NULL);
 	search_keyboard = keyboard_create(search_screen, page_cfg->screen_width,
 		page_cfg->screen_width < 320 ? 144 : 316, search_field, NULL, "ok", search_accept_cb, NULL);
+	lv_obj_add_event_cb(search_screen, no_art_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	switcher_attach_back_gesture(search_screen);
 
 	results_screen = lv_obj_create(NULL);
@@ -722,6 +1023,9 @@ static void build_search_page(void) {
 	results_list = settingsrow_page(results_screen, page_cfg, "YouTube Music");
 	results_title = settingsrow_page_title(results_screen);
 	player_sheet_attach_drag(results_list, true);
+	// The covers belong to the list that is on screen, and these two carry rows.
+	lv_obj_add_event_cb(results_screen, results_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(results_list, art_scrolled_cb, LV_EVENT_SCROLL, NULL);
 	switcher_attach_back_gesture(results_screen);
 
 	tracks_screen = lv_obj_create(NULL);
@@ -729,12 +1033,17 @@ static void build_search_page(void) {
 	tracks_list = settingsrow_page(tracks_screen, page_cfg, "YouTube Music");
 	tracks_title = settingsrow_page_title(tracks_screen);
 	player_sheet_attach_drag(tracks_list, true);
+	lv_obj_add_event_cb(tracks_screen, tracks_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(tracks_list, art_scrolled_cb, LV_EVENT_SCROLL, NULL);
 	switcher_attach_back_gesture(tracks_screen);
 
 	explore_screen = lv_obj_create(NULL);
 	lv_obj_add_style(explore_screen, &theme_style_screen, 0);
 	explore_list = settingsrow_page(explore_screen, page_cfg, "ytmusic_explore");
 	player_sheet_attach_drag(explore_list, true);
+	// Its rows are carousel names, not entries with artwork: whoever was
+	// holding the slots gives them back while this page is up.
+	lv_obj_add_event_cb(explore_screen, no_art_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	switcher_attach_back_gesture(explore_screen);
 }
 
@@ -862,11 +1171,16 @@ static void home_build(void) {
 
 static void home_loaded_cb(lv_event_t *e) {
 	(void)e;
+	art_deactivate();
 	home_build();
 }
 
 void ytmusicpage_init(gui_config_t *cfg) {
 	page_cfg = cfg;
+	// Where a downloaded cover is kept. Called here as much as for the shared
+	// loader's benefit: with no card named it has nowhere to write and every
+	// list keeps its placeholders, which is the honest answer.
+	qobuzart_set_root(storage_sd_root());
 	ytmusic_screen = lv_obj_create(NULL);
 	lv_obj_add_style(ytmusic_screen, &theme_style_screen, 0);
 	home_container = settingsrow_page(ytmusic_screen, cfg, "YouTube Music");
@@ -878,5 +1192,11 @@ void ytmusicpage_init(gui_config_t *cfg) {
 	build_search_page();
 	build_login_page();
 	build_settings_page(cfg);
+	// Created paused: the first cover request resumes it, and it pauses itself
+	// again when the last one lands or fails.
+	art_timer = lv_timer_create(art_poll_cb, 120, NULL);
+	if (art_timer) {
+		lv_timer_pause(art_timer);
+	}
 	switcher_attach_back_gesture(ytmusic_screen);
 }

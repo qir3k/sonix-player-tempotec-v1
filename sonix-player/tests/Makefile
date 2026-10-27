@@ -29,6 +29,13 @@ test: $(BUILD)/test_subsonic
 extractkeys:
 	python3 test_extract_streamkeys.py
 
+# The relay the player asks for when a track is played (tools/ytmusic-relay.py),
+# with the network taken out: the yt-dlp call is a canned record and the
+# endpoints are driven over a real socket. Plain Python, no compiler.
+.PHONY: relay
+relay:
+	python3 test_ytmusic_relay.py
+
 $(BUILD)/test_subsonic: test_subsonic.c support.c $(CORE) $(shell find $(ROOT)/src/system -name '*.h')
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ test_subsonic.c support.c $(CORE) $(LDFLAGS) $(LDLIBS)

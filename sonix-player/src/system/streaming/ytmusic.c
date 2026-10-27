@@ -543,6 +543,16 @@ static bool refresh_access_token(char *error, size_t error_size) {
 	return true;
 }
 
+// True when the account is the imported browser session, which is the only
+// credential the music endpoints accept for the library pages.
+static bool session_cookie_attached(void) {
+	char cookie[YTMUSIC_COOKIE_MAX];
+	ytmusic_session_cookie(cookie, sizeof(cookie));
+	bool has = cookie[0] != '\0';
+	memset(cookie, 0, sizeof(cookie));
+	return has;
+}
+
 // True when the player holds something it can send as an account: the
 // imported browser session or the OAuth refresh token.
 static bool account_attached(void) {
@@ -1028,6 +1038,28 @@ static bool token_browse_id(const json_doc_t *doc, int renderer, char *out, size
 	return false;
 }
 
+// The artwork of one row: the largest size the page offers, which is the last
+// entry of the thumbnails array. A song carries it under "thumbnail" and a
+// playlist, album or show card under "thumbnailRenderer"; below that the two
+// shapes are the same. Empty when the row has no artwork, which is a row that
+// keeps its placeholder glyph.
+static bool read_thumbnail(const json_doc_t *doc, int renderer, char *out, size_t size) {
+	static const char *const paths[] = {
+		"thumbnail.musicThumbnailRenderer.thumbnail.thumbnails",
+		"thumbnailRenderer.musicThumbnailRenderer.thumbnail.thumbnails",
+	};
+	out[0] = '\0';
+	for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+		int list = json_path(doc, renderer, paths[i]);
+		for (int j = json_len(doc, list) - 1; j >= 0; j--) {
+			if (json_obj_str(doc, json_at(doc, list, j), "url", out, size) && out[0]) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 // One row of any of the three shapes the store uses for a list entry: a song
 // row, a podcast episode (a multi-row item), or a card for a playlist, album or
 // show. A row with a video id plays; one that only names a page opens it.
@@ -1050,6 +1082,7 @@ static bool read_item(const json_doc_t *doc, int renderer, ytmusic_item_t *item)
 		json_str(doc, json_path(doc, renderer, "flexColumns.2.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), item->subtitle, sizeof(item->subtitle));
 	}
 	if (!item->subtitle[0]) json_str(doc, json_path(doc, renderer, "subtitle.runs.0.text"), item->subtitle, sizeof(item->subtitle));
+	read_thumbnail(doc, renderer, item->thumbnail, sizeof(item->thumbnail));
 	char duration[32] = "";
 	json_str(doc, json_path(doc, renderer, "fixedColumns.0.musicResponsiveListItemFixedColumnRenderer.text.runs.0.text"), duration, sizeof(duration));
 	item->duration = parse_duration(duration);
@@ -1296,15 +1329,45 @@ static int collect_items_compact(const char *response, ytmusic_item_t *items, in
 }
 
 // The heading of one carousel of the Explore page.
+//
+// The heading lives in the carousel's header, a small object at the front of
+// it -- but the carousel itself is the whole shelf, and on a real Explore page
+// that is a couple of hundred kilobytes and far more tokens than a bounded
+// parse will take. Parsing all of it to read one string used to run past that
+// ceiling and answer "no heading" for every row on the page, which drew three
+// rows all labelled Explore. So the header object is cut out first and parsed
+// on its own, which costs one scan of the carousel's first few hundred bytes.
 static void read_section_title(const char *object, char *out, size_t size) {
+	static const char *const headers[] = {
+		"\"musicCarouselShelfBasicHeaderRenderer\"",
+		"\"musicCardShelfHeaderBasicRenderer\"",
+	};
 	out[0] = '\0';
-	json_doc_t doc;
-	if (!json_parse_limited(object, &doc, 8000)) return;
-	int root = json_root(&doc);
-	if (!json_str(&doc, json_path(&doc, root, "header.musicCarouselShelfBasicHeaderRenderer.title.runs.0.text"), out, size) || !out[0]) {
-		json_str(&doc, json_path(&doc, root, "header.musicCardShelfRenderer.title.runs.0.text"), out, size);
+	for (size_t i = 0; i < sizeof(headers) / sizeof(headers[0]); i++) {
+		const char *key = strstr(object, headers[i]);
+		if (!key) continue;
+		const char *value = skip_json_space(key + strlen(headers[i]));
+		if (*value != ':') continue;
+		value = skip_json_space(value + 1);
+		if (*value != '{') continue;
+		const char *end = json_compound_end(value);
+		if (!end) continue;
+		size_t len = (size_t)(end - value);
+		char *header = malloc(len + 1);
+		if (!header) return;
+		memcpy(header, value, len);
+		header[len] = '\0';
+		json_doc_t doc;
+		if (json_parse_limited(header, &doc, 2000)) {
+			int root = json_root(&doc);
+			if (!json_str(&doc, json_path(&doc, root, "title.runs.0.text"), out, size) || !out[0]) {
+				json_str(&doc, json_path(&doc, root, "title.simpleText"), out, size);
+			}
+			json_free(&doc);
+		}
+		free(header);
+		if (out[0]) return;
 	}
-	json_free(&doc);
 }
 
 // The cards under one carousel. The carousel is a slice of the whole page, so
@@ -1417,6 +1480,18 @@ int ytmusic_browse_items(const char *browse_id, ytmusic_item_t *items, int limit
 			free(private_page);
 		}
 		if (error && error_size) error[0] = '\0';
+	}
+	// The liked songs -- "VLLM" -- are the account's own list, and the only
+	// credential Google's music endpoints accept for it is the browser session
+	// imported from the card. The Google sign-in token is refused, and refused
+	// *quietly*: the page comes back with no rows and no error, so Favourites
+	// sat there saying "no results" for an account that was in fact signed in.
+	// Where the imported session is what is missing, say that instead of
+	// showing an empty list that can never fill.
+	if (count == 0 && strcmp(browse_id, "VLLM") == 0 && account_attached() &&
+		!session_cookie_attached()) {
+		set_error(error, error_size, "ytmusic_library_needs_session");
+		return -1;
 	}
 	fprintf(stderr, "ytmusic: browse %s returned %d rows\n", browse_id, count);
 	if (count < 0) {
