@@ -80,6 +80,26 @@ static void fake_reply(const char *url, int status, const char *body) {
 	reply_count++;
 }
 
+// A page Google really sent: the fixtures carry whole responses the device
+// received (and once parsed into nothing). Loaded whole and registered with
+// fake_reply() by the test that wants one.
+static char *load_fixture(const char *name) {
+	FILE *f = fopen(name, "rb");
+	if (!f) return NULL;
+	fseek(f, 0, SEEK_END);
+	long size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	char *body = malloc((size_t)size + 1);
+	if (!body) {
+		fclose(f);
+		return NULL;
+	}
+	size_t got = fread(body, 1, (size_t)size, f);
+	fclose(f);
+	body[got] = '\0';
+	return body;
+}
+
 bool http_get(const char *url, char **out, size_t *out_len, size_t limit, int timeout_secs) {
 	(void)limit;
 	(void)timeout_secs;
@@ -246,6 +266,80 @@ static void test_unreachable_relay_names_itself(void) {
 	CHECK(strcmp(error, "ytmusic_relay_unreachable") == 0);
 }
 
+// The pages Google really sent this device, replayed through the real parser.
+// These arrived whole (the bodies end like JSON and carry full shelves of
+// items) and once parsed into zero rows; whatever the fault was, these bytes
+// are the truth the fix has to satisfy.
+static void test_real_device_pages(void) {
+	char *search = load_fixture("fixtures/empty-search.json");
+	if (search) {
+		fake_reset();
+		fake_reply("youtubei/v1/search", 200, search);
+		set_relay("http://relay.test"); // harmless: search never reaches the relay
+		ytmusic_item_t items[YTMUSIC_ITEMS_MAX];
+		char error[128] = "";
+		int count = ytmusic_search_items("kanye", YTMUSIC_FILTER_SONGS, items, YTMUSIC_ITEMS_MAX, error,
+										 sizeof(error));
+		// The fixture holds a full "Songs" shelf: twenty responsive items.
+		CHECK(count == 20);
+		if (count > 0) {
+			CHECK(items[0].kind == YTMUSIC_ITEM_TRACK);
+			CHECK(items[0].id[0] != '\0');
+			CHECK(items[0].title[0] != '\0');
+		} else {
+			fprintf(stderr, "  search fixture parsed %d rows, error %s\n", count, error);
+		}
+		free(search);
+	}
+
+	char *charts = load_fixture("fixtures/empty-FEmusic_charts.json");
+	if (charts) {
+		fake_reset();
+		fake_reply("youtubei/v1/browse", 200, charts);
+		ytmusic_item_t items[YTMUSIC_ITEMS_MAX];
+		char error[128] = "";
+		int count = ytmusic_browse_items("FEmusic_charts", items, YTMUSIC_ITEMS_MAX, error, sizeof(error));
+		CHECK(count > 0);
+		if (count <= 0) fprintf(stderr, "  charts fixture parsed %d rows, error %s\n", count, error);
+		free(charts);
+	}
+
+	char *explore = load_fixture("fixtures/empty-explore.json");
+	if (explore) {
+		fake_reset();
+		fake_reply("youtubei/v1/browse", 200, explore);
+		ytmusic_section_t sections[YTMUSIC_SECTIONS_MAX];
+		char error[128] = "";
+		int count = ytmusic_explore_sections(sections, YTMUSIC_SECTIONS_MAX, error, sizeof(error));
+		// The fixture carries four carousels; "Moods & genres" is a grid of
+		// filter buttons and is dropped on purpose, so three sections show.
+		CHECK(count == 3);
+		if (count > 0) {
+			CHECK(sections[0].count > 0);
+			CHECK(sections[0].items[0].title[0] != '\0');
+		} else {
+			fprintf(stderr, "  explore fixture parsed %d sections, error %s\n", count, error);
+		}
+		free(explore);
+	}
+
+	// And the one page that is REALLY empty signed out: liked songs, which is
+	// Google's own "sign in" card. Zero rows is the correct answer there, with
+	// no error attached.
+	char *vllm = load_fixture("fixtures/empty-VLLM.json");
+	if (vllm) {
+		fake_reset();
+		fake_reply("youtubei/v1/browse", 200, vllm);
+		ytmusic_item_t items[YTMUSIC_ITEMS_MAX];
+		char error[128] = "";
+		int count = ytmusic_browse_items("VLLM", items, YTMUSIC_ITEMS_MAX, error, sizeof(error));
+		CHECK(count == 0);
+		free(vllm);
+	}
+
+	fake_reset();
+}
+
 int main(void) {
 	FILE *seed = fopen(".build/test_ytmusic_config.ini", "w");
 	if (seed) {
@@ -261,6 +355,7 @@ int main(void) {
 	test_webm_is_never_the_answer();
 	test_unreadable_relay_names_itself();
 	test_unreachable_relay_names_itself();
+	test_real_device_pages();
 
 	if (failures) {
 		fprintf(stderr, "%d failure%s\n", failures, failures == 1 ? "" : "s");
