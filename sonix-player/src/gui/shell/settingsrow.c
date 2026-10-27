@@ -361,6 +361,10 @@ typedef struct {
 	lv_obj_t *row;
 	lv_obj_t *icon;
 	theme_semantic_t tone;
+	// A picture rather than a function glyph: drawn in every theme, in its own
+	// colours, and it takes its room in the row wherever the row is drawn. See
+	// settingsrow_add_art().
+	bool art;
 } settingsrow_leading_icon_t;
 
 typedef struct {
@@ -377,10 +381,10 @@ static void fit_row(lv_obj_t *row);
 static lv_font_t *smallest_row_font(void);
 static void settingsrow_refresh_theme(void);
 
-static lv_obj_t *settingsrow_leading_icon(lv_obj_t *row) {
+static settingsrow_leading_icon_t *leading_icon_record(lv_obj_t *row) {
 	for (int i = 0; i < leading_icon_count; i++) {
 		if (leading_icons[i].row == row) {
-			return leading_icons[i].icon;
+			return &leading_icons[i];
 		}
 	}
 	return NULL;
@@ -454,8 +458,13 @@ static void fit_row(lv_obj_t *row) {
 	// children, preserving the existing name/value/chevron child indices used
 	// throughout the settings UI. Its width is reserved only while the theme is
 	// enabled, so Dark and Light retain their original label position.
-	lv_obj_t *leading = settingsrow_leading_icon(row);
-	int32_t leading_width = theme_uses_function_glyphs() && leading ? lv_obj_get_width(leading) + ROW_LABEL_GAP : 0;
+	// A function glyph takes its room only where the theme draws it; a picture
+	// takes it in every theme (see settingsrow_add_art).
+	settingsrow_leading_icon_t *leading = leading_icon_record(row);
+	if (!leading || (!leading->art && !theme_uses_function_glyphs())) {
+		leading = NULL;
+	}
+	int32_t leading_width = leading ? lv_obj_get_width(leading->icon) + ROW_LABEL_GAP : 0;
 	avail -= leading_width;
 
 	lv_obj_t *caption = settingsrow_caption(row);
@@ -621,15 +630,17 @@ static void settingsrow_refresh_theme(void) {
 			continue;
 		}
 		settingsrow_update_edges(row, flat_rows);
-		lv_obj_set_hidden(icon, !tokyo);
+		// A picture is content and stays drawn in every theme; a glyph exists
+		// only where the theme draws glyphs.
+		lv_obj_set_hidden(icon, !tokyo && !leading_icons[i].art);
 		lv_obj_t *label = lv_obj_get_child(row, 0);
 		if (label && lv_obj_check_type(label, &lv_label_class)) {
 			lv_obj_set_style_text_font(label, &font_ui_24, 0);
 		}
-		if (tokyo) {
+		if (tokyo && !leading_icons[i].art) {
 			lv_obj_set_style_image_recolor(icon, theme_semantic_color(leading_icons[i].tone), 0);
 			lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
-		} else {
+		} else if (!leading_icons[i].art) {
 			lv_obj_remove_local_style_prop(icon, LV_STYLE_IMAGE_RECOLOR, 0);
 			lv_obj_remove_local_style_prop(icon, LV_STYLE_IMAGE_RECOLOR_OPA, 0);
 		}
@@ -1078,10 +1089,40 @@ void settingsrow_add_icon(lv_obj_t *row, const lv_image_dsc_t *source, theme_sem
 	}
 	lv_obj_align(icon, LV_ALIGN_LEFT_MID, 0, 0);
 
-	leading_icons[leading_icon_count++] = (settingsrow_leading_icon_t){.row = row, .icon = icon, .tone = tone};
+	leading_icons[leading_icon_count++] =
+		(settingsrow_leading_icon_t){.row = row, .icon = icon, .tone = tone, .art = false};
 	lv_obj_add_event_cb(row, settingsrow_icon_row_deleted_cb, LV_EVENT_DELETE, NULL);
 	settingsrow_register_refresh();
 	settingsrow_refresh_theme();
+}
+
+lv_obj_t *settingsrow_add_art(lv_obj_t *row, const lv_image_dsc_t *placeholder, int side) {
+	if (!row || !placeholder || side <= 0) {
+		return NULL;
+	}
+	if (leading_icon_count >= SETTINGSROW_MAX_LEADING_ICONS) {
+		fprintf(stderr, "settingsrow: no leading slot left for a cover\n");
+		return NULL;
+	}
+
+	lv_obj_t *icon = lv_image_create(row);
+	lv_image_set_src(icon, placeholder);
+	lv_obj_add_style(icon, &theme_style_icon, 0);
+	// Until the real cover lands the placeholder is the themed glyph it is
+	// drawn as everywhere else, so the list reads the same before and after.
+	lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
+	lv_obj_set_clickable(icon, false);
+	lv_obj_set_scrollable(icon, false);
+	lv_obj_set_size(icon, side, side);
+	lv_image_set_inner_align(icon, LV_IMAGE_ALIGN_CENTER);
+	lv_obj_align(icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+	leading_icons[leading_icon_count++] =
+		(settingsrow_leading_icon_t){.row = row, .icon = icon, .tone = THEME_SEMANTIC_MUTED, .art = true};
+	lv_obj_add_event_cb(row, settingsrow_icon_row_deleted_cb, LV_EVENT_DELETE, NULL);
+	settingsrow_register_refresh();
+	settingsrow_refresh_theme();
+	return icon;
 }
 
 static void settingsrow_caption_row_deleted_cb(lv_event_t *e) {

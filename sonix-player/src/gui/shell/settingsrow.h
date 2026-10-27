@@ -59,6 +59,20 @@ lv_obj_t *settingsrow_add(lv_obj_t *parent, const char *name, lv_obj_t **value_o
 // Dark and Light keep the original text-and-chevron row layout.
 void settingsrow_add_icon(lv_obj_t *row, const lv_image_dsc_t *source, theme_semantic_t tone);
 
+// A leading picture rather than a function glyph: an album's cover on a row of
+// a list.
+//
+// The two are different things. A function glyph belongs to the compact
+// palettes -- it is drawn only where the theme draws glyphs, and its colour
+// comes from the theme. A picture is the row's content: a list of albums is not
+// more legible without its sleeves, so it is drawn in every theme, in its own
+// colours, and the name makes room for it wherever the row is drawn.
+//
+// Returns the image, so the caller can put the decoded cover on it when its
+// download lands (and hand the placeholder back if it fails), or NULL when the
+// row is full. `side` is the square's size in pixels.
+lv_obj_t *settingsrow_add_art(lv_obj_t *row, const lv_image_dsc_t *placeholder, int side);
+
 // Optional description for a section row. Tokyo Night on the compact V1 wraps
 // it across multiple lines rather than ellipsizing; Dark/Light and larger
 // players keep their original one-line row geometry.

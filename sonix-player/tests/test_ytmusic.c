@@ -286,6 +286,9 @@ static void test_real_device_pages(void) {
 			CHECK(items[0].kind == YTMUSIC_ITEM_TRACK);
 			CHECK(items[0].id[0] != '\0');
 			CHECK(items[0].title[0] != '\0');
+			// The artwork the row draws comes from the page's own thumbnail
+			// list -- the largest size it offers.
+			CHECK(strncmp(items[0].thumbnail, "https://", 8) == 0);
 		} else {
 			fprintf(stderr, "  search fixture parsed %d rows, error %s\n", count, error);
 		}
@@ -320,6 +323,21 @@ static void test_real_device_pages(void) {
 		} else {
 			fprintf(stderr, "  explore fixture parsed %d sections, error %s\n", count, error);
 		}
+		// Each carousel is named after what it holds. The headings are read from
+		// the header object at the front of each shelf; when that read failed the
+		// page drew three rows all labelled "Explore", so the names are the check
+		// and not only the count.
+		CHECK(strcmp(sections[0].title, "New albums & singles") == 0);
+		if (count > 1) CHECK(strcmp(sections[1].title, "Trending") == 0);
+		for (int i = 0; i < count; i++) {
+			CHECK(sections[i].title[0] != '\0');
+			// And every card carries the cover its row draws.
+			CHECK(sections[i].items[0].thumbnail[0] != '\0');
+			if (!sections[i].items[0].thumbnail[0]) {
+				fprintf(stderr, "  section %d (%s) has no thumbnail on its first card\n", i,
+						sections[i].title);
+			}
+		}
 		free(explore);
 	}
 
@@ -340,6 +358,56 @@ static void test_real_device_pages(void) {
 	fake_reset();
 }
 
+// The library pages need the session imported from the card, and the player has
+// to say so. A Google sign-in token is refused by the music endpoints, and
+// refused quietly: the page comes back empty rather than with an error, so
+// Favourites answered "no results" for an account that had in fact signed in.
+//
+// The sidecar is seeded by hand here, in the two shapes the player can hold: an
+// OAuth account with no browser session beside it (which cannot serve the
+// library), and an imported session (which can).
+static void write_session_file(const char *body) {
+	FILE *f = fopen(".build/ytmusic_session.ini", "w");
+	if (!f) {
+		CHECK(0 && "the sidecar could not be written");
+		return;
+	}
+	fputs(body, f);
+	fclose(f);
+	ytmusic_init(); // the sidecar is read at init, so this is a reboot
+}
+
+static void test_library_says_what_is_missing(void) {
+	char *vllm = load_fixture("fixtures/empty-VLLM.json");
+	if (!vllm) return;
+
+	// Signed in with Google: an account is attached, and it is not the browser
+	// session the library needs.
+	write_session_file("access_token=fake\nrefresh_token=fake\nexpires_at=0\n");
+	CHECK(ytmusic_logged_in());
+	fake_reset();
+	fake_reply("youtubei/v1/browse", 200, vllm);
+	ytmusic_item_t items[YTMUSIC_ITEMS_MAX];
+	char error[192] = "";
+	int count = ytmusic_browse_items("VLLM", items, YTMUSIC_ITEMS_MAX, error, sizeof(error));
+	CHECK(count == -1);
+	CHECK(strcmp(error, "ytmusic_library_needs_session") == 0);
+
+	// The imported session: the same empty page is then an honest empty list,
+	// with nothing said about the account.
+	write_session_file("cookie=SID=x; SAPISID=abcdefghijklmnop; HSID=y\n");
+	fake_reset();
+	fake_reply("youtubei/v1/browse", 200, vllm);
+	error[0] = '\0';
+	count = ytmusic_browse_items("VLLM", items, YTMUSIC_ITEMS_MAX, error, sizeof(error));
+	CHECK(count == 0);
+	CHECK(error[0] == '\0');
+
+	ytmusic_logout();
+	CHECK(!ytmusic_logged_in());
+	free(vllm);
+}
+
 int main(void) {
 	FILE *seed = fopen(".build/test_ytmusic_config.ini", "w");
 	if (seed) {
@@ -356,6 +424,7 @@ int main(void) {
 	test_unreadable_relay_names_itself();
 	test_unreachable_relay_names_itself();
 	test_real_device_pages();
+	test_library_says_what_is_missing();
 
 	if (failures) {
 		fprintf(stderr, "%d failure%s\n", failures, failures == 1 ? "" : "s");

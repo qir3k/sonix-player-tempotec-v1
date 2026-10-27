@@ -70,6 +70,13 @@ carrying such a token comes back empty instead of failing, which is why a
 session signed in that way used to make search return nothing. If a player was
 set up before this change, sign in again so the new scope is granted.
 
+**This token alone does not fill Favourites.** The music endpoints refuse a
+Google sign-in token when it is asked for the library and answer with an empty
+page rather than an error, so the liked songs and your own playlists need the
+imported session of Option 1. Where the player is signed in that way and
+Favourites is opened, it now says what is missing instead of showing an empty
+list.
+
 ## What the page does
 
 - **Search** — songs. A row plays; an album or playlist row opens its own page.
@@ -77,18 +84,55 @@ set up before this change, sign in again so the new scope is granted.
   singles", "Trending", …). Tapping a carousel lists its cards without another
   request.
 - **Top songs** — the charts page.
-- **Favourites** — the liked songs of the signed-in account. Needs Option 1 or 2.
+- **Favourites** — the liked songs of the account. Needs Option 1: the imported
+  browser session is the only credential Google's music endpoints accept for the
+  library, and where it is missing the player says so rather than listing
+  nothing.
 - **Podcasts** — a podcast search. A show opens its episode list.
+- **Artwork** — every row draws the sleeve its entry came with, the same shared
+  cover loader the Tidal, Qobuz and Podcasts tabs use. The images are kept on
+  the card under `.local/qobuz-art`, so a second look at a list downloads
+  nothing.
 
 Selecting a track resolves an audio-only AAC stream, caches it temporarily under
 `/tmp/sonix-ytmusic`, and hands that file to the player's existing decoder, which
 reads both flat and fragmented (DASH) MP4 — the form YouTube serves.
 
-Playback uses the phone app's player endpoint, which answers with plain,
-un-ciphered media URLs. The web client's reply is ciphered and needs a
-JavaScript engine the device does not have, and it also demands a signed-in
-session, so it is only tried first when a session has been imported; the phone
-client answers either way. Nothing here requires signing in.
+## Playback and the relay
+
+Google demands a browser-grade attestation — a PO token its JavaScript computes —
+from every first-party client before it hands out media, and this device has no
+JavaScript engine. So playback goes through a relay you name yourself:
+
+```ini
+[ytmusic]
+relay_base = http://192.168.1.20:8010
+```
+
+in `/usr/data/device_config.ini` — the same file the player writes its own
+settings to. Without one, search and browsing still work and starting a track
+says what is missing.
+
+`sonix-player/tools/ytmusic-relay.py` is that relay: a single file, on any
+machine the player can reach (the PC on the same network is the natural place).
+It needs `yt-dlp`, which runs the attestation:
+
+```sh
+pip install yt-dlp
+python ytmusic-relay.py            # listens on 0.0.0.0:8010
+```
+
+It answers the two endpoints the player asks for. `/streams/<video-id>` is the
+Piped-shaped reply — title, artist, duration, and the one audio stream to fetch —
+and `/audio/<video-id>` is those audio bytes, fetched by the relay and passed on.
+
+That second endpoint is the point: the media URL `yt-dlp` resolves is bound to the
+address that resolved it, so fetched from the player — a different client on a
+different address — Google answers 403, and it is also several thousand
+characters long, past what the player's own URL buffer holds. Both of those show
+up as "could not reach the stream". A short URL on the LAN has neither problem,
+and the audio-only filter stays where it was: the relay offers m4a/AAC only, and
+never fetches the video.
 
 Search and chart results inside explicitly marked ad, sponsored or promoted
 renderers are skipped, and before playback the player checks that YouTube
@@ -101,5 +145,6 @@ network-wide ad blocker, and it does not include SponsorBlock.
 An account Google will not honour is answered with an empty page rather than an
 error. For the public pages the player notices that and asks again as a
 signed-out visitor, so search, Explore and Top songs keep working. Favourites
-has no such fallback: if it is empty while the sign-in still shows, import a
-fresh session.
+has no such fallback: a signed-in player whose session cannot serve the library
+is told to import one, and an imported session that has expired — they do —
+does it with a fresh one.

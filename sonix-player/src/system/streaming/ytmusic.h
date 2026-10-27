@@ -11,6 +11,12 @@
 #define YTMUSIC_URL_MAX 2048
 #define YTMUSIC_BROWSE_ID_MAX 128
 #define YTMUSIC_ITEMS_MAX 24
+// A row's artwork URL: the largest size the page offers, which for the WEB_REMIX
+// client is the short yt3.googleusercontent.com form, a little over 130
+// characters. Rows are held in arrays of a hundred-odd entries, so the buffer is
+// kept to the shape that is actually served rather than the 2 KB a stream URL
+// needs; a URL longer than this leaves the row with its placeholder glyph.
+#define YTMUSIC_ART_URL_MAX 160
 #define YTMUSIC_SECTIONS_MAX 6
 #define YTMUSIC_SECTION_ITEMS_MAX 12
 
@@ -41,6 +47,9 @@ typedef struct {
 	char browse_id[YTMUSIC_BROWSE_ID_MAX];
 	char title[YTMUSIC_TITLE_MAX];
 	char subtitle[YTMUSIC_NAME_MAX];
+	// The artwork the list draws on the row, and empty when the page carried
+	// none: the row then keeps the glyph it was built with.
+	char thumbnail[YTMUSIC_ART_URL_MAX];
 	int duration;
 } ytmusic_item_t;
 
