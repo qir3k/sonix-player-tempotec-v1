@@ -12,6 +12,7 @@
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/shell/popover.h"
 #include "src/gui/shell/settingsrow.h"
+#include "src/gui/shell/spinner.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
 #include "src/gui/shell/toast.h"
@@ -88,6 +89,13 @@ static bool login_busy;
 static int login_elapsed;
 static unsigned login_generation;
 
+// The album a downloaded song lands in. A song row's own second column names the
+// album where YouTube sends one; an album's own track list does not, so the
+// title of the list the song was opened from stands in for it. Empty when
+// neither did, and the downloader's plain "Unknown album" is the honest answer
+// then.
+static char list_album[YTMUSIC_TITLE_MAX];
+
 // The rows of the home page: which of them are there, and in what order. Both
 // are the page's own setting, kept in the config as the numbers below -- the
 // order as one list, the switched-off ones as another -- so somebody who opens
@@ -129,6 +137,7 @@ static void home_build(void);
 // The three dots a row that plays carries instead of a chevron; defined with the
 // playing code below, used where the rows are built.
 static void row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item);
+static void track_from_item(const ytmusic_item_t *item, ytmusic_track_t *track);
 
 // Whether the network is really there. Every row on this page is a request to
 // YouTube, and with no IP address each one ends in a generic error that does
@@ -220,6 +229,93 @@ static void end_busy(void) {
 	pthread_mutex_lock(&page_lock);
 	page_busy = false;
 	pthread_mutex_unlock(&page_lock);
+}
+
+// ---------------------------------------------------------------------------
+// the loading card
+//
+// A track is downloaded whole before it plays, which over a public instance is
+// tens of seconds -- long enough that a page which says nothing looks like a
+// page that did not notice the tap. The card says what is happening and how far
+// along it is, and it swallows taps so a second press cannot start a second
+// download.
+// ---------------------------------------------------------------------------
+
+static lv_obj_t *loading_veil;
+static lv_obj_t *loading_label;
+static lv_obj_t *loading_bar;
+static lv_timer_t *loading_timer;
+
+static void loading_show(void);
+static void loading_hide(void);
+
+static void loading_poll(lv_timer_t *timer) {
+	(void)timer;
+	int percent = -1;
+	bool running = false;
+	ytmusic_download_progress(&percent, &running);
+	char text[96];
+	if (percent >= 0) {
+		snprintf(text, sizeof(text), "%s  %d%%", tr("downloading"), percent);
+	} else {
+		snprintf(text, sizeof(text), "%s", tr("downloading"));
+	}
+	if (loading_label) lv_label_set_text(loading_label, text);
+	if (loading_bar && percent >= 0) lv_bar_set_value(loading_bar, percent, LV_ANIM_OFF);
+}
+
+static void loading_build(void) {
+	if (loading_veil) return;
+	loading_veil = lv_obj_create(lv_layer_top());
+	lv_obj_set_size(loading_veil, lv_pct(100), lv_pct(100));
+	lv_obj_set_style_bg_color(loading_veil, lv_color_black(), 0);
+	lv_obj_set_style_bg_opa(loading_veil, LV_OPA_40, 0);
+	lv_obj_set_style_border_width(loading_veil, 0, 0);
+	lv_obj_set_style_pad_all(loading_veil, 0, 0);
+	lv_obj_add_flag(loading_veil, LV_OBJ_FLAG_CLICKABLE); // the tap stops here
+	lv_obj_clear_flag(loading_veil, LV_OBJ_FLAG_SCROLLABLE);
+
+	lv_obj_t *card = lv_obj_create(loading_veil);
+	lv_obj_set_size(card, bp_pick(210, 250), LV_SIZE_CONTENT);
+	lv_obj_add_style(card, &theme_style_card, 0);
+	lv_obj_set_style_radius(card, bp_tile_radius(), 0);
+	lv_obj_set_style_border_width(card, 0, 0);
+	lv_obj_set_style_shadow_width(card, 0, 0);
+	lv_obj_set_style_pad_all(card, bp_pick(12, 16), 0);
+	lv_obj_set_style_pad_row(card, 10, 0);
+	lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_center(card);
+
+	spinner_create(card, &icon_loader_big);
+
+	loading_label = lv_label_create(card);
+	lv_obj_add_style(loading_label, &theme_style_text, 0);
+	lv_obj_set_style_text_font(loading_label, &font_ui_20, 0);
+	lv_label_set_text(loading_label, tr("downloading"));
+
+	loading_bar = lv_bar_create(card);
+	lv_obj_set_size(loading_bar, lv_pct(100), 6);
+	lv_bar_set_range(loading_bar, 0, 100);
+	lv_bar_set_value(loading_bar, 0, LV_ANIM_OFF);
+
+	loading_timer = lv_timer_create(loading_poll, 150, NULL);
+	if (loading_timer) lv_timer_pause(loading_timer);
+}
+
+static void loading_show(void) {
+	loading_build();
+	if (!loading_veil) return;
+	lv_obj_remove_flag(loading_veil, LV_OBJ_FLAG_HIDDEN);
+	lv_obj_move_foreground(loading_veil);
+	if (loading_timer) lv_timer_resume(loading_timer);
+	loading_poll(NULL);
+}
+
+static void loading_hide(void) {
+	if (loading_timer) lv_timer_pause(loading_timer);
+	if (loading_veil) lv_obj_add_flag(loading_veil, LV_OBJ_FLAG_HIDDEN);
 }
 
 static lv_obj_t *ytmusic_corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph,
@@ -761,6 +857,7 @@ static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int coun
 static void playback_done(void *data) {
 	play_result_t *result = data;
 	if (!result) return;
+	loading_hide();
 	end_busy();
 	if (result->ok) {
 		player_play_file(result->path);
@@ -792,15 +889,11 @@ static void play_item(const ytmusic_item_t *item) {
 		toast_error("ytmusic_out_of_memory");
 		return;
 	}
-	snprintf(result->track.id, sizeof(result->track.id), "%s", item->id);
-	snprintf(result->track.title, sizeof(result->track.title), "%s", item->title);
-	// A row's subtitle is the artist, or the show an episode belongs to.
-	snprintf(result->track.artist, sizeof(result->track.artist), "%s", item->subtitle);
-	// The row's cover goes with the track: the downloader fetches it beside the
-	// audio, which is where the player looks for a file's artwork.
-	snprintf(result->track.thumbnail, sizeof(result->track.thumbnail), "%s", item->thumbnail);
+	track_from_item(item, &result->track);
+	loading_show();
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, playback_worker, result) != 0) {
+		loading_hide();
 		end_busy();
 		free(result);
 		toast_error("ytmusic_playback_failed");
@@ -824,6 +917,11 @@ static void track_from_item(const ytmusic_item_t *item, ytmusic_track_t *track) 
 	snprintf(track->title, sizeof(track->title), "%s", item->title);
 	// A row's subtitle is the artist, or the show an episode belongs to.
 	snprintf(track->artist, sizeof(track->artist), "%s", item->subtitle);
+	// The album the row named, or the list it was opened from: that is what
+	// makes the download land in a folder with a name instead of "Unknown
+	// album". The tag file written beside the audio carries it, and the keep
+	// worker reads the folder from the tag.
+	snprintf(track->album, sizeof(track->album), "%s", item->album[0] ? item->album : list_album);
 	// The row's cover goes with the track: the downloader fetches it beside the
 	// audio, which is where the player looks for a file's artwork.
 	snprintf(track->thumbnail, sizeof(track->thumbnail), "%s", item->thumbnail);
@@ -842,6 +940,7 @@ typedef struct {
 static void save_done(void *data) {
 	save_result_t *result = data;
 	if (!result) return;
+	loading_hide();
 	end_busy();
 	if (!result->ok) toast_error(result->error[0] ? result->error : "ytmusic_playback_failed");
 	free(result);
@@ -851,6 +950,7 @@ static void *save_worker(void *arg) {
 	save_result_t *result = arg;
 	result->ok = ytmusic_download_for_playback(&result->track, result->path, sizeof(result->path),
 											   result->error, sizeof(result->error));
+
 	if (result->ok && !streamkeep_keep(result->path, true)) {
 		// No card, or one the computer is using: the keep worker records why
 		// without a toast of its own, so the reason is read back here.
@@ -878,8 +978,10 @@ static void row_menu_save(void *user) {
 		return;
 	}
 	track_from_item(item, &result->track);
+	loading_show();
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, save_worker, result) != 0) {
+		loading_hide();
 		end_busy();
 		free(result);
 		toast_error("ytmusic_playback_failed");
@@ -919,6 +1021,13 @@ static void row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item) {
 
 static bool start_list_request(list_kind_t kind, bool to_tracks, ytmusic_filter_t filter,
 							   const char *query, const char *browse_id, const char *title) {
+	// A search, the charts, the liked songs or Explore starts a new context: the
+	// album folder of a downloaded song comes from the list it was opened in, and
+	// a card's title is only meaningful for that card's own tracks.
+	if (kind == LIST_SEARCH || !browse_id || strcmp(browse_id, "FEmusic_charts") == 0 ||
+		strcmp(browse_id, "VLLM") == 0 || strncmp(browse_id, "FEmusic_", 8) == 0) {
+		list_album[0] = '\0';
+	}
 	if (!begin_busy()) return false;
 	list_result_t *result = calloc(1, sizeof(*result));
 	if (!result) {
@@ -1011,6 +1120,9 @@ static void item_clicked_cb(lv_event_t *e) {
 		item = &track_items[index];
 	}
 	if (item->kind == YTMUSIC_ITEM_CONTAINER) {
+		// Everything opened from here belongs to this list: an album's own
+		// track list does not name the album on its rows.
+		snprintf(list_album, sizeof(list_album), "%s", item->title);
 		start_list_request(LIST_BROWSE, true, YTMUSIC_FILTER_SONGS, NULL, item->browse_id, item->title);
 	} else {
 		play_item(item);
