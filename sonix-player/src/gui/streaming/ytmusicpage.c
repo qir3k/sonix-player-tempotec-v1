@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "src/gui/board_profile.h"
+#include "src/gui/library/browser.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
@@ -344,6 +345,24 @@ static void open_settings_cb(lv_event_t *e) {
 	(void)e;
 	home_refresh_session_rows();
 	switch_screen(settings_screen);
+}
+
+// What "Download" in a row's menu leaves behind: the song itself, in the card's
+// own folder. The downloads here are files rather than a queue -- the copy is
+// already in the library, with its tags and sleeve -- so the list of them is
+// the music browser opened on that folder, where they can be played, renamed or
+// deleted like anything else on the card.
+static void open_downloads_cb(lv_event_t *e) {
+	(void)e;
+	const char *root = storage_sd_root();
+	if (!root || !root[0]) {
+		toast_error("download_no_card");
+		return;
+	}
+	char folder[600];
+	snprintf(folder, sizeof(folder), "%s/Music/YouTube Music", root);
+	browser_open_dir_public(folder);
+	switch_screen(browser_screen);
 }
 
 static void home_refresh_session_rows(void) {
@@ -1899,8 +1918,13 @@ void ytmusicpage_init(gui_config_t *cfg) {
 	ytmusic_screen = lv_obj_create(NULL);
 	lv_obj_add_style(ytmusic_screen, &theme_style_screen, 0);
 	home_container = settingsrow_page(ytmusic_screen, cfg, "YouTube Music");
-	settingsrow_title_corner_slots(settingsrow_page_title(ytmusic_screen), cfg, 1);
+	// The Tidal page's corner, in the order the music tab wears it: the gear on
+	// the right, downloads beside it, the magnifier furthest left. Slots count
+	// from the right edge, so slot 2 is the leftmost of the three.
+	settingsrow_title_corner_slots(settingsrow_page_title(ytmusic_screen), cfg, 3);
 	ytmusic_corner_button(cfg, 0, &icon_music_settings, open_settings_cb);
+	ytmusic_corner_button(cfg, 1, &icon_podcast_downloaded, open_downloads_cb);
+	ytmusic_corner_button(cfg, 2, &icon_search, search_cb);
 	home_build();
 	lv_obj_add_event_cb(ytmusic_screen, home_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	player_sheet_attach_drag(home_container, true);
