@@ -37,6 +37,7 @@
 #include <string.h>
 
 #include "src/system/core/config.h"
+#include "src/system/decode/growfile.h"
 #include "src/system/net/http.h"
 #include "src/system/streaming/streamkeys.h"
 #include "src/system/streaming/ytmusic.h"
@@ -212,6 +213,13 @@ char *http_url_encode(const char *in, char *out, size_t out_size) {
 
 #define VID "dQw4w9WgXcQ"
 
+// Where the playback cache is written. On the device it is \tmp; a Windows host
+// can refuse every create under that folder (ACLs, or security software
+// answering EACCES), so the suite points SONIX_YTMUSIC_CACHE at a folder it owns
+// and checks the downloads there instead of skipping them.
+#define YTM_CACHE ".build/ytmusic-cache"
+#define YTM_CACHE_PROBE YTM_CACHE "/probe.txt"
+
 static const char RELAY_GOOD[] =
 	"{\"title\":\"Never Gonna Give You Up\",\"uploader\":\"Rick Astley\",\"duration\":213,"
 	"\"audioStreams\":["
@@ -346,6 +354,7 @@ static void test_instances_are_asked_before_the_device(void) {
 // them -- in pieces, the way a proxy that hands back less than was asked for
 // does. The file must still hold every byte: a short piece is not an ending,
 // and taking it for one is what ended a track after a minute.
+
 static char AUDIO_BYTES[4096];
 static char COVER_BYTES[4096];
 
@@ -359,18 +368,15 @@ static void test_download_walks_past_a_refused_stream(void) {
 	fake_reply("inv2.test/latest_version", 206, AUDIO_BYTES);
 	// Every ranged reply carries 1000 bytes of the 4095 asked for.
 	fake_range_cap = 1000;
-	// The playback cache is /tmp/sonix-ytmusic, as it is on the device. A
-	// Windows host can be stopped from writing there by its own security
-	// software -- the CRT answers EACCES, this code has nothing to do with it
-	// -- and the walk cannot be checked where a file cannot be written.
-	FILE *writable = fopen("/tmp/sonix-ytmusic/probe.txt", "wb");
+	// The walk cannot be checked where a file cannot be written at all.
+	FILE *writable = fopen(YTM_CACHE_PROBE, "wb");
 	if (!writable) {
-		fprintf(stderr, "  skipped: this host cannot write /tmp/sonix-ytmusic (%s)\n",
+		fprintf(stderr, "  skipped: this host cannot write %s (%s)\n", YTM_CACHE,
 				strerror(errno));
 		return;
 	}
 	fclose(writable);
-	remove("/tmp/sonix-ytmusic/probe.txt");
+	remove(YTM_CACHE_PROBE);
 	config_set("ytmusic", "instances", "https://inv.test,https://inv2.test");
 	set_relay("");
 	CHECK(ytmusic_source_select("auto"));
@@ -861,9 +867,15 @@ static void test_region_choice(void) {
 }
 
 static void test_cache_owns_its_own_downloads(void) {
-	CHECK(ytmusic_cache_owns("/tmp/sonix-ytmusic/dQw4w9WgXcQ.m4a"));
-	CHECK(!ytmusic_cache_owns("/tmp/sonix-ytmusic/dQw4w9WgXcQ.jpg"));
-	CHECK(!ytmusic_cache_owns("/tmp/sonix-ytmusic/sub/dQw4w9WgXcQ.m4a"));
+	// The folder is the one the cache is actually using, which the suite moved
+	// to its own directory at start-up.
+	char own[512];
+	snprintf(own, sizeof(own), "%s/dQw4w9WgXcQ.m4a", YTM_CACHE);
+	CHECK(ytmusic_cache_owns(own));
+	snprintf(own, sizeof(own), "%s/dQw4w9WgXcQ.jpg", YTM_CACHE);
+	CHECK(!ytmusic_cache_owns(own));
+	snprintf(own, sizeof(own), "%s/sub/dQw4w9WgXcQ.m4a", YTM_CACHE);
+	CHECK(!ytmusic_cache_owns(own));
 	CHECK(!ytmusic_cache_owns("/mnt/sd_0/Music/Artist/song.m4a"));
 	CHECK(!ytmusic_cache_owns(NULL));
 }
@@ -973,12 +985,101 @@ static void test_netscape_cookie_file_is_imported(void) {
 	CHECK(!ytmusic_logged_in());
 }
 
+// A song must not wait for its whole file. The instance serves it in pieces;
+// the player is handed the path as soon as enough of it is on the disk, and the
+// rest keeps arriving while growfile keeps the decoder waiting for it.
+// The size the canned stream info advertises, so the completeness check the
+// downloader makes is satisfied by the body the fake serves.
+static char STREAM_BYTES[4096];
+
+typedef struct {
+	int calls;
+	char path[512];
+	long size_when_ready;
+	bool growing_when_ready;
+} ready_probe_t;
+
+static void stream_ready(const char *path, void *user) {
+	ready_probe_t *probe = user;
+	probe->calls++;
+	snprintf(probe->path, sizeof(probe->path), "%s", path);
+	FILE *f = fopen(path, "rb");
+	if (f) {
+		fseek(f, 0, SEEK_END);
+		probe->size_when_ready = ftell(f);
+		fclose(f);
+	}
+	probe->growing_when_ready = growfile_is_growing(path);
+}
+
+static void test_playback_starts_before_the_download_ends(void) {
+	// A container shaped like the ones the instances serve: an ftyp box, then the
+	// moov index within the first few dozen bytes, then the payload. The index
+	// has to be in the part that arrives first, because the start waits for it.
+	// The box sizes are letters rather than the zero bytes a real file has: this
+	// body is a C string the fake server measures with strlen().
+	static const char MP4_HEAD[] = "IIII" "ftypM4A " "MMMM" "M4A mp42IIII" "moov";
+	memset(STREAM_BYTES, 'B', sizeof(STREAM_BYTES) - 1);
+	memcpy(STREAM_BYTES, MP4_HEAD, sizeof(MP4_HEAD) - 1);
+	fake_reset();
+	fake_reply("inv.test/api/v1/videos/", 200, INVIDIOUS_FORMATS);
+	fake_reply("inv.test/latest_version", 206, STREAM_BYTES);
+	// Pieces, the way an instance that proxies its own upstream replies.
+	fake_range_cap = 1000;
+	FILE *writable = fopen(YTM_CACHE_PROBE, "wb");
+	if (!writable) {
+		fprintf(stderr, "  skipped: this host cannot write %s (%s)\n", YTM_CACHE,
+				strerror(errno));
+		return;
+	}
+	fclose(writable);
+	remove(YTM_CACHE_PROBE);
+	config_set("ytmusic", "instances", "https://inv.test");
+	set_relay("");
+	CHECK(ytmusic_source_select("auto"));
+
+	ytmusic_track_t track;
+	memset(&track, 0, sizeof(track));
+	snprintf(track.id, sizeof(track.id), "%s", VID);
+	snprintf(track.title, sizeof(track.title), "%s", "Never Gonna Give You Up");
+
+	ready_probe_t probe;
+	memset(&probe, 0, sizeof(probe));
+	char path[512] = "", error[192] = "";
+	bool ok = ytmusic_stream_for_playback(&track, path, sizeof(path), stream_ready, &probe,
+									  error, sizeof(error));
+	CHECK(ok);
+	if (!ok) fprintf(stderr, "  the stream gave up: %s\n", error);
+	// Told once, and about the file the caller was given.
+	CHECK(probe.calls == 1);
+	CHECK(probe.path[0] != '\0');
+	CHECK(strcmp(probe.path, path) == 0);
+	// Started on a part of it, while it was still being written.
+	CHECK(probe.size_when_ready > 0);
+	CHECK((size_t)probe.size_when_ready < sizeof(STREAM_BYTES) - 1);
+	CHECK(probe.growing_when_ready);
+	// And once the transfer is over the decoder sees an ordinary, whole file.
+	CHECK(!growfile_is_growing(path));
+	FILE *f = ok ? fopen(path, "rb") : NULL;
+	CHECK(f != NULL);
+	if (f) {
+		fseek(f, 0, SEEK_END);
+		CHECK(ftell(f) == (long)sizeof(STREAM_BYTES) - 1);
+		fclose(f);
+	}
+}
+
 int main(void) {
 	FILE *seed = fopen(".build/test_ytmusic_config.ini", "w");
 	if (seed) {
 		fclose(seed);
 	}
 	config_init(".build/test_ytmusic_config.ini");
+	// The cache the download checks write into: this suite's own folder, so a
+	// host that refuses 	mp still runs them.
+	static char cache_env[] = "SONIX_YTMUSIC_CACHE=" YTM_CACHE;
+	putenv(cache_env);
+	mkdir(YTM_CACHE, 0700);
 	streamkeys_init();
 	ytmusic_init();
 
@@ -987,6 +1088,7 @@ int main(void) {
 	test_instances_are_asked_before_the_device();
 	test_phone_player_reply_plays_on_its_own();
 	test_download_walks_past_a_refused_stream();
+	test_playback_starts_before_the_download_ends();
 	test_relay_pin_asks_only_the_relay();
 	test_pinned_invidious_instance_plays();
 	test_pinned_piped_instance_plays();

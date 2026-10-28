@@ -183,10 +183,26 @@ bool ytmusic_source_select(const char *value);
 // no trailing slash.
 int ytmusic_instance_bases(char out[][YTMUSIC_SOURCE_MAX], int limit);
 
-// Fetches one AAC/MP4 audio stream to the temporary playback cache. This is a
-// blocking operation; call from a worker, not from the UI or audio thread.
+// Fetches one AAC/MP4 audio stream to the temporary playback cache and returns
+// only when the file is whole. This is a blocking operation; call from a worker,
+// not from the UI or audio thread. Used by the explicit "keep on card"
+// download, which has nothing to play while it runs.
 bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
 								   char *error, size_t error_size);
+
+// The same download, for a song the listener is waiting to hear. `ready` is
+// called once, from this worker thread, as soon as enough of the file is on the
+// disk for the decoder to open it -- `path` being the file to hand to the
+// player. The transfer then carries on behind playback, so a song starts in
+// seconds instead of after the whole thing has arrived, and `growfile` is what
+// lets the decoder wait for the rest of each frame. Blocking; call from a
+// worker. Returns false when nothing could be played at all: a failure after
+// `ready` was called still returns true, because the listener already has
+// audio and the file simply ends where the transfer did.
+typedef void (*ytmusic_ready_cb)(const char *path, void *user);
+bool ytmusic_stream_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
+								 ytmusic_ready_cb ready, void *user,
+								 char *error, size_t error_size);
 
 // Whether `path` is a finished download of that cache -- what the player was
 // handed for a YouTube Music song, and the only kind of file the "save to the

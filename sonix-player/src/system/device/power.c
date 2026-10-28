@@ -29,6 +29,7 @@
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/podcastdl.h"
 #include "src/system/streaming/tidalcache.h"
+#include "src/system/streaming/ytmusic.h"
 #include "src/system/device/adb.h"
 #include "src/system/library/library.h"
 #include "src/system/remote/airplay.h"
@@ -752,6 +753,19 @@ static bool streaming_playback_active(void) {
 	return subsonicstream_owns(path) || qobuzcache_owns(path) || tidalcache_owns(path) || podcastcache_owns(path);
 }
 
+// A YouTube Music track on its way to the player. Most of the transfer -- since
+// a song starts as soon as part of it has arrived -- runs while something is
+// playing and is covered by that. The seconds before the first note are what
+// this covers, and they are exactly the seconds in which the radio being parked
+// would end the song before it began.
+static bool ytmusic_transfer_busy(void) {
+	int percent = -1;
+	bool running = false;
+	ytmusic_download_progress(&percent, &running);
+	(void)percent;
+	return running;
+}
+
 // Whether the network is the point rather than an idle drain: an AirPlay
 // receiver waiting to be found, a DLNA server, a browser halfway through an
 // upload, a station streaming, a Qobuz/Tidal/podcast fetch or a Last.fm request
@@ -770,6 +784,7 @@ static bool wifi_in_use(void) {
 		   wifitransfer_get_enabled() || qobuzcache_downloading_id() > 0 ||
 		   qobuzcache_network_wanted() || tidalcache_downloading_id() > 0 || tidalcache_network_wanted() ||
 		   podcastcache_downloading_id() > 0 || podcastcache_network_wanted() || podcastdl_busy() ||
+		   ytmusic_transfer_busy() ||
 		   lastfm_network_wanted() || listenbrainz_network_wanted() || ota_busy();
 }
 
@@ -827,6 +842,7 @@ static bool player_is_busy(bool playing, uint32_t input_idle) {
 		   audiobookdb_scan_running() || wifitransfer_running() || dlna_running() || airplay_running() ||
 		   sonixlink_is_connected() || // a phone driving the player, not a switch left on
 		   qobuzcache_downloading_id() > 0 || tidalcache_downloading_id() > 0 || podcastcache_downloading_id() > 0 ||
+		   ytmusic_transfer_busy() ||  // the seconds before a YouTube song is audible
 		   ota_busy(); // a firmware update being fetched
 }
 

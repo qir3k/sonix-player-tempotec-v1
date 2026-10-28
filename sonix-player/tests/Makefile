@@ -468,7 +468,7 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 YTM_SRC = test_ytmusic.c win_compat_host.c $(ROOT)/src/system/streaming/ytmusic.c \
           $(ROOT)/src/system/streaming/streamkeys.c \
           $(ROOT)/src/system/core/json.c $(ROOT)/src/system/core/config.c \
-          $(ROOT)/src/system/core/sha1.c
+          $(ROOT)/src/system/core/sha1.c $(ROOT)/src/system/decode/growfile.c
 .PHONY: ytmusic
 ytmusic: $(BUILD)/test_ytmusic
 	$(BUILD)/test_ytmusic
