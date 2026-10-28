@@ -23,6 +23,7 @@
 #include "src/gui/wireless/sonixlink.h"
 #include "src/gui/wireless/wifitransfer.h"
 #include "src/gui/shell/theme.h"
+#include "src/system/addons/addons.h"
 #include "src/system/playback/audiobook.h"
 #include "src/system/streaming/podcast.h"
 #include "src/system/streaming/podcastcache.h"
@@ -2200,6 +2201,12 @@ static void sleep_page_cb(lv_event_t *e) {
 					   : kind == SLEEPTIMER_AUDIOBOOK ? audiobooksettings_screen
 					   : kind == SLEEPTIMER_RADIO	 ? radiopage_settings_screen()
 													  : podcastpage_settings_screen();
+	// The audiobook options are built with the rest of that module: with it
+	// off in Plugins there is no page behind the hold, and opening the empty
+	// screen the shell pre-allocates would show nothing at all.
+	if (kind == SLEEPTIMER_AUDIOBOOK && !addons_enabled("audiobooks")) {
+		screen = NULL;
+	}
 	open_page(screen);
 }
 

@@ -12,6 +12,7 @@
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/theme.h"
 #include "src/gui/streaming/streaming.h"
+#include "src/system/addons/addons.h"
 #include "src/system/core/lang.h"
 
 lv_obj_t *menuarrange_screen;
@@ -116,6 +117,12 @@ static void repaint(void) {
 	int row_height = bp_pick(42, 60);
 	for (int i = 0; i < count; i++) {
 		int id = order[i];
+		// The library slot is off in Plugins: the page it stands for was not
+		// built, so there is nothing here to order or to switch on.
+		if (shown_section == MENUORDER_HOME && id == MENU_HOME_AUDIOBOOKS && !main_menu_books() &&
+			!addons_enabled("audiobooks")) {
+			continue;
+		}
 		lv_obj_t *row = lv_obj_create(rows);
 		lv_obj_set_size(row, lv_pct(100), row_height);
 		lv_obj_add_style(row, &theme_style_card, 0);

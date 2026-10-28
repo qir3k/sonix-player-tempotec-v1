@@ -17,6 +17,7 @@ static const addon_t ADDONS[] = {
 	{"qobuz", "qobuz", "addon_qobuz_note"},
 	{"ytmusic", "YouTube Music", "addon_ytmusic_note"},
 	{"podcasts", "podcasts", "addon_podcasts_note"},
+	{"audiobooks", "audiobooks", "addon_audiobooks_note"},
 	{"subsonic", "subsonic", "addon_subsonic_note"},
 	{"radio", "radio", "addon_radio_note"},
 	{"calculator", "calculator", "addon_calculator_note"},

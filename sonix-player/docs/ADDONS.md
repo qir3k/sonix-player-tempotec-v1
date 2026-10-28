@@ -26,6 +26,7 @@ next start.
 | `qobuz` | Qobuz pages, playlists, offline cache | Streaming |
 | `ytmusic` | YouTube Music search, charts, Explore, downloads | Streaming |
 | `podcasts` | Podcast search, subscriptions, saved episodes | Streaming |
+| `audiobooks` | The Audiobooks section: books, series, authors, its settings | Home, More |
 | `subsonic` | A Subsonic / Navidrome server | Streaming |
 | `radio` | Internet radio and the station directory | Streaming |
 | `calculator` | The calculator | More |

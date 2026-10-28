@@ -802,8 +802,13 @@ void gui_init(gui_config_t *cfg) {
 	search_init(cfg);
 	medialist_init(cfg);
 	playlistpage_init(cfg);
-	audiobookextras_init(cfg); // the bookmarks and summary pages
-	audiobooks_init(cfg);
+	// The library's own section, behind the same kind of switch: with it off
+	// its pages are never built and the two tiles that lead to them are not
+	// drawn (see main_menu.c and morepage.c).
+	if (addons_enabled("audiobooks")) {
+		audiobookextras_init(cfg); // the bookmarks and summary pages
+		audiobooks_init(cfg);
+	}
 	chapters_init(cfg);
 	lyricsearch_init(cfg);
 	trackmenu_init(cfg);
