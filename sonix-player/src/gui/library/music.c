@@ -76,7 +76,6 @@ static lv_obj_t *tokyo_shortcut_card;
 static lv_obj_t *tokyo_recent_card;
 static lv_obj_t *tokyo_recent_empty;
 static lv_obj_t *recent_heading;
-static lv_obj_t *tokyo_scan_button;
 static int cached_queue_count = -1;
 static int cached_queue_current = -2;
 static unsigned cached_queue_revision = (unsigned)-1;
@@ -106,6 +105,10 @@ static void open_playlists(void) { playlistpage_open(); }
 static void open_most_played(void) { medialist_open_most_played(); }
 static void open_browse(void) { switch_screen(browser_screen); }
 
+// The scan is an ordinary destination now, so it needs the opener shape the
+// grid's entries take (no event) as well as the one a button takes.
+static void scan_action(void) { libraryscan_choose_folders(); }
+
 static grid_entry_t entry_for_tile(music_tile_id_t id) {
 	switch (id) {
 	case MUSIC_TILE_ALL_TRACKS:
@@ -124,6 +127,8 @@ static grid_entry_t entry_for_tile(music_tile_id_t id) {
 		return (grid_entry_t){"playlists", &icon_menu_playlist, NULL, open_playlists};
 	case MUSIC_TILE_MOST_PLAYED:
 		return (grid_entry_t){"music_most_played", &icon_menu_most_played, NULL, open_most_played};
+	case MUSIC_TILE_SCAN:
+		return (grid_entry_t){"music_scan_library", &icon_menu_file_explorer, NULL, scan_action};
 	case MUSIC_TILE_BROWSE:
 	default:
 		return (grid_entry_t){"music_browse", &icon_menu_explorer, NULL, open_browse};
@@ -166,7 +171,12 @@ static void favourites_cb(lv_event_t *e) {
 
 static void scan_cb(lv_event_t *e) {
 	(void)e;
-	libraryscan_choose_folders();
+	scan_action();
+}
+
+static void scan_row_cb(lv_event_t *e) {
+	(void)e;
+	scan_action();
 }
 
 static void music_recent_refresh(void);
@@ -213,13 +223,34 @@ static void recent_track_clicked_cb(lv_event_t *e) {
 
 static void label_set_wrapped_translation(lv_obj_t *label, const char *key, bool wrap);
 
+// Whether a destination's name has to be split over two lines to fit its width.
+//
+// This was decided by whether the name contained a space, which made "Album
+// artist" and "Most played" two-line labels while "Genres" and "Albums" beside
+// them stayed on one -- the same text in the same face, but a destination that
+// reads unlike its neighbours for a space it happens to contain. The name is
+// measured against the room it actually has instead, so a label wraps where it
+// would otherwise be ellipsized and only there.
+static bool label_needs_wrap(const char *key, int32_t width) {
+	const char *text = tr(key);
+	if (!text || !text[0] || width <= 0) {
+		return false;
+	}
+	lv_point_t size;
+	lv_text_get_size(&size, text, &font_ui_14, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+	return size.x > width;
+}
+
 static lv_obj_t *make_browse_button(lv_obj_t *parent, const char *label_key, const lv_image_dsc_t *source,
-									 theme_semantic_t tone, bool two_lines, lv_event_cb_t cb, int index) {
+									 theme_semantic_t tone, lv_event_cb_t cb, int index) {
 	lv_obj_t *button = lv_btn_create(parent);
 	music_remove_edges(button);
 	// The card's two sides and the gap between the two columns, all MUSIC_GAP:
 	// the tiles then sit as far from each other as from the card's edge.
 	int cell_width = (music_cfg->screen_width - 2 * music_cfg->padding - 3 * MUSIC_GAP) / 2;
+	// The name keeps the cell minus the button's own side padding, the glyph
+	// and the gap in front of it.
+	bool two_lines = label_needs_wrap(label_key, cell_width - 2 * 5 - 17 - 6);
 	lv_obj_set_size(button, cell_width, 36);
 	lv_obj_set_style_bg_color(button, theme_now_playing_fill(), 0);
 	lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
@@ -291,40 +322,48 @@ typedef struct {
 	const char *label;
 	const lv_image_dsc_t *icon;
 	theme_semantic_t tone;
-	bool wrap_shortcut;
 	lv_event_cb_t callback;
 } tokyo_tile_spec_t;
 
 static tokyo_tile_spec_t tokyo_spec_for_tile(music_tile_id_t id) {
 	switch (id) {
 	case MUSIC_TILE_ALL_TRACKS:
-		return (tokyo_tile_spec_t){"music_all_tracks", &icon_music2, THEME_SEMANTIC_CYAN, false, shortcut_all_tracks_cb};
+		return (tokyo_tile_spec_t){"music_all_tracks", &icon_music2, THEME_SEMANTIC_CYAN, shortcut_all_tracks_cb};
 	case MUSIC_TILE_ALBUMS:
-		return (tokyo_tile_spec_t){"albums", &icon_album, THEME_SEMANTIC_PURPLE, false, browse_albums_cb};
+		return (tokyo_tile_spec_t){"albums", &icon_album, THEME_SEMANTIC_PURPLE, browse_albums_cb};
 	case MUSIC_TILE_ARTISTS:
-		return (tokyo_tile_spec_t){"artists", &icon_artist, THEME_SEMANTIC_CYAN, false, browse_artists_cb};
+		return (tokyo_tile_spec_t){"artists", &icon_artist, THEME_SEMANTIC_CYAN, browse_artists_cb};
 	case MUSIC_TILE_ALBUM_ARTISTS:
-		return (tokyo_tile_spec_t){"music_album_artist", &icon_artist_album, THEME_SEMANTIC_BLUE, true,
+		return (tokyo_tile_spec_t){"music_album_artist", &icon_artist_album, THEME_SEMANTIC_BLUE,
 								   browse_album_artists_cb};
 	case MUSIC_TILE_GENRES:
-		return (tokyo_tile_spec_t){"music_genres", &icon_genre, THEME_SEMANTIC_AMBER, false, shortcut_genres_cb};
+		return (tokyo_tile_spec_t){"music_genres", &icon_genre, THEME_SEMANTIC_AMBER, shortcut_genres_cb};
 	case MUSIC_TILE_YEARS:
-		return (tokyo_tile_spec_t){"music_years", &icon_year, THEME_SEMANTIC_AMBER, false, shortcut_years_cb};
+		return (tokyo_tile_spec_t){"music_years", &icon_year, THEME_SEMANTIC_AMBER, shortcut_years_cb};
 	case MUSIC_TILE_PLAYLISTS:
-		return (tokyo_tile_spec_t){"playlists", &icon_list_music, THEME_SEMANTIC_GREEN, false, shortcut_playlists_cb};
+		return (tokyo_tile_spec_t){"playlists", &icon_list_music, THEME_SEMANTIC_GREEN, shortcut_playlists_cb};
 	case MUSIC_TILE_MOST_PLAYED:
-		return (tokyo_tile_spec_t){"music_most_played", &icon_most_played, THEME_SEMANTIC_PURPLE, false,
+		return (tokyo_tile_spec_t){"music_most_played", &icon_most_played, THEME_SEMANTIC_PURPLE,
 								   shortcut_most_played_cb};
+	case MUSIC_TILE_SCAN:
+		return (tokyo_tile_spec_t){"music_scan_library", &icon_refresh, THEME_SEMANTIC_CYAN, scan_row_cb};
 	case MUSIC_TILE_SEARCH:
-		return (tokyo_tile_spec_t){"search", &icon_search, THEME_SEMANTIC_AMBER, false, browse_search_cb};
+		return (tokyo_tile_spec_t){"search", &icon_search, THEME_SEMANTIC_AMBER, browse_search_cb};
 	case MUSIC_TILE_BROWSE:
 	default:
-		return (tokyo_tile_spec_t){"music_browse", &icon_folder, THEME_SEMANTIC_GREEN, false, browse_music_cb};
+		return (tokyo_tile_spec_t){"music_browse", &icon_folder, THEME_SEMANTIC_GREEN, browse_music_cb};
 	}
 }
 
 static void add_shortcut_row(lv_obj_t *card, const char *label_key, const lv_image_dsc_t *source,
-							 theme_semantic_t tone, bool wrap, lv_event_cb_t callback, int index) {
+							 theme_semantic_t tone, lv_event_cb_t callback, int index) {
+	// The row is as wide as the page's column: its own side padding, the glyph,
+	// the chevron and the two gaps come off the name's share.
+	int row_space = 0;
+	if (music_cfg) {
+		row_space = music_cfg->screen_width - 2 * music_cfg->padding - 2 * 5 - 18 - 7 - 14;
+	}
+	bool wrap = label_needs_wrap(label_key, row_space);
 	lv_obj_t *button = lv_btn_create(card);
 	music_remove_edges(button);
 	lv_obj_set_size(button, lv_pct(100), wrap ? 36 : 32);
@@ -402,20 +441,18 @@ static void tokyo_music_populate(void) {
 
 	for (int i = 0; i < browse_n; i++) {
 		tokyo_tile_spec_t spec = tokyo_spec_for_tile(active[i]);
-		bool two_lines = strchr(tr(spec.label), ' ') != NULL;
-		make_browse_button(tokyo_browse_grid, spec.label, spec.icon, spec.tone, two_lines, spec.callback, i);
+		make_browse_button(tokyo_browse_grid, spec.label, spec.icon, spec.tone, spec.callback, i);
 	}
 
 	int row_idx = 0;
 	for (int i = browse_n; i < count; i++) {
 		tokyo_tile_spec_t spec = tokyo_spec_for_tile(active[i]);
-		add_shortcut_row(tokyo_shortcut_card, spec.label, spec.icon, spec.tone, spec.wrap_shortcut, spec.callback,
-						 row_idx++);
+		add_shortcut_row(tokyo_shortcut_card, spec.label, spec.icon, spec.tone, spec.callback, row_idx++);
 	}
 	// The heart, not the star: one mark for favourites across the player, the
 	// control centre and the library.
-	add_shortcut_row(tokyo_shortcut_card, "favourites", &icon_heart_filled, THEME_SEMANTIC_RED, false,
-					 favourites_cb, row_idx++);
+	add_shortcut_row(tokyo_shortcut_card, "favourites", &icon_heart_filled, THEME_SEMANTIC_RED, favourites_cb,
+					 row_idx++);
 }
 
 static void tokyo_music_build(gui_config_t *cfg) {
@@ -567,46 +604,20 @@ static void tokyo_music_build(gui_config_t *cfg) {
 	tokyo_shortcut_card = music_shortcut_card(tokyo_music_panel);
 	tokyo_music_populate();
 
-	tokyo_scan_button = lv_btn_create(tokyo_music_panel);
-	music_remove_edges(tokyo_scan_button);
-	lv_obj_set_size(tokyo_scan_button, lv_pct(100), 34);
-	lv_obj_add_style(tokyo_scan_button, &theme_style_card, 0);
-	lv_obj_add_style(tokyo_scan_button, &theme_style_card_pressed, LV_STATE_PRESSED);
-	lv_obj_set_style_radius(tokyo_scan_button, bp_tile_radius(), 0);
-	lv_obj_set_style_border_width(tokyo_scan_button, 0, 0);
-	lv_obj_set_style_shadow_width(tokyo_scan_button, 0, 0);
-	lv_obj_set_style_pad_hor(tokyo_scan_button, 8, 0);
-	lv_obj_set_style_pad_column(tokyo_scan_button, 7, 0);
-	lv_obj_set_flex_flow(tokyo_scan_button, LV_FLEX_FLOW_ROW);
-	lv_obj_set_flex_align(tokyo_scan_button, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-	lv_obj_set_event_bubble(tokyo_scan_button, true);
-	lv_obj_add_event_cb(tokyo_scan_button, scan_cb, LV_EVENT_CLICKED, NULL);
-	lv_obj_t *scan_icon = lv_image_create(tokyo_scan_button);
-	lv_image_set_src(scan_icon, &icon_folder);
-	lv_obj_add_style(scan_icon, &theme_style_icon, 0);
-	lv_obj_set_size(scan_icon, 18, 18);
-	lv_image_set_scale(scan_icon, (uint32_t)(LV_SCALE_NONE * 18 / 32));
-	lv_image_set_inner_align(scan_icon, LV_IMAGE_ALIGN_CENTER);
-	lv_obj_set_style_image_recolor(scan_icon, theme_semantic_color(THEME_SEMANTIC_CYAN), 0);
-	lv_obj_set_style_image_recolor_opa(scan_icon, LV_OPA_COVER, 0);
-	lv_obj_t *scan_label = lv_label_create(tokyo_scan_button);
-	lv_label_set_text(scan_label, tr("music_scan_library"));
-	lv_label_set_long_mode(scan_label, LV_LABEL_LONG_DOT);
-	lv_obj_set_flex_grow(scan_label, 1);
-	lv_obj_add_style(scan_label, &theme_style_text, 0);
-	lv_obj_set_style_text_font(scan_label, &font_ui_14, 0);
-
-	// Keep the browse destinations and scan action at the top. The queue-derived
-	// Recently played section belongs at the end of the scrollable Music page,
-	// where the same MUSIC_GAP places it as any other band: it used to be pushed
-	// down by a margin measured against the fold, and that margin was rewritten
-	// whenever the page was scrolled or the queue changed -- so the band moved
-	// under the finger, and jumped back into place when the page settled.
+	// "Scan music library" is one of the destinations in the list now -- it is
+	// drawn from the saved tile arrangement like the library's own indexes, so
+	// the Rearrange main page can move it or switch it off instead of leaving
+	// a fixed row under the list that answered to no setting. The page keeps
+	// the browse destinations at the top. The queue-derived Recently played
+	// section belongs at the end of the scrollable Music page, where the same
+	// MUSIC_GAP places it as any other band: it used to be pushed down by a
+	// margin measured against the fold, and that margin was rewritten whenever
+	// the page was scrolled or the queue changed -- so the band moved under the
+	// finger, and jumped back into place when the page settled.
 	lv_obj_move_to_index(browse_card, 0);
 	lv_obj_move_to_index(tokyo_shortcut_card, 1);
-	lv_obj_move_to_index(tokyo_scan_button, 2);
-	lv_obj_move_to_index(recent_heading, 3);
-	lv_obj_move_to_index(tokyo_recent_card, 4);
+	lv_obj_move_to_index(recent_heading, 2);
+	lv_obj_move_to_index(tokyo_recent_card, 3);
 	lv_obj_update_layout(tokyo_music_panel);
 
 	player_sheet_attach_drag(tokyo_music_panel, true);
@@ -682,9 +693,6 @@ static void music_update_visibility(void) {
 		lv_obj_set_hidden(tile_grid, true);
 		lv_obj_set_hidden(empty_panel, true);
 		lv_obj_set_hidden(tokyo_music_panel, false);
-		if (tokyo_scan_button) {
-			lv_obj_set_hidden(tokyo_scan_button, !empty_library);
-		}
 	} else {
 		if (tokyo_music_panel) {
 			lv_obj_set_hidden(tokyo_music_panel, true);
