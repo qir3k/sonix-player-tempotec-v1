@@ -38,6 +38,8 @@
 #include "src/gui/gearboy/gearboysettings.h"
 #include "src/gui/flappybird/flappybird.h"
 #include "src/gui/gearboy/gearboyplay.h"
+#include "src/gui/settings/plugins.h"
+#include "src/system/addons/addons.h"
 #include "src/gui/shell/main_menu.h"
 #include "src/gui/shell/menuarrange.h"
 #include "src/gui/library/medialist.h"
@@ -706,24 +708,39 @@ void gui_init(gui_config_t *cfg) {
 	// streaming section: three services that are not implemented yet, so the
 	// page exists and is walkable but its tiles say so when tapped.
 	// radio before the section, so its tile has somewhere to point.
-	radiopage_init(cfg);
+	// Each of these builds pages that live for the rest of the run, so a module
+	// switched off in Plugins is left unbuilt here and its rows are not drawn.
+	// The gate is asked at the place that would pay for it.
+	if (addons_enabled("radio")) {
+		radiopage_init(cfg);
+	}
 	dacpage_init(cfg);
 	// After dacpage: the More section points at its pages.
-	gearboyplay_init(cfg);  // before the list: one of its rows leads here
-	gearboysettings_init(cfg); // before the page: its gear opens this
-	gearboypage_init(cfg);
-	flappybird_init(cfg);
+	if (addons_enabled("gearboy")) {
+		gearboyplay_init(cfg);  // before the list: one of its rows leads here
+		gearboysettings_init(cfg); // before the page: its gear opens this
+		gearboypage_init(cfg);
+	}
+	if (addons_enabled("flappy")) {
+		flappybird_init(cfg);
+	}
 	// before morepage: the books tile opens the shelf, and the shelf opens the
 	// reader.
-	ebookreader_init(cfg);
-	// before ebookpage: its corner button opens the bookmarks
-	ebookmarkspage_init(cfg);
-	ebooksettings_init(cfg); // likewise: the other corner button opens this
-	ebookpage_init(cfg);
+	if (addons_enabled("ebook")) {
+		ebookreader_init(cfg);
+		// before ebookpage: its corner button opens the bookmarks
+		ebookmarkspage_init(cfg);
+		ebooksettings_init(cfg); // likewise: the other corner button opens this
+		ebookpage_init(cfg);
+	}
 	// Before morepage: the More menu points at both of them.
-	calculator_init(cfg);
-	noteeditor_init(cfg); // before notes: a row of the shelf opens it
-	notes_init(cfg);
+	if (addons_enabled("calculator")) {
+		calculator_init(cfg);
+	}
+	if (addons_enabled("notes")) {
+		noteeditor_init(cfg); // before notes: a row of the shelf opens it
+		notes_init(cfg);
+	}
 	morepage_init(cfg);
 	textview_init(cfg); // before filespage: a text file tapped there opens here
 	pictureview_init(cfg); // likewise, for JPEG and PNG pictures
@@ -740,6 +757,7 @@ void gui_init(gui_config_t *cfg) {
 	remap_init(cfg);
 	ccsettings_init(cfg);
 	kblayoutpage_init(cfg); // the keyboard-language row on the same page
+	plugins_init(cfg);      // before settings: its row opens this page
 	settings_init(cfg);
 	devoptions_init(cfg);
 	processespage_init(cfg); // the processes page the devoptions entry opens
