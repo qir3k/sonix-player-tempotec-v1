@@ -69,11 +69,13 @@ typedef enum {
 	LIST_FAVOURITES,
 	LIST_RECENT,
 	LIST_CUSTOM, // the stations written down in radio.txt
+	LIST_FLYLO,  // Flylo's curated chill-hop picks
 } list_mode_t;
 
-// The three that come from the card rather than from the directory: no request
-// is in flight for them, and they are reloaded rather than polled.
-#define LIST_IS_STORED(m) ((m) == LIST_FAVOURITES || (m) == LIST_RECENT || (m) == LIST_CUSTOM)
+// The lists that come from the card or from a fixed set rather than from the
+// directory: no request is in flight for them, and they are reloaded rather
+// than polled.
+#define LIST_IS_STORED(m) ((m) == LIST_FAVOURITES || (m) == LIST_RECENT || (m) == LIST_CUSTOM || (m) == LIST_FLYLO)
 
 typedef struct {
 	lv_obj_t *button;
@@ -103,8 +105,8 @@ typedef struct {
 
 // The mark on the loaded station, as the track lists draw it on the track that
 // is playing (medialist.c).
-#define PLAYMARK_WIDTH 6
-#define PLAYMARK_HEIGHT 52
+#define PLAYMARK_WIDTH bp_pick(4, 6)
+#define PLAYMARK_HEIGHT bp_pick(36, 52)
 #define PLAYMARK_INSET 4 // from the row's left edge
 
 // The band of the row the mark owns, and what its right edge costs the text.
@@ -142,7 +144,7 @@ static gui_config_t *g_cfg;
 // user chooses in Radio settings. Recently played used to be a corner button
 // beside the heart and the search; it is a row among the categories now, where
 // it belongs -- it is a list of stations, like the others.
-#define HUB_ROWS 7
+#define HUB_ROWS 8
 enum {
 	HUB_RECENT = 0,
 	HUB_LANGUAGE,
@@ -157,17 +159,21 @@ enum {
 	// back on. The order the page shows them in is hub_order[] and is set
 	// below.
 	HUB_FAVOURITES,
+	// Flylo's curated picks, appended for the same reason Favourites was: the
+	// ids index the saved hidden mask, so a row added in the middle would move
+	// every bit after it.
+	HUB_FLYLO,
 };
 
 static const char *const HUB_SLUGS[HUB_ROWS] = {"recent", "language", "country", "genre", "custom", "recommended",
-												"favourites"};
+												"favourites", "flylo"};
 static const char *const HUB_LABELS[HUB_ROWS] = {"radio_recently_played", "language", "radio_country", "genre",
-												 "radio_custom", "radio_recommended", "favourites"};
+												 "radio_custom", "radio_recommended", "favourites", "radio_flylo_favs"};
 
 // The order a page that has never been arranged starts in: the starred stations
 // are the second thing offered, right under what was played last, and
 // Recommended is beside them.
-static const int HUB_DEFAULT_ORDER[HUB_ROWS] = {HUB_RECENT, HUB_FAVOURITES, HUB_RECOMMENDED,
+static const int HUB_DEFAULT_ORDER[HUB_ROWS] = {HUB_RECENT, HUB_FAVOURITES, HUB_FLYLO, HUB_RECOMMENDED,
 											  HUB_LANGUAGE, HUB_COUNTRY, HUB_GENRE, HUB_CUSTOM};
 
 static lv_obj_t *hub_container;
@@ -1022,7 +1028,27 @@ static void menu_btn_cb(lv_event_t *e) {
 	popover_show(button, items, 1);
 }
 
-// The two lists that come out of the database rather than off the network.
+// Flylo's curated chill-hop and lo-fi picks. The addresses are the public
+// stream URLs for each station; the names are what shows on the list.
+//
+// These are not a file on the card and not a network directory -- they are
+// built into the page, so the list is always there and never needs a refresh.
+typedef struct {
+	const char *name;
+	const char *url;
+} flylo_station_t;
+
+static const flylo_station_t FLYLO_STATIONS[] = {
+	{"I Love Chillhop", "https://streams.ilovemusic.de/iloveradio17.mp3"},
+	{"ChillHop", "http://stream01.iloveradio.de/iloveradio17.mp3"},
+	{"Flux Fm Chillhop", "https://streams.fluxfm.de/Chillhop/mp3-320/streams.fluxfm.de/"},
+	{"Le Mellotron", "https://listen.radioking.com/radio/477719/stream/534044"},
+	{"Lo-Fi Hip-Hop Radio", "https://stream.zeno.fm/0r0xa792kwzuv"},
+};
+#define FLYLO_STATION_COUNT (int)(sizeof(FLYLO_STATIONS) / sizeof(FLYLO_STATIONS[0]))
+
+// The two lists that come out of the database rather than off the network, and
+// the one that is built into the page.
 static void list_reload_stored(void) {
 	term_count = 0;
 	station_count = 0;
@@ -1036,6 +1062,9 @@ static void list_reload_stored(void) {
 	case LIST_CUSTOM:
 		n = radio_custom_count();
 		break;
+	case LIST_FLYLO:
+		n = FLYLO_STATION_COUNT;
+		break;
 	default:
 		n = radio_fav_count();
 		break;
@@ -1045,13 +1074,24 @@ static void list_reload_stored(void) {
 	}
 
 	for (int i = 0; i < n; i++) {
-		bool got;
+		bool got = false;
 		switch (list_mode) {
 		case LIST_RECENT:
 			got = radio_recent_get(i, &stations[station_count]);
 			break;
 		case LIST_CUSTOM:
 			got = radio_custom_get(i, &stations[station_count]);
+			break;
+		case LIST_FLYLO:
+			// Flylo stations are not in the directory and carry no uuid; the
+			// uuid field stays empty so the star and the playmark fall back to
+			// matching on the stream address, which is fine.
+			memset(&stations[station_count], 0, sizeof(stations[station_count]));
+			snprintf(stations[station_count].name, sizeof(stations[station_count].name), "%s",
+					 FLYLO_STATIONS[i].name);
+			snprintf(stations[station_count].url, sizeof(stations[station_count].url), "%s",
+					 FLYLO_STATIONS[i].url);
+			got = true;
 			break;
 		default:
 			got = radio_fav_get(i, &stations[station_count]);
@@ -1078,6 +1118,12 @@ static const char *const STORED_EMPTY[] = {"radio_no_favourite_stations", "radio
 										   "radio_custom_no_file"};
 
 static const char *stored_empty_message(void) {
+	if (list_mode == LIST_FLYLO) {
+		// Flylo's list is hardcoded and never empty: if we ever get here,
+		// something went wrong, and a blank page is less confusing than the
+		// wrong sentence.
+		return NULL;
+	}
 	if (list_mode == LIST_RECENT) {
 		return STORED_EMPTY[1];
 	}
@@ -1382,7 +1428,7 @@ static void build_list_page(gui_config_t *cfg) {
 		hide(row->code);
 
 		row->menu_btn = lv_btn_create(row->button);
-		lv_obj_set_size(row->menu_btn, 52, 52);
+		lv_obj_set_size(row->menu_btn, bp_pick(36, 52), bp_pick(36, 52));
 		lv_obj_set_style_bg_opa(row->menu_btn, LV_OPA_TRANSP, 0);
 		lv_obj_set_style_border_width(row->menu_btn, 0, 0);
 		lv_obj_set_style_shadow_width(row->menu_btn, 0, 0);
@@ -1394,12 +1440,16 @@ static void build_list_page(gui_config_t *cfg) {
 		lv_image_set_src(dots, &icon_ellipsis_vertical);
 		lv_obj_add_style(dots, &theme_style_icon, 0);
 		lv_obj_set_style_image_recolor_opa(dots, LV_OPA_COVER, 0);
+		// Scale the dots icon to fit the compact button; on the regular layout
+		// it sits at its natural size and centres itself.
+		settingsrow_scale_corner_icon(dots, cfg);
 		lv_obj_center(dots);
 
 		row->chevron = lv_image_create(row->button);
 		lv_image_set_src(row->chevron, &icon_chevron_right);
 		lv_obj_add_style(row->chevron, &theme_style_icon, 0);
 		lv_obj_set_style_image_opa(row->chevron, LV_OPA_60, 0);
+		settingsrow_scale_corner_icon(row->chevron, cfg);
 
 		// Outside the flex layout, in the row's own left padding: it marks the
 		// row without moving anything on it.
@@ -1586,6 +1636,11 @@ static void open_stored(list_mode_t mode, const char *title) {
 	list_rebuild();
 	set_message(station_count ? NULL : stored_empty_message());
 	switch_screen(radiolist_screen);
+}
+
+static void flylo_cb(lv_event_t *e) {
+	(void)e;
+	open_stored(LIST_FLYLO, "radio_flylo_favs");
 }
 
 static void favourites_cb(lv_event_t *e) {
@@ -2551,6 +2606,12 @@ void radiopage_init(gui_config_t *cfg) {
 	// No mark leads the Favourites row: the other rows in this list are words
 	// alone, and a red heart beside one of them made it read as a different
 	// kind of entry.
+
+	// Flylo's curated chill-hop picks -- a short, hand-picked list that lives
+	// on the page rather than in a file or a database. Same row shape as the
+	// browse entries above, so the hub reads as one list; and the same
+	// arrangement as them, so it can be moved or switched off like any other.
+	hub_rows[HUB_FLYLO] = settingsrow_add(hub_container, HUB_LABELS[HUB_FLYLO], NULL, flylo_cb, NULL);
 
 	// The same notice as the Wi-Fi transfer page: a centred message, and below
 	// it the "Wi-Fi settings" row that leads to where it can be fixed.

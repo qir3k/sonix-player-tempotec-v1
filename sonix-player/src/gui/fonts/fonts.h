@@ -19,6 +19,8 @@
 //                 matched to MiSans
 //   thai.otf      MiSans Thai
 //   arabic.otf    MiSans Arabic
+//   japanese.otf  FOT-Rodin, for kana, kanji and CJK punctuation when the
+//                 interface is in Japanese
 //
 // MiSans is the face the interface was designed with, and the one it falls
 // back to. Settable families are the others in the directory: Neon 80s and
@@ -28,6 +30,7 @@
 //
 // The script faces each have an optional -bold file, like bold.otf.
 // fonts_init() opens them once and builds one fallback chain per size.
+// In Japanese, Rodin answers the CJK letters ahead of default (see fonts.c).
 // FreeType maps the files -- nothing is decoded up front -- and rendered
 // glyphs live in the shared FTC cache (LV_FREETYPE_CACHE_FT_GLYPH_CNT), so
 // memory stays flat no matter how much text is on screen.
@@ -125,6 +128,14 @@ bool fonts_set_face(const char *id);
 // started is picked up here, and the picker's list of card fonts is read
 // after this.
 void fonts_set_card_root(const char *sd_root);
+
+// The language file whose interface draws CJK letters from japanese.otf.
+#define FONTS_JAPANESE_LANGUAGE "Japanese"
+
+// The interface language is about to become `name` (a language file's name,
+// as lang_set() takes it). Call before lang_set(), so the relabelled pages are
+// measured with the right faces.
+void fonts_set_language(const char *name);
 
 // For the developer options page: which font files are in use, e.g.
 // "default.otf, bold.otf, Korean + Thai + Arabic". Never NULL.

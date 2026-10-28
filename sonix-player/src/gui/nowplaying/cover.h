@@ -64,16 +64,24 @@ bool cover_load_image_memory(const void *data, size_t size, int box_w, int box_h
 // picture that cannot be decoded compares as itself and both tracks fall back
 // to the same place.
 //
-// 0 means there is no artwork at all. Cheap: it reads the picture but never
-// decodes it, and hashes its size with a slice of each end.
+// 0 means there is no artwork at all. Cheap: for an embedded picture already
+// seen, it is kept in the thumbnail database under the file's path, size and
+// mtime, and the picture is not read again.
 uint64_t cover_source_id(const char *filepath);
 
-// Decodes the artwork once and builds both images the player screen needs: the
-// artwork itself, and the upside-down blurred copy drawn behind the controls.
-// Either output may be skipped by passing NULL for its size. Returns false if
-// the track has no artwork at all, leaving both outputs zeroed.
+// Builds both images the player screen needs: the artwork itself, and the
+// upside-down blurred copy drawn behind the controls. A picture already shown
+// at this size comes out of the thumbnail database (one row per picture, shared
+// across the tracks that carry it) and the backdrop is made from that, with no
+// source decoded. Either output may be skipped by passing NULL for it. Returns
+// false if the track has no artwork at all, leaving both outputs zeroed.
 bool cover_load_player_images(const char *filepath, int cover_w, int cover_h, cover_image_t *cover_out,
 							  int backdrop_w, int backdrop_h, cover_image_t *backdrop_out);
+
+// Warms the player's cache for `filepath` at cover_w x cover_h while the
+// previous track is still playing; does nothing when the picture is already
+// kept at that size.
+void cover_prefetch_player(const char *filepath, int cover_w, int cover_h);
 
 // The two pictures the screensaver needs from one photograph: the picture
 // itself filling the screen, and the blurred block along the bottom that the

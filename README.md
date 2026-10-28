@@ -194,6 +194,8 @@ The V1 build includes a local library and file browser, streaming services, wire
 
 The boot screen can be set to **Retrospace**, **Space**, **Travelling in space**, the stock light or dark image, or a custom JPEG/PNG in the card's `Bootlogo` folder. Custom images are copied into the player so the selected boot screen remains available without the card. Rounded screen corners are also optional and off by default.
 
+The battery is looked after at both ends. At **5 %** the player says so — a red card, and the panel comes back up for it if it was dark — and at **1 %** it switches itself off the ordinary way, position written and card unmounted, instead of letting the cell drop out from under it; below 10 % it also stays out of standby, because a sleeping player cannot watch its own gauge. A player that was **switched off and is then put on a charger** comes up on a battery screen instead of the library: the level, the percentage and what the charger is doing, going dark after ten seconds, with a **press** of the power button to bring it back and a **hold** to start the player after all.
+
 See [FEATURES.md](FEATURES.md) for a longer feature list. Streaming services also require valid credentials and may depend on third-party service availability.
 
 ## Build a firmware image
@@ -240,6 +242,8 @@ api_secret =
 api_key =
 api_secret =
 ```
+
+ListenBrainz is the one scrobbler that needs no credentials in the image: its account is a personal user token, requested on listenbrainz.org/settings and pasted into the player's Settings → Music → ListenBrainz. Only the token is kept on the device. Scrobbling to Last.fm and to ListenBrainz are independent and can run side by side.
 
 #### Qobuz without keys of your own
 

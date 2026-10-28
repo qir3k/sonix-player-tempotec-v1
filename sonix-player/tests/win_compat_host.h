@@ -17,11 +17,21 @@
 #define lstat(path, st) stat((path), (st))
 #define fchmod(fd, mode) win_fchmod((fd), (mode))
 #define gmtime_r(timep, result) win_gmtime_r((timep), (result))
+#define localtime_r(timep, result) win_localtime_r((timep), (result))
 #define strcasestr(haystack, needle) win_strcasestr((haystack), (needle))
+#define fsync(fd) win_fsync(fd)
+#define usleep(usec) win_usleep(usec)
+#define malloc_trim(pad) ((void)(pad), 0)
+#define mkdtemp(tmpl) win_mkdtemp(tmpl)
+#define sync() ((void)0)
 
 int win_mkdir(const char *path, int mode);
 int win_fchmod(int fd, unsigned mode);
 struct tm *win_gmtime_r(const time_t *timep, struct tm *result);
+struct tm *win_localtime_r(const time_t *timep, struct tm *result);
+int win_fsync(int fd);
+int win_usleep(unsigned usec);
+char *win_mkdtemp(char *tmpl);
 char *win_strcasestr(const char *haystack, const char *needle);
 
 #endif /* _WIN32 */

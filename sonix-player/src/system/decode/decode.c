@@ -491,7 +491,109 @@ static decode_format_t alac_container_of(const char *filepath) {
 	return DECODE_FORMAT_AAC_MP4;
 }
 
+// Advances `f` past any leading ID3v2 tags; false only on an I/O error.
+static bool past_id3(FILE *f) {
+	if (fseeko(f, 0, SEEK_SET) != 0)
+		return false;
+	for (int tags = 0; tags < 4; tags++) {
+		unsigned char h[10];
+		off_t at = ftello(f);
+		if (at < 0)
+			return false;
+		if (fread(h, 1, 10, f) != 10 || memcmp(h, "ID3", 3) != 0 || h[3] == 0xff || h[4] == 0xff || (h[6] & 0x80) ||
+			(h[7] & 0x80) || (h[8] & 0x80) || (h[9] & 0x80)) {
+			return fseeko(f, at, SEEK_SET) == 0;
+		}
+		off_t size = ((off_t)h[6] << 21) | ((off_t)h[7] << 14) | ((off_t)h[8] << 7) | h[9];
+		if (h[3] >= 4 && (h[5] & 0x10))
+			size += 10;
+		if (fseeko(f, at + 10 + size, SEEK_SET) != 0)
+			return false;
+	}
+	return true;
+}
+
+// Format from the file's own magic, past any leading ID3v2 tag. Returns
+// UNKNOWN when the file is missing or its signature is one only the extension
+// can place (an MP3 without ID3, an ADTS stream without ID3, libsndfile's
+// rarer containers).
+static decode_format_t sniff_format(const char *filepath) {
+	FILE *f = fopen(filepath, "rb");
+	if (!f)
+		return DECODE_FORMAT_UNKNOWN;
+	unsigned char b[36];
+	size_t n = past_id3(f) ? fread(b, 1, sizeof(b), f) : 0;
+	fclose(f);
+	if (n < 4)
+		return DECODE_FORMAT_UNKNOWN;
+
+	if (memcmp(b, "fLaC", 4) == 0)
+		return DECODE_FORMAT_FLAC;
+	if (memcmp(b, "MAC ", 4) == 0)
+		return DECODE_FORMAT_APE;
+	if (memcmp(b, "wvpk", 4) == 0)
+		return DECODE_FORMAT_WAVPACK;
+	if (memcmp(b, "DSD ", 4) == 0 || memcmp(b, "FRM8", 4) == 0)
+		return DECODE_FORMAT_DSD;
+	if (n >= 12 && (memcmp(b, "RIFF", 4) == 0 || memcmp(b, "RF64", 4) == 0) && memcmp(b + 8, "WAVE", 4) == 0)
+		return sndfile_available() ? DECODE_FORMAT_SNDFILE : DECODE_FORMAT_UNKNOWN;
+	if (n >= 12 && memcmp(b, "FORM", 4) == 0 && (memcmp(b + 8, "AIFF", 4) == 0 || memcmp(b + 8, "AIFC", 4) == 0))
+		return sndfile_available() ? DECODE_FORMAT_SNDFILE : DECODE_FORMAT_UNKNOWN;
+	if (memcmp(b, "caff", 4) == 0)
+		return alac_container_of(filepath);
+	if (n >= 8 && memcmp(b + 4, "ftyp", 4) == 0)
+		return DECODE_FORMAT_AAC_MP4;
+	if (n >= 36 && memcmp(b, "OggS", 4) == 0) {
+		uint8_t segs = b[26];
+		size_t pkt = 27 + (size_t)segs;
+		if (pkt + 8 <= n && memcmp(b + pkt, "OpusHead", 8) == 0)
+			return DECODE_FORMAT_OPUS;
+		if (pkt + 7 <= n && memcmp(b + pkt, "\x01vorbis", 7) == 0)
+			return DECODE_FORMAT_OGG_VORBIS;
+		// More segments than fit in `b`; read the packet start explicitly.
+		FILE *g = fopen(filepath, "rb");
+		if (g) {
+			unsigned char p[8];
+			bool opus = past_id3(g) && fseeko(g, (off_t)pkt, SEEK_CUR) == 0 && fread(p, 1, 8, g) == 8 &&
+						memcmp(p, "OpusHead", 8) == 0;
+			fclose(g);
+			return opus ? DECODE_FORMAT_OPUS : DECODE_FORMAT_OGG_VORBIS;
+		}
+	}
+	return DECODE_FORMAT_UNKNOWN;
+}
+
+static decode_format_t format_by_name(const char *filepath) {
+	if (has_extension(filepath, ".mp3"))
+		return DECODE_FORMAT_MP3;
+	if (has_extension(filepath, ".alac"))
+		return alac_container_of(filepath);
+	if (has_extension(filepath, ".flac"))
+		return DECODE_FORMAT_FLAC;
+	if (has_extension(filepath, ".ogg") || has_extension(filepath, ".oga"))
+		return DECODE_FORMAT_OGG_VORBIS;
+	if (has_extension(filepath, ".m4b") || has_extension(filepath, ".m4a") || has_extension(filepath, ".mp4"))
+		return DECODE_FORMAT_AAC_MP4;
+	if (has_extension(filepath, ".dsf") || has_extension(filepath, ".dff"))
+		return DECODE_FORMAT_DSD;
+	if (has_extension(filepath, ".opus"))
+		return DECODE_FORMAT_OPUS;
+	if (has_extension(filepath, ".wv"))
+		return DECODE_FORMAT_WAVPACK;
+	if (has_extension(filepath, ".ape"))
+		return DECODE_FORMAT_APE;
+	if (has_extension(filepath, ".aac"))
+		return DECODE_FORMAT_AAC_ADTS;
+	// Last, and only if the library is really there: an unplayable extension
+	// should stay unknown rather than become a file that fails to open.
+	if (sndfile_handles(filepath) && sndfile_available())
+		return DECODE_FORMAT_SNDFILE;
+	return DECODE_FORMAT_UNKNOWN;
+}
+
 decode_format_t decode_detect_format(const char *filepath) {
+	if (!filepath)
+		return DECODE_FORMAT_UNKNOWN;
 	// A track of a CUE sheet is named by the sheet; what decides the format is
 	// the audio file the sheet points at.
 	char sheet[512];
@@ -518,31 +620,16 @@ decode_format_t decode_detect_format(const char *filepath) {
 		return inner;
 	}
 
-	if (has_extension(filepath, ".mp3"))
-		return DECODE_FORMAT_MP3;
-	if (has_extension(filepath, ".alac"))
-		return alac_container_of(filepath);
-	if (has_extension(filepath, ".flac"))
-		return DECODE_FORMAT_FLAC;
-	if (has_extension(filepath, ".ogg"))
-		return DECODE_FORMAT_OGG_VORBIS;
-	if (has_extension(filepath, ".m4b") || has_extension(filepath, ".m4a") || has_extension(filepath, ".mp4"))
-		return DECODE_FORMAT_AAC_MP4;
-	if (has_extension(filepath, ".dsf") || has_extension(filepath, ".dff"))
-		return DECODE_FORMAT_DSD;
-	if (has_extension(filepath, ".opus"))
-		return DECODE_FORMAT_OPUS;
-	if (has_extension(filepath, ".wv"))
-		return DECODE_FORMAT_WAVPACK;
-	if (has_extension(filepath, ".ape"))
-		return DECODE_FORMAT_APE;
-	if (has_extension(filepath, ".aac"))
-		return DECODE_FORMAT_AAC_ADTS;
-	// Last, and only if the library is really there: an unplayable extension
-	// should stay unknown rather than become a file that fails to open.
-	if (sndfile_handles(filepath) && sndfile_available())
-		return DECODE_FORMAT_SNDFILE;
-	return DECODE_FORMAT_UNKNOWN;
+	decode_format_t named = format_by_name(filepath);
+	// A bare name ("a.mp3") or an extension outside our list stays with the
+	// extension rule; a real path gets checked against its magic so an .m4a
+	// renamed .mp3 or an Opus inside .ogg goes to the decoder that can play it.
+	if (named == DECODE_FORMAT_UNKNOWN || named == DECODE_FORMAT_SNDFILE || has_extension(filepath, ".alac") ||
+		!strchr(filepath, '/') || subsonicstream_owns(filepath)) {
+		return named;
+	}
+	decode_format_t sniffed = sniff_format(filepath);
+	return sniffed != DECODE_FORMAT_UNKNOWN ? sniffed : named;
 }
 
 // Feeds bytes to the decoder until a frame of PCM comes out.
@@ -1832,7 +1919,20 @@ static decoder_t *decoder_open_file(const char *filepath, decode_format_t format
 
 	case DECODE_FORMAT_OGG_VORBIS: {
 		int error = 0;
-		dec->impl.vorbis = stb_vorbis_open_filename(filepath, &error, NULL);
+		// An ID3v2 header in front of OggS is rare, not unheard of: open the
+		// FILE ourselves and position it at the first page so stb_vorbis sees
+		// OggS at its stream start and closes the handle with the decoder.
+		FILE *vf = fopen(filepath, "rb");
+		if (vf) {
+			if (!past_id3(vf)) {
+				fclose(vf);
+				vf = NULL;
+			} else {
+				dec->impl.vorbis = stb_vorbis_open_file(vf, 1, &error, NULL);
+				if (!dec->impl.vorbis)
+					fclose(vf);
+			}
+		}
 		if (!dec->impl.vorbis) {
 			free(dec);
 			return NULL;

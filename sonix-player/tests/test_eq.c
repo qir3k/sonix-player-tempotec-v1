@@ -126,21 +126,108 @@ static void test_mseb_changes_samples(void) {
 	CHECK(memcmp(buf, original, sizeof(buf)) == 0);
 }
 
-// Radio stations arrive at 44.1 or 48 kHz, stereo, 16-bit -- the arguments
-// radio_push_pcm() hands eq_process(). Both rates have to run.
-static void test_radio_rates(void) {
-	all_off();
-	eq_set_enabled(true);
-	eq_set_band(4, 8);
+// Every rate a station can arrive at. 44.1 and 48 kHz are the usual MP3/AAC
+// output; low-bitrate HE-AAC and speech stations decode at 22.05, 24 or
+// 32 kHz. radio_push_pcm() hands every one to eq_process() with the station's
+// own rate, so the chain has to run at all of them.
+static const int radio_rates[] = {22050, 24000, 32000, 44100, 48000};
 
-	static const int rates[] = {44100, 48000};
-	for (unsigned i = 0; i < sizeof(rates) / sizeof(rates[0]); i++) {
+// Switches one module on with filters low enough to survive the slowest rate
+// above -- the 31 Hz graphic band, a 100 Hz parametric low shelf and MSEB's
+// bass0 (its 70 Hz low shelf). Called after all_off(), so only this module is
+// live. The caller turns everything off again.
+static void enable_one_module(int module) {
+	if (module == 0) {
+		eq_set_enabled(true);
+		eq_set_band(0, 12); // 31 Hz, the slider's full travel
+	} else if (module == 1) {
+		peq_band_t band;
+		peq_get_band(0, &band);
+		band.on = true;
+		band.type = PEQ_TYPE_LOWSHELF;
+		band.freq = 100;
+		band.gain_tenths = 120;
+		band.q_cent = 100;
+		peq_set_band(0, &band);
+		peq_set_enabled(true);
+	} else {
+		mseb_set_enabled(true);
+		mseb_set_value(1, 80); // bass0
+	}
+}
+
+// Each of the three modules has to change the stereo PCM at every rate a
+// station uses, and with all three off the same frames must come back
+// untouched at every rate -- an untuned station reaches the card identical.
+static void test_radio_rates(void) {
+	static const char *const names[] = {"graphic EQ", "PEQ", "MSEB"};
+
+	for (int module = 0; module < 3; module++) {
+		for (unsigned i = 0; i < sizeof(radio_rates) / sizeof(radio_rates[0]); i++) {
+			int rate = radio_rates[i];
+			all_off();
+			enable_one_module(module);
+
+			short original[FRAMES * 2];
+			short buf[FRAMES * 2];
+			// 200 Hz sits inside each chosen filter and under every Nyquist.
+			fill_sine(original, FRAMES, rate, 200, AMP);
+			memcpy(buf, original, sizeof(buf));
+			eq_process(buf, FRAMES, 2, rate);
+			if (memcmp(buf, original, sizeof(buf)) == 0) {
+				failures++;
+				fprintf(stderr, "FAIL: %s changed nothing on a %d Hz station\n", names[module], rate);
+			}
+		}
+	}
+
+	for (unsigned i = 0; i < sizeof(radio_rates) / sizeof(radio_rates[0]); i++) {
+		int rate = radio_rates[i];
+		all_off();
 		short original[FRAMES * 2];
 		short buf[FRAMES * 2];
-		fill_sine(original, FRAMES, rates[i], 500, AMP);
+		fill_sine(original, FRAMES, rate, 200, AMP);
 		memcpy(buf, original, sizeof(buf));
-		eq_process(buf, FRAMES, 2, rates[i]);
-		CHECK(memcmp(buf, original, sizeof(buf)) != 0);
+		eq_process(buf, FRAMES, 2, rate);
+		CHECK(memcmp(buf, original, sizeof(buf)) == 0);
+	}
+	all_off();
+}
+
+// A mono station is widened into an identical stereo pair before the chain,
+// because the card is always opened in two channels -- the channels == 1
+// branch of radio_push_pcm(). The chain then has to leave it bit-identical
+// with every module off, and tune both channels identically when one is on:
+// a mono signal must not come back with its two sides drifting apart.
+static void test_mono_station_widening(void) {
+	const int rate = 44100;
+	short mono[FRAMES];
+	short widened[FRAMES * 2];
+	short buf[FRAMES * 2];
+
+	for (int i = 0; i < FRAMES; i++) {
+		double s = sin(2.0 * 3.14159265358979323846 * 300.0 * (double)i / (double)rate);
+		mono[i] = (short)(s * AMP);
+	}
+	// Same reverse-order copy radio_push_pcm() makes.
+	for (int i = FRAMES - 1; i >= 0; i--) {
+		widened[2 * i] = mono[i];
+		widened[2 * i + 1] = mono[i];
+	}
+
+	all_off();
+	memcpy(buf, widened, sizeof(buf));
+	eq_process(buf, FRAMES, 2, rate);
+	CHECK(memcmp(buf, widened, sizeof(buf)) == 0);
+
+	all_off();
+	eq_set_enabled(true);
+	eq_set_band(0, 12);
+	memcpy(buf, widened, sizeof(buf));
+	eq_process(buf, FRAMES, 2, rate);
+	CHECK(memcmp(buf, widened, sizeof(buf)) != 0);
+	for (int i = 0; i < FRAMES; i++) {
+		CHECK(buf[2 * i] == buf[2 * i + 1]);
 	}
 	all_off();
 }
@@ -263,11 +350,12 @@ int main(void) {
 	test_radio_rates();
 	test_dac_off_is_a_no_op();
 	test_dac_path_shapes_like_the_card();
+	test_mono_station_widening();
 
 	if (failures) {
 		fprintf(stderr, "%d check(s) failed\n", failures);
 		return 1;
 	}
-	printf("eq: graphic EQ, PEQ and MSEB run on stereo PCM, radio and USB DAC mode\n");
+	printf("eq: graphic EQ, PEQ and MSEB run on stereo PCM, radio rates, mono stations and USB DAC mode\n");
 	return 0;
 }

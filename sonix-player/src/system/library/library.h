@@ -2,6 +2,7 @@
 #define LIBRARY_H
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -24,6 +25,10 @@
 // call below is a no-op.
 bool library_open(const char *db_path);
 void library_close(void);
+
+// Identifies this database open, including a reopen of the same card. Zero
+// while the database is closed.
+uint64_t library_session(void);
 
 // Closes and reopens the index when its file is no longer the one that was
 // opened: deleted (from the file manager, the Wi-Fi transfer page) or replaced
@@ -173,6 +178,7 @@ typedef enum {
 	LIBRARY_UPDATE_REORGANIZING,
 	LIBRARY_UPDATE_REORGANIZED,
 	LIBRARY_UPDATE_SCANNED,
+	LIBRARY_UPDATE_GENIUS,
 } library_update_event_t;
 typedef void (*library_update_listener_t)(library_update_event_t event, int added, int removed, int updated);
 void library_set_update_listener(library_update_listener_t listener);
@@ -188,6 +194,27 @@ bool library_scan_running(void);
 
 // Tracks written to the index so far -- what the progress page counts up.
 int library_scan_found(void);
+
+// One coherent progress sample. completed/total belong to this phase, never
+// to the tracks-written counter above. elapsed_ms resets at every boundary.
+typedef enum {
+	LIBRARY_PHASE_IDLE,
+	LIBRARY_PHASE_CHECKING,
+	LIBRARY_PHASE_READING,
+	LIBRARY_PHASE_REORGANIZING,
+	LIBRARY_PHASE_GENIUS_CHECKING,
+	LIBRARY_PHASE_GENIUS_BUILDING,
+	LIBRARY_PHASE_GENIUS_PUBLISHING,
+	LIBRARY_PHASE_DONE,
+} library_scan_phase_t;
+typedef struct {
+	library_scan_phase_t phase;
+	unsigned serial;
+	int completed, total;
+	uint32_t elapsed_ms;
+	bool genius_failed, genius_published;
+} library_scan_progress_t;
+void library_scan_progress(library_scan_progress_t *out);
 
 // The folder being read right now, copied into the caller's buffer for the
 // progress page. A copy and not a pointer: the scan thread rewrites that string
@@ -218,6 +245,22 @@ void library_set_log_database(bool enabled);
 // ---------------------------------------------------------------------------
 // Reading the index
 // ---------------------------------------------------------------------------
+
+// Raw scanned tags, not the split/joined browsing values. Borrowed, exact
+// UTF-8 byte lengths; NULL tags/year become empty/zero. Fields over 4096 bytes
+// carry their exact length and an empty payload, and must be rejected by the
+// callback before dereferencing that length. Callback runs under
+// the existing index lock and must not call the library. False on SQL error,
+// cancellation or callback refusal. The bounded stream delivers at most 4097
+// rows: a Smart Mix builder accepts at most 4096, rejecting the extra row.
+// revision identifies the input view and must still match before publication.
+typedef struct {
+	const char *path, *artist, *album, *genre;
+	size_t path_bytes, artist_bytes, album_bytes, genre_bytes;
+	int64_t year;
+} library_tags_t;
+typedef bool (*library_tags_cb)(const library_tags_t *tags, void *user);
+bool library_read_tags(library_tags_cb cb, void *user, const atomic_bool *cancel, unsigned *revision);
 
 typedef enum {
 	LIBRARY_LIST_TRACKS,
@@ -351,6 +394,10 @@ typedef enum {
 // them). A lossless file whose numbers are unknown answers NONE rather than a
 // guess: no badge is better than a wrong one.
 library_quality_t library_track_quality(const char *path, int *rate_out, int *bits_out);
+
+// Reads index membership under the index lock. Returns false on read failure;
+// otherwise indexed reports whether the path is in the index.
+bool library_get_indexed(const char *path, bool *indexed);
 
 // --- Favourites ---
 //
@@ -595,15 +642,16 @@ void library_playlist_names_free(char **names, int count);
 bool library_playlist_exists(const char *name);
 
 // An empty playlist. False if one by that name is already there.
-bool library_playlist_create(const char *name);
-bool library_playlist_drop(const char *name);
+// Writes require the session returned by library_session(), still writable.
+bool library_playlist_create(const char *name, uint64_t session);
+bool library_playlist_drop(const char *name, uint64_t session);
 
 // Fails when `new_name` is taken. Renaming to the current name succeeds and
 // does nothing.
-bool library_playlist_rename(const char *name, const char *new_name);
+bool library_playlist_rename(const char *name, const char *new_name, uint64_t session);
 
 // Appends a row, creating the playlist if it is not there.
-bool library_playlist_append(const char *name, const library_playlist_row_t *row);
+bool library_playlist_append(const char *name, const library_playlist_row_t *row, uint64_t session);
 
 // Appending many, one at a time, under one transaction: an import writes
 // hundreds of rows and a commit each would be hundreds of card writes, while an
@@ -613,13 +661,13 @@ bool library_playlist_append(const char *name, const library_playlist_row_t *row
 // false has left the writer failed, and end() then rolls the whole thing back;
 // end() also rolls back when `keep` is false. The writer is freed either way.
 typedef struct library_playlist_writer library_playlist_writer_t;
-library_playlist_writer_t *library_playlist_write_begin(const char *name);
+library_playlist_writer_t *library_playlist_write_begin(const char *name, uint64_t session);
 bool library_playlist_write_row(library_playlist_writer_t *writer, const library_playlist_row_t *row);
 bool library_playlist_write_end(library_playlist_writer_t *writer, bool keep);
 
 // The same, for a caller that already holds the rows. Only for a handful of
 // them: see the note on the size of one.
-bool library_playlist_append_all(const char *name, const library_playlist_row_t *rows, int count);
+bool library_playlist_append_all(const char *name, const library_playlist_row_t *rows, int count, uint64_t session);
 
 // Rows [offset, offset+count) in order, every entry including the hidden ones,
 // with the title and artist a row shows (see above), into a buffer the caller
@@ -636,14 +684,14 @@ int library_playlist_page(const char *name, int offset, int count, library_playl
 int library_playlist_rows(const char *name, library_playlist_row_t **rows_out);
 
 // The first row naming this path, gone.
-bool library_playlist_remove_path(const char *name, const char *path);
+bool library_playlist_remove_path(const char *name, const char *path, uint64_t session);
 
 // Whether any row of the playlist names this path.
 bool library_playlist_contains(const char *name, const char *path);
 
 // Removes the entries at `positions` -- counted as the page shows the list,
 // hidden entries left out -- in one transaction. Returns how many went.
-int library_playlist_remove_positions(const char *name, const int *positions, int count);
+int library_playlist_remove_positions(const char *name, const int *positions, int count, uint64_t session);
 
 // One entry moved from one position to another, the rest closing up behind it.
 // Positions are counted from the top of the list as the page shows it, not row
@@ -659,7 +707,7 @@ int library_playlist_count(const char *name);
 // True once per card: whether the .m3u files that were the playlists have
 // already been taken into the index. See playlists_init().
 bool library_playlists_migrated(void);
-void library_playlists_set_migrated(void);
+void library_playlists_set_migrated(uint64_t session);
 
 // A remembered track count for a playlist held as an .m3u file, where counting
 // means one card lookup per entry -- seconds of blocked interface on a list of
@@ -688,8 +736,9 @@ bool library_playback_state_load(char *path_out, size_t path_size, double *posit
 // it, so next and prev have nowhere to go. `paths` is in playback order (a
 // shuffle deal already applied),
 // `current_index` the position within it, `custom` whether it is a library
-// list (never rebuilt from a folder) or a plain folder queue.
-void library_queue_save(const char *const *paths, int count, int current_index, bool custom);
+// list (never rebuilt from a folder) or a plain folder queue, and `ordered`
+// whether it keeps one fixed sequence (a Smart Mix) rather than a mode's deal.
+void library_queue_save(const char *const *paths, int count, int current_index, bool custom, bool ordered);
 
 // Cheap partial update for the common case: the position moved, the list did
 // not. Rewriting a few thousand rows on every track change is not free.
@@ -725,8 +774,9 @@ int library_queue_load_extra(char ***paths_out, int **slots_out);
 
 // Loads the saved queue. Returns the entry count (0 if there is none), fills
 // *paths_out with a malloc'd array of malloc'd strings -- release it with
-// library_queue_free() -- plus the position and the custom flag if asked.
-int library_queue_load(char ***paths_out, int *index_out, bool *custom_out);
+// library_queue_free() -- plus the position, the custom flag and the ordered
+// flag if asked.
+int library_queue_load(char ***paths_out, int *index_out, bool *custom_out, bool *ordered_out);
 void library_queue_free(char **paths, int count);
 
 #endif /* LIBRARY_H */

@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // User playlists.
 //
@@ -111,6 +112,22 @@ void playlists_free_list(char **list, int count);
 
 // Drops the playlist. Its backup, if it has one, is left alone.
 bool playlists_delete(const char *name);
+
+// Drops only from this session, while its database is still writable. Used to
+// take back a Smart Mix playlist whose write did not finish.
+bool playlists_delete_session(const char *name, uint64_t session);
+
+// Makes a playlist named `<prefix> - <seed's title>`, holding `paths` in order,
+// numbered on from there while that name is taken. `name_out` receives the name
+// it took; `session_out` (may be NULL) receives the database session used for
+// the save. False when nothing was written in full. A partial playlist is
+// removed only while that same session is open and writable.
+//
+// `prefix` comes from the caller -- the word the interface uses for the feature
+// -- because this layer has no language table of its own. The seed's tags are
+// read off the card, so this is a worker's work, not the GUI thread's.
+bool playlists_create_from_seed(const char *prefix, const char *seed_path, const char *const *paths, int count,
+								 char *name_out, size_t name_size, uint64_t *session_out);
 
 // Renames the playlist, which is to say its table. Fails when either name is
 // unusable or when another playlist already answers to the new one; renaming a

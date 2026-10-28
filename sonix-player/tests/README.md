@@ -73,8 +73,12 @@ on its own thread and writes through `audio_external_write()`, and
 `radio_push_pcm()` runs `eq_process()` on the stereo 16-bit frames about to
 be written. The suite links the real `eq.c` and drives that function: with
 EQ, PEQ and MSEB all off it is a no-op; with each one on in turn a sine
-changes; and both 44.1 kHz and 48 kHz, the rates stations arrive at, run.
-The config store is a temporary file; nothing else is stubbed.
+changes; and every rate a station can arrive at runs -- 22.05, 24 and 32 kHz
+for low-bitrate HE-AAC and speech streams as well as the usual 44.1 and
+48 kHz, each with the all-off no-op checked alongside it. A mono station is
+widened to an identical stereo pair before the chain, exactly as
+`radio_push_pcm()` does, and the tuned output has to stay identical on both
+channels. The config store is a temporary file; nothing else is stubbed.
 
 USB DAC mode is the other source outside `audio.c`: the computer's PCM comes
 off `/dev/uac_sa` as 32-bit left-justified words and `usbdac.c` runs

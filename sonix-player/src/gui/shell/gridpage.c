@@ -412,6 +412,21 @@ void gridpage_set_tile_label_lines(lv_obj_t *grid, int index, int lines) {
 	}
 }
 
+// Whether the last tile of the page widens to fill its row.
+//
+// Five entries in a 2x3 page used to leave a conspicuous dead card-sized hole
+// at bottom right, so the final destination spans the row instead. That only
+// works when it would be alone on the row: at two of three columns it takes a
+// row of its own under the tiles it was meant to sit beside, which is a hole
+// of a different shape -- it put the eighth entry of a 3x3 page below the foot
+// of the panel, where the page cannot be scrolled to it.
+static bool lone_last_tile(int count, int columns, int rows, int i) {
+	if (i != count - 1 || count % columns != 1) {
+		return false;
+	}
+	return count == columns * rows - 1 || count > columns * rows;
+}
+
 void gridpage_set_layout(lv_obj_t *grid, gui_config_t *cfg, int top, int bottom, int padding, int gap, int columns,
 						 int rows) {
 	if (!grid || !cfg || columns < 1 || rows < 1 || top < 0 || bottom < 0 || top + bottom >= (int)cfg->screen_height) {
@@ -438,8 +453,7 @@ void gridpage_set_layout(lv_obj_t *grid, gui_config_t *cfg, int top, int bottom,
 	int count = (int)lv_obj_get_child_count(grid);
 	for (int i = 0; i < count; i++) {
 		lv_obj_t *tile = lv_obj_get_child(grid, i);
-		bool lone_last = count == columns * rows - 1 && i == count - 1;
-		lv_obj_set_size(tile, lone_last ? usable_w : tile_w, tile_h);
+		lv_obj_set_size(tile, lone_last_tile(count, columns, rows, i) ? usable_w : tile_w, tile_h);
 	}
 	lv_obj_update_layout(grid);
 
@@ -563,12 +577,7 @@ lv_obj_t *gridpage_build(lv_obj_t *screen, gui_config_t *cfg, const grid_entry_t
 	}
 
 	for (int i = 0; i < count; i++) {
-		// Five entries in a 2x3 page used to leave a conspicuous dead card-sized
-		// hole at bottom right.  Let the final destination span that row; pages
-		// with four entries still intentionally leave their third row empty.
-		bool lone_last = (count == columns * rows - 1 || (count > columns * rows && count % columns == 1)) &&
-						 i == count - 1;
-		add_tile(grid, &entries[i], lone_last ? usable_w : tile_w, tile_h);
+		add_tile(grid, &entries[i], lone_last_tile(count, columns, rows, i) ? usable_w : tile_w, tile_h);
 	}
 
 	// The player can be pulled in from any tiled page.
@@ -608,9 +617,7 @@ void gridpage_replace_entries(lv_obj_t *grid, gui_config_t *cfg, const grid_entr
 	}
 
 	for (int i = 0; i < count; i++) {
-		bool lone_last = (count == columns * rows - 1 || (count > columns * rows && count % columns == 1)) &&
-						 i == count - 1;
-		add_tile(grid, &entries[i], lone_last ? usable_w : tile_w, tile_h);
+		add_tile(grid, &entries[i], lone_last_tile(count, columns, rows, i) ? usable_w : tile_w, tile_h);
 	}
 	gridpage_register_theme_page(grid, entries, count);
 	lv_obj_update_layout(grid);

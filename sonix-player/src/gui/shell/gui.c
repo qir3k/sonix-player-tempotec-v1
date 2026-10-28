@@ -12,6 +12,7 @@
 #include "src/gui/nowplaying/coverflow.h"
 #include "src/gui/settings/ccsettings.h"
 #include "src/gui/nowplaying/chapters.h"
+#include "src/gui/nowplaying/lyricsearch.h"
 #include "src/gui/wireless/airplay.h"
 #include "src/gui/bluetooth/airpodspage.h"
 #include "src/gui/settings/appearance.h"
@@ -48,6 +49,7 @@
 #include "src/gui/library/textview.h"
 #include "src/gui/calculator/calculator.h"
 #include "src/gui/notes/noteeditor.h"
+#include "src/gui/metronome/metronome.h"
 #include "src/gui/notes/notes.h"
 #include "src/gui/shell/morepage.h"
 #include "src/gui/shell/popover.h"
@@ -104,6 +106,7 @@ typedef struct {
 	char text[256];
 	const lv_image_dsc_t *icon; // NULL for a plain notice
 	lv_color_t icon_color;
+	uint32_t ms; // how long it stays up
 } popup_event_t;
 
 static lv_obj_t *popup_veil; // the dimmed screen behind the card
@@ -111,6 +114,12 @@ static lv_obj_t *popup;		 // the card itself, inside the veil
 static lv_obj_t *popup_icon;
 static lv_obj_t *popup_label;
 static lv_timer_t *popup_timer;
+
+// Long enough for a whole sentence, not just a two-word notice.
+#define POPUP_MS 3000
+// A low battery is not a notice: it is the last thing the player says before it
+// goes, and the screen it wakes up for is worth more than three seconds.
+#define POPUP_MS_LOW_BATTERY 8000
 
 // ---------------------------------------------------------------------------
 // gui_post: the bridge from any thread onto the GUI thread.
@@ -278,11 +287,11 @@ static void popup_veil_cb(lv_event_t *e) {
 	popup_dismiss();
 }
 
-static void popup_show_icon(const char *text, const lv_image_dsc_t *icon, lv_color_t color);
+static void popup_show_icon(const char *text, const lv_image_dsc_t *icon, lv_color_t color, uint32_t ms);
 
-void popup_show(const char *text) { popup_show_icon(text, NULL, lv_color_black()); }
+void popup_show(const char *text) { popup_show_icon(text, NULL, lv_color_black(), POPUP_MS); }
 
-static void popup_show_icon(const char *text, const lv_image_dsc_t *icon, lv_color_t color) {
+static void popup_show_icon(const char *text, const lv_image_dsc_t *icon, lv_color_t color, uint32_t ms) {
 	if (!popup) {
 		fprintf(stderr, "popup_show() was called, but popup is not initialized. this is unexpected...");
 		return;
@@ -308,6 +317,10 @@ static void popup_show_icon(const char *text, const lv_image_dsc_t *icon, lv_col
 	lv_obj_center(popup);
 	lv_obj_move_foreground(popup_veil);
 	lv_obj_set_hidden(popup_veil, false);
+
+	// Every notice carries its own time: the timer is one, reused, and a long
+	// warning left its period behind for the next three-second notice.
+	lv_timer_set_period(popup_timer, ms ? ms : POPUP_MS);
 	lv_timer_reset(popup_timer);
 	lv_timer_resume(popup_timer);
 }
@@ -315,12 +328,12 @@ static void popup_show_icon(const char *text, const lv_image_dsc_t *icon, lv_col
 static void popup_async_cb(void *user_data) {
 	popup_event_t *ev = user_data;
 
-	popup_show_icon(ev->text, ev->icon, ev->icon_color);
+	popup_show_icon(ev->text, ev->icon, ev->icon_color, ev->ms);
 
 	free(ev);
 }
 
-static void popup_notify(const char *text, const lv_image_dsc_t *icon, lv_color_t color) {
+static void popup_notify(const char *text, const lv_image_dsc_t *icon, lv_color_t color, uint32_t ms) {
 	popup_event_t *ev = malloc(sizeof(*ev));
 	if (!ev) {
 		return;
@@ -330,13 +343,14 @@ static void popup_notify(const char *text, const lv_image_dsc_t *icon, lv_color_
 	ev->text[sizeof(ev->text) - 1] = '\0';
 	ev->icon = icon;
 	ev->icon_color = color;
+	ev->ms = ms ? ms : POPUP_MS;
 	// gui_post rather than lv_async_call: popups arrive from any thread
 	// (bluetooth, usb, Qobuz downloads), and lv_async_call from off the GUI
 	// thread corrupts the timer list. See gui_post.
 	gui_post(popup_async_cb, ev);
 }
 
-void gui_notify_popup(const char *text) { popup_notify(text, NULL, lv_color_black()); }
+void gui_notify_popup(const char *text) { popup_notify(text, NULL, lv_color_black(), POPUP_MS); }
 
 bool gui_card_available(void) {
 	if (usb_storage_active()) {
@@ -350,7 +364,15 @@ bool gui_card_available(void) {
 void gui_notify_no_card(void) { gui_notify_popup(usb_storage_active() ? "usb_storage_shared" : "sd_card_missing"); }
 
 void gui_notify_popup_icon(const char *text, const lv_image_dsc_t *icon, lv_color_t color) {
-	popup_notify(text, icon, color);
+	popup_notify(text, icon, color, POPUP_MS);
+}
+
+void gui_notify_battery_low(void) {
+	// The red card the other failures wear, held long enough to be read while
+	// the player is being woken up for it. The caller has already brought the
+	// panel back (see battery_guard_tick() in power.c): a warning over a dark
+	// screen is a warning nobody gets.
+	popup_notify("battery_low_warning", &icon_circle_alert, lv_color_make(0xe0, 0x1b, 0x24), POPUP_MS_LOW_BATTERY);
 }
 
 // ---------------------------------------------------------------------------
@@ -641,6 +663,7 @@ void gui_init(gui_config_t *cfg) {
 	audiobookcontrols_screen = lv_obj_create(NULL);
 	audiobookscan_screen = lv_obj_create(NULL);
 	chapters_screen = lv_obj_create(NULL);
+	lyricsearch_screen = lv_obj_create(NULL);
 	queue_screen = lv_obj_create(NULL);
 	details_screen = lv_obj_create(NULL);
 	wireless_screen = lv_obj_create(NULL);
@@ -667,6 +690,7 @@ void gui_init(gui_config_t *cfg) {
 	flappybird_screen = lv_obj_create(NULL);
 	calculator_screen = lv_obj_create(NULL);
 	notes_screen = lv_obj_create(NULL);
+	metronome_screen = lv_obj_create(NULL);
 	noteeditor_screen = lv_obj_create(NULL);
 
 	// Persistent topbar that stays above every screen.
@@ -741,6 +765,9 @@ void gui_init(gui_config_t *cfg) {
 		noteeditor_init(cfg); // before notes: a row of the shelf opens it
 		notes_init(cfg);
 	}
+	if (addons_enabled("metronome")) {
+		metronome_init(cfg); // before morepage: its tile opens it
+	}
 	morepage_init(cfg);
 	textview_init(cfg); // before filespage: a text file tapped there opens here
 	pictureview_init(cfg); // likewise, for JPEG and PNG pictures
@@ -778,6 +805,7 @@ void gui_init(gui_config_t *cfg) {
 	audiobookextras_init(cfg); // the bookmarks and summary pages
 	audiobooks_init(cfg);
 	chapters_init(cfg);
+	lyricsearch_init(cfg);
 	trackmenu_init(cfg);
 
 	// The leftward swipe that pulls the player in works on the browsing pages
@@ -808,6 +836,7 @@ void gui_init(gui_config_t *cfg) {
 		bootpicpage_screen, language_screen,
 		medialist_screen,  medialist_tracks_screen, medialist_albums_screen, audiobooks_screen, audiobooksettings_screen,
 		queue_screen,	  chapters_screen,		 details_screen,   audiobookcontrols_screen,
+		lyricsearch_screen,
 		wireless_screen,
 		wifisettings_screen,
 		btsettings_screen, btaudio_screen,	 airpodspage_screen, airplay_screen,   streaming_screen,
@@ -868,9 +897,9 @@ void gui_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_font(popup_label, &font_ui_22, 0);
 	lv_obj_set_style_text_align(popup_label, LV_TEXT_ALIGN_CENTER, 0);
 
-	// Three seconds: long enough to read a whole sentence, not just a two-word
-	// notice.
-	popup_timer = lv_timer_create(popup_hide_cb, 3000, NULL);
+	// Three seconds by default: long enough to read a whole sentence, not just
+	// a two-word notice. Each notice sets its own period when it is shown.
+	popup_timer = lv_timer_create(popup_hide_cb, POPUP_MS, NULL);
 	lv_timer_pause(popup_timer); // nothing to hide until a notice is shown
 
 	// The gui_post doorbell and the timer that drains it, created here, once, on

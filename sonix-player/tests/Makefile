@@ -43,6 +43,19 @@ $(BUILD)/test_subsonic: test_subsonic.c support.c $(CORE) $(shell find $(ROOT)/s
 sanitize:
 	$(MAKE) BUILD=.build/sanitize CFLAGS='-O1 -g -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -fno-omit-frame-pointer -fsanitize=address,undefined' LDFLAGS='-Wl,--gc-sections -fsanitize=address,undefined' test
 
+# The battery guard: when the player warns at five percent, when it switches
+# itself off at one, and which readings leave standby alone. The rule is its own
+# small module with no LVGL, no sysfs and no clock, which is exactly what makes
+# it testable here: power.c reads the gauge and does the two things.
+GUARD_SRC = test_batteryguard.c $(ROOT)/src/system/device/batteryguard.c
+.PHONY: batteryguard
+batteryguard: $(BUILD)/test_batteryguard
+	$(BUILD)/test_batteryguard
+
+$(BUILD)/test_batteryguard: $(GUARD_SRC) $(ROOT)/src/system/device/batteryguard.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(GUARD_SRC) $(LDFLAGS) $(LDLIBS)
+
 # The Screensaver folder's rules: which files are pictures, judged from their
 # JPEG headers, and the random pick between them. Plain C, no LVGL.
 PICS_SRC = test_screensaverpics.c $(ROOT)/src/system/device/screensaverpics.c \
@@ -142,6 +155,21 @@ $(BUILD)/test_notes: $(NOTES_SRC) $(ROOT)/src/system/notes/notesstore.h $(ROOT)/
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(NOTES_SRC) $(LDFLAGS) $(LDLIBS)
 
+# The ListenBrainz module's rules without a network: the queue file on the
+# card, the JSON body a request carries and the answers the server sends. The
+# module is compiled into the test (its internals are what is checked); the
+# network, the card and the clock-less externals are stubbed there. The JSON
+# parser and the settings store are the real ones.
+LB_SRC = test_listenbrainz.c $(ROOT)/src/system/core/json.c $(ROOT)/src/system/core/config.c
+.PHONY: listenbrainz
+listenbrainz: $(BUILD)/test_listenbrainz
+	$(BUILD)/test_listenbrainz
+
+$(BUILD)/test_listenbrainz: $(LB_SRC) $(ROOT)/src/system/listenbrainz/listenbrainz.h \
+					$(ROOT)/src/system/core/json.h $(ROOT)/src/system/core/config.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(LB_SRC) $(LDFLAGS) $(LDLIBS)
+
 # The rows of Album Art Max: the now-playing arrangement that trades the media
 # controls for the artwork. The sleeve is asked for at the size this gives
 # before anything has been laid out, so the arithmetic is its own module -- and
@@ -169,6 +197,96 @@ tagdate: $(BUILD)/test_tagdate
 $(BUILD)/test_tagdate: $(TAGDATE_SRC) $(ROOT)/src/system/library/tagdate.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(TAGDATE_SRC) $(LDFLAGS) $(LDLIBS)
+
+# LRCLIB search ranking, retry policy, free-text fallback and atomic sidecar
+# .lrc writes against a stubbed HTTP transport. Plain C, no LVGL.
+LRCLIB_SRC = test_lrclib.c $(ROOT)/src/system/core/json.c
+.PHONY: lrclib
+lrclib: $(BUILD)/test_lrclib
+	$(BUILD)/test_lrclib
+
+$(BUILD)/test_lrclib: $(LRCLIB_SRC) $(ROOT)/src/system/library/lrclib.c \
+                      $(ROOT)/src/system/library/lrclib.h $(ROOT)/src/system/core/json.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(LRCLIB_SRC) $(LDFLAGS) $(LDLIBS)
+
+# Tag reading, format sniffing, streaming Ogg comments and FLAC/Ogg ID3 skipping
+# across real containers and V1 tagdate rules. Plain C, no external codec libs.
+TAGS_DECODE_SRC = $(ROOT)/src/system/decode/decode.c \
+                  $(ROOT)/src/system/decode/sndfile.c \
+                  $(ROOT)/src/system/decode/stb_vorbis.c \
+                  $(ROOT)/src/system/decode/mp4.c \
+                  $(ROOT)/src/system/decode/apedec.c \
+                  $(ROOT)/src/system/decode/ape/apecore.c \
+                  $(ROOT)/src/system/decode/alacdec.c \
+                  $(ROOT)/src/system/decode/alac/alac.c \
+                  $(ROOT)/src/system/decode/aacdec.c \
+                  $(ROOT)/src/system/decode/dsd.c \
+                  $(ROOT)/src/system/decode/growfile.c \
+                  $(ROOT)/src/system/streaming/streambridge.c
+TAGS_SRC = test_tags.c \
+           $(ROOT)/src/system/library/metadata.c \
+           $(ROOT)/src/system/library/oggtags.c \
+           $(ROOT)/src/system/library/vorbischap.c \
+           $(ROOT)/src/system/library/tagdate.c \
+           $(ROOT)/src/system/library/cue.c \
+           $(ROOT)/src/system/image/png_scaled.c \
+           $(ROOT)/src/system/core/config.c \
+           $(ROOT)/src/system/core/utils.c
+.PHONY: tags
+tags: $(BUILD)/test_tags
+	$(BUILD)/test_tags
+
+$(BUILD)/test_tags: $(TAGS_SRC) $(TAGS_DECODE_SRC) \
+                    $(ROOT)/src/system/library/metadata.h $(ROOT)/src/system/library/oggtags.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-error=format-truncation -o $@ $(TAGS_SRC) \
+		-Wno-unused-parameter -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough -Wno-misleading-indentation $(TAGS_DECODE_SRC) \
+		$(LDFLAGS) $(LDLIBS)
+
+# SD-card mmap artwork (>8 MB), SIGBUS card-removal recovery, streaming Ogg and
+# APEv2 embedded covers, 1000-row JPEG player_covers cache and id_worker.
+COVERS_SRC = test_covers.c \
+             $(ROOT)/src/system/library/albumart.c \
+             $(ROOT)/src/system/library/oggtags.c \
+             $(ROOT)/src/system/library/cue.c \
+             $(ROOT)/src/gui/nowplaying/cover.c \
+             $(ROOT)/src/gui/nowplaying/coverloader.c \
+             $(ROOT)/src/system/image/art_shrink.c \
+             $(ROOT)/src/system/image/jpeg_scaled.c \
+             $(ROOT)/src/system/image/png_scaled.c \
+             $(ROOT)/src/system/image/stb_image_impl.c \
+             $(ROOT)/src/system/core/utils.c
+.PHONY: covers
+covers: $(BUILD)/test_covers
+	$(BUILD)/test_covers
+
+$(BUILD)/test_covers: $(COVERS_SRC) $(TAGS_DECODE_SRC) $(BUILD)/sqlite3_impl.o \
+                      $(ROOT)/src/system/library/albumart.h $(ROOT)/src/gui/nowplaying/cover.h
+	@mkdir -p $(BUILD)
+	$(CC) $(UI_CPPFLAGS) $(CFLAGS) -Wno-error=format-truncation -o $@ $(COVERS_SRC) \
+		-Wno-unused-parameter -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough -Wno-misleading-indentation $(TAGS_DECODE_SRC) \
+		$(BUILD)/sqlite3_impl.o $(LDFLAGS) $(LDLIBS)
+
+# FLAC radio stream decoding: native FLAC behind ID3v2, mid-stream 24-bit
+# relaxed join across false sync markers, chained Ogg FLAC with song titles
+# and multi-page packet assembly, and non-FLAC rejection.
+RADIOFLAC_SRC = test_radioflac.c $(ROOT)/src/system/streaming/radioflac.c
+.PHONY: radioflac sanitize-radioflac
+radioflac: $(BUILD)/test_radioflac
+	$(BUILD)/test_radioflac
+
+$(BUILD)/test_radioflac: $(RADIOFLAC_SRC) $(BUILD)/drflac_impl.o \
+                         $(ROOT)/src/system/streaming/radioflac.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(RADIOFLAC_SRC) $(BUILD)/drflac_impl.o $(LDFLAGS) $(LDLIBS)
+
+$(BUILD)/drflac_impl.o: $(ROOT)/src/system/decode/dr_flac.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -w -DDR_FLAC_IMPLEMENTATION -x c -c -o $@ $<
+
+sanitize-radioflac:
+	$(MAKE) BUILD=.build/sanitize CFLAGS='-O1 -g -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -fno-omit-frame-pointer -fsanitize=address,undefined' LDFLAGS='-Wl,--gc-sections -fsanitize=address,undefined' radioflac
 
 # The Most played list against the real library database: the play upsert
 # device_state.c runs at track start, the handle the page opens, and the
@@ -242,7 +360,8 @@ UI_SRC = $(ROOT)/tests/ui/test_main_menu.c $(ROOT)/src/gui/shell/main_menu.c \
          $(ROOT)/src/gui/shell/theme.c \
          $(ROOT)/src/gui/shell/icons.c $(ROOT)/src/gui/shell/main_menu_icons.c \
          $(ROOT)/src/gui/shell/gestures.c \
-         $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
+         $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c \
+         $(ROOT)/src/system/addons/addons.c
 UI_LVGL_SRC = $(shell find $(ROOT)/lvgl/src -name '*.c' 2>/dev/null)
 UI_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_SRC)) \
          $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
@@ -277,6 +396,7 @@ SAVER_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(SAVER_SRC)) \
 TOOLS_SRC = $(ROOT)/tests/ui/test_tools_pages.c \
             $(ROOT)/src/gui/calculator/calculator.c $(ROOT)/src/gui/calculator/calcmodel.c \
             $(ROOT)/src/gui/notes/notes.c $(ROOT)/src/gui/notes/noteeditor.c \
+            $(ROOT)/src/gui/metronome/metronome.c \
             $(ROOT)/src/system/notes/notesstore.c $(ROOT)/src/system/text/textfile.c \
             $(ROOT)/src/gui/library/textview.c $(ROOT)/src/gui/library/pictureview.c \
             $(ROOT)/src/gui/shell/morepage.c $(ROOT)/src/gui/shell/gridpage.c \
@@ -286,7 +406,8 @@ TOOLS_SRC = $(ROOT)/tests/ui/test_tools_pages.c \
 			$(wildcard $(ROOT)/src/system/input/swipedict.c) \
             $(ROOT)/src/gui/shell/theme.c $(ROOT)/src/gui/shell/icons.c \
             \
-            $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
+            $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c \
+            $(ROOT)/src/system/addons/addons.c
 TOOLS_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(TOOLS_SRC)) \
             $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
 
@@ -295,13 +416,16 @@ TOOLS_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(TOOLS_SRC)) \
 UI_LANG = ../../sonix-packer/assets/V1/usr/resource/sonix/language
 
 .PHONY: ui
-ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages $(BUILD)/test_wifi_pages
+ui: $(BUILD)/test_main_menu $(BUILD)/test_screensaver $(BUILD)/test_tools_pages $(BUILD)/test_wifi_pages \
+    $(BUILD)/test_chargescreen $(BUILD)/test_lyricsearch
 	$(BUILD)/test_main_menu $(UI_LANG)
 	$(BUILD)/test_main_menu $(UI_LANG) saved
 	$(BUILD)/test_screensaver $(UI_LANG)
 	$(BUILD)/test_screensaver $(UI_LANG) saved
 	$(BUILD)/test_tools_pages $(UI_LANG)
 	$(BUILD)/test_wifi_pages $(UI_LANG)
+	$(BUILD)/test_chargescreen $(UI_LANG)
+	$(BUILD)/test_lyricsearch $(UI_LANG)
 
 $(BUILD)/test_main_menu: $(UI_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
@@ -309,10 +433,16 @@ $(BUILD)/test_main_menu: $(UI_OBJ)
 $(BUILD)/test_screensaver: $(SAVER_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
+$(BUILD)/test_chargescreen: $(CHARGE_OBJ)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
 $(BUILD)/test_tools_pages: $(TOOLS_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 $(BUILD)/test_wifi_pages: $(WIFIPAGE_OBJ)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+$(BUILD)/test_lyricsearch: $(LYRICSEARCH_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 $(BUILD)/ui/%.o: $(ROOT)/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
@@ -323,6 +453,8 @@ $(BUILD)/ui/%.o: $(ROOT)/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(UI_CPPFLAGS) $(filter-out -Werror,$(UI_CFLAGS)) -c $< -o $@
+
+-include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(LYRICSEARCH_OBJ:.o=.d))
 
 -include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d))
 

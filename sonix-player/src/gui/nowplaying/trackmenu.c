@@ -8,6 +8,7 @@
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
+#include "src/gui/library/geniusui.h"
 #include "src/gui/library/medialist.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/library/playlistpage.h"
@@ -858,6 +859,18 @@ static void details_add_row(const char *name, const char *value) {
 // the player's own menu).
 static char details_path[512];
 
+// The details card's own "Start Smart Mix" row. An arbitrary library track
+// uses details_path; the playing track's card falls back to the decoder's file.
+static void details_genius_cb(lv_event_t *e) {
+	(void)e;
+	device_state_t state;
+	device_state_get(&state);
+	const char *path = details_path[0] ? details_path : state.current_file;
+	if (path[0] && !podcastcache_is_episode(path)) {
+		geniusui_start(path);
+	}
+}
+
 // The common tail of both variants: tags, format, size, path.
 // `codec` is the name the decoder reports ("MP3", "AAC", "ALAC"...), empty when
 // it has none; `kbps` is the bitrate the file declares, 0 when it declares
@@ -971,6 +984,28 @@ static void details_fill(const char *file, const song_metadata_t *tags, int bits
 		details_add_row("trackmenu_source", "tidal");
 	} else {
 		details_add_row("trackmenu_file", file);
+	}
+
+	// A local music file can be the seed of a Smart Mix; episodes cannot.
+	if (file[0] && !podcastcache_is_episode(file)) {
+		lv_obj_t *row = lv_btn_create(details_card);
+		lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+		lv_obj_set_style_bg_opa(row, 0, 0);
+		lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
+		lv_obj_set_style_border_width(row, 0, 0);
+		lv_obj_set_style_shadow_width(row, 0, 0);
+		lv_obj_set_style_pad_all(row, 0, 0);
+		lv_obj_set_scrollable(row, false);
+		lv_obj_set_event_bubble(row, true);
+		lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
+		lv_obj_add_event_cb(row, details_genius_cb, LV_EVENT_CLICKED, NULL);
+
+		lv_obj_t *label = lv_label_create(row);
+		lv_label_set_text(label, tr("smartmix_start"));
+		lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+		lv_obj_set_width(label, lv_pct(100));
+		lv_obj_add_style(label, &theme_style_text, 0);
+		lv_obj_set_style_text_font(label, &font_ui_24, 0);
 	}
 }
 
@@ -1144,6 +1179,16 @@ static void add_to_playlist_cb(void *user) {
 	switcher_set_player_return(playlistpage_screen);
 }
 
+// Start a Smart Mix from the playing track, leaving episodes alone.
+static void start_genius_cb(void *user) {
+	(void)user;
+	device_state_t state;
+	device_state_get(&state);
+	if (state.current_file[0] && !podcastcache_is_episode(state.current_file)) {
+		geniusui_start(state.current_file);
+	}
+}
+
 // "Show album": the record the playing track came off. Backing out of it
 // returns to the player, like everything else this menu opens.
 static void open_album_cb(void *user) {
@@ -1296,6 +1341,7 @@ void trackmenu_open(lv_obj_t *anchor) {
 	// borrowed term to make a menu line up.
 	static const popover_item_t ITEMS[] = {
 		{"trackmenu_queue", open_queue_cb, NULL},
+		{"smartmix_start", start_genius_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
 		{"show_album", open_album_cb, NULL},
 		{"details", open_details_cb, NULL},
@@ -1303,6 +1349,7 @@ void trackmenu_open(lv_obj_t *anchor) {
 	};
 	static const popover_item_t ITEMS_TIDAL[] = {
 		{"trackmenu_queue", open_queue_cb, NULL},
+		{"smartmix_start", start_genius_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
 		{"show_album", open_album_cb, NULL},
 		{"show_artist", open_tidal_artist_cb, NULL},
@@ -1322,6 +1369,7 @@ void trackmenu_open(lv_obj_t *anchor) {
 	// string-extraction tool only reads these initialisers.
 	static const popover_item_t ITEMS_KEEP[] = {
 		{"trackmenu_queue", open_queue_cb, NULL},
+		{"smartmix_start", start_genius_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
 		{"show_album", open_album_cb, NULL},
 		{"trackmenu_keep_on_card", keep_on_card_cb, NULL},
@@ -1337,12 +1385,18 @@ void trackmenu_open(lv_obj_t *anchor) {
 	// Offering "Download" again is both misleading and useless offline.
 	bool keepable = !podcast && !tidal_track && streamkeep_is_stream_track(state.current_file);
 
+	// Smart Mix stays available on every non-podcast menu, as upstream has it.
+	// Only the episode table omits it; the Tidal and keep-on-card tables add
+	// their own action to the upstream row set. The counts come from the tables
+	// themselves: a hand-counted 5 went stale the moment a row was added.
 	if (keepable) {
-		popover_show(anchor, ITEMS_KEEP, 6);
+		popover_show(anchor, ITEMS_KEEP, (int)(sizeof(ITEMS_KEEP) / sizeof(ITEMS_KEEP[0])));
 	} else if (tidal_track) {
-		popover_show(anchor, ITEMS_TIDAL, 6);
+		popover_show(anchor, ITEMS_TIDAL, (int)(sizeof(ITEMS_TIDAL) / sizeof(ITEMS_TIDAL[0])));
+	} else if (podcast) {
+		popover_show(anchor, ITEMS_PODCAST, (int)(sizeof(ITEMS_PODCAST) / sizeof(ITEMS_PODCAST[0])));
 	} else {
-		popover_show(anchor, podcast ? ITEMS_PODCAST : ITEMS, 5);
+		popover_show(anchor, ITEMS, (int)(sizeof(ITEMS) / sizeof(ITEMS[0])));
 	}
 }
 

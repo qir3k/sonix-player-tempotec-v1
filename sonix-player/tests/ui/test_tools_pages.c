@@ -23,18 +23,21 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/library/pictureview.h"
 #include "src/gui/library/textview.h"
+#include "src/gui/metronome/metronome.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/notes/noteeditor.h"
 #include "src/gui/notes/notes.h"
 #include "src/gui/shell/gridpage.h"
 #include "src/system/playback/device_state.h"
 #include "src/gui/shell/icons.h"
+#include "src/gui/shell/keyboard.h"
 #include "src/gui/shell/morepage.h"
 #include "src/gui/shell/menuorder.h"
 #include "src/gui/shell/theme.h"
 #include "src/system/input/kblayout.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
+#include "src/system/input/kblayout.h"
 
 const char *storage_sd_root(void) { return ""; }
 #include "src/system/notes/notesstore.h"
@@ -120,6 +123,39 @@ void audiobooks_open(void) { switch_screen(audiobooks_screen); }
  * home menu whether Books took its Audiobooks slot. */
 bool main_menu_books(void) { return config_get_bool("ui", "home_books", false); }
 void flappybird_open(void) { /* not reached from this test */ }
+
+/* The metronome's click is a thread writing into the PCM, which this suite has
+ * no output for. The page asks it only these questions, and the two counters
+ * are driven from the test to stand for the thread having just written a beat
+ * -- which is exactly the contract the page is built on: it reads the beat
+ * back rather than timing one itself. */
+static bool click_started;
+static bool click_failed;
+static int click_tempo;
+static int click_bar;
+static unsigned click_written;
+static int click_last;
+
+bool metronomeclick_start(int bpm, int beats) {
+	click_started = true;
+	click_failed = false;
+	click_tempo = bpm;
+	click_bar = beats;
+	click_written = 0;
+	click_last = -1;
+	return true;
+}
+void metronomeclick_set_tempo(int bpm, int beats) {
+	click_tempo = bpm;
+	click_bar = beats;
+}
+void metronomeclick_stop(void) { click_started = false; }
+bool metronomeclick_failed(void) { return click_failed; }
+unsigned metronomeclick_beats(void) { return click_written; }
+int metronomeclick_beat_index(void) { return click_last; }
+
+/* A timer parked for the screen's dark half; there is no power manager here. */
+void power_pause_in_standby(lv_timer_t *timer) { (void)timer; }
 void switcher_attach_back_gesture(lv_obj_t *obj) { (void)obj; }
 bool switcher_back_drag_active(void) { return false; }
 void switcher_set_back_guard(lv_obj_t *screen, bool (*handler)(void)) { (void)screen; (void)handler; }
@@ -351,6 +387,8 @@ static void check_strings(const char *language_dir) {
 		"notes_cannot_open", "notes_too_long", "music_years", "music_most_played",
 		"library_empty_most_played",
 		"musicsettings_rearrange_main_page",
+		"metronome", "metronome_bpm", "metronome_beats", "metronome_start",
+		"metronome_stop", "metronome_tap", "metronome_no_audio",
 	};
 	DIR *dir = opendir(language_dir);
 	assert(dir);
@@ -378,9 +416,9 @@ static void check_strings(const char *language_dir) {
 		languages++;
 	}
 	closedir(dir);
-	// The eight this firmware ships. A ninth added to the folder is meant to
+	// The eleven this firmware ships. A twelfth added to the folder is meant to
 	// make this fail, so its texts get checked the same way.
-	assert(languages == 8);
+	assert(languages == 11);
 	assert(lang_set("English"));
 }
 
@@ -454,6 +492,7 @@ static void check_more_page(gui_config_t *cfg, const char *tag) {
 	assert(has_entry(shown, tr("books")));
 	assert(has_entry(shown, tr("file_explorer")));
 	assert(has_entry(shown, tr("flappy_bird")));
+	assert(has_entry(shown, tr("metronome")));
 
 	// A tile of a page that does not scroll has to be on the glass, every one
 	// of them: an entry laid out past the foot of a page that cannot be
@@ -757,6 +796,182 @@ static void check_calculator_page(gui_config_t *cfg, const char *tag) {
 	press_key(keypad, "AC");
 }
 
+/* ---- the Metronome page -------------------------------------------------- */
+
+/* The page's two cards, in the order they are built: the tempo with its start
+ * and tap, then the bar. Found through the container settingsrow_page() made,
+ * which is the one child that is not a label and holds more than one thing. */
+static lv_obj_t *metronome_card(lv_obj_t *page, int index) {
+	lv_obj_t *container = NULL;
+	for (uint32_t i = 0; i < lv_obj_get_child_count(page); i++) {
+		lv_obj_t *child = lv_obj_get_child(page, i);
+		if (!lv_obj_check_type(child, &lv_label_class) && lv_obj_get_child_count(child) >= 2) {
+			container = child;
+			break;
+		}
+	}
+	assert(container);
+	return lv_obj_get_child(container, index);
+}
+
+/* The row of one dot per beat: the second thing on the tempo card, under the
+ * number and its unit. */
+static lv_obj_t *metronome_dots(lv_obj_t *page) {
+	lv_obj_t *readout = lv_obj_get_child(metronome_card(page, 0), 0);
+	return lv_obj_get_child(readout, 1);
+}
+
+/* The tempo itself, big, beside the word for it. */
+static lv_obj_t *metronome_readout(lv_obj_t *page) {
+	lv_obj_t *unit = find_label(page, tr("metronome_bpm"));
+	assert(unit);
+	lv_obj_t *group = lv_obj_get_parent(unit);
+	for (uint32_t i = 0; i < lv_obj_get_child_count(group); i++) {
+		lv_obj_t *child = lv_obj_get_child(group, i);
+		if (child != unit && lv_obj_check_type(child, &lv_label_class)) {
+			return child;
+		}
+	}
+	assert(!"the metronome has no tempo readout");
+	return NULL;
+}
+
+/* One of the seven beats of a bar, by its number. */
+static lv_obj_t *beat_choice(lv_obj_t *page, int beats) {
+	char text[4];
+	snprintf(text, sizeof(text), "%d", beats);
+	lv_obj_t *label = find_label(lv_obj_get_child(metronome_card(page, 1), 1), text);
+	assert(label);
+	return label;
+}
+
+static void choose_beats(lv_obj_t *page, int beats) {
+	lv_obj_send_event(lv_obj_get_parent(beat_choice(page, beats)), LV_EVENT_CLICKED, NULL);
+}
+
+static void check_metronome_page(gui_config_t *cfg, const char *tag) {
+	metronome_open();
+	assert(lv_screen_active() == metronome_screen);
+	lv_obj_update_layout(metronome_screen);
+	check_within_panel(metronome_screen, cfg, "Metronome");
+	dump_snapshot(metronome_screen, tag);
+
+	lv_obj_t *readout = metronome_readout(metronome_screen);
+	lv_obj_t *slider = find_class(metronome_screen, &lv_slider_class);
+	assert(slider);
+	lv_obj_t *dots = metronome_dots(metronome_screen);
+	lv_obj_t *segments = lv_obj_get_child(metronome_card(metronome_screen, 1), 1);
+	// Seven beats, drawn as seven: up to seven is the whole of what the bar
+	// offers, and a bar that could not be counted to seven would be a promise
+	// the page does not keep.
+	assert(lv_obj_get_child_count(dots) == 7);
+	assert(lv_obj_get_child_count(segments) == 7);
+
+	// The page opens at the tempo it was built with, 120 in a fresh config, and
+	// the knob is where that number says it is.
+	assert(strcmp(lv_label_get_text(readout), "120") == 0);
+	assert(lv_slider_get_value(slider) == 120);
+
+	// Both ends of the scale, and nothing outside them: the slider is asked for
+	// 900 and the number beside it still reads the top of the range.
+	lv_slider_set_value(slider, 30, LV_ANIM_OFF);
+	lv_obj_send_event(slider, LV_EVENT_VALUE_CHANGED, NULL);
+	assert(strcmp(lv_label_get_text(readout), "30") == 0);
+	lv_slider_set_value(slider, 250, LV_ANIM_OFF);
+	lv_obj_send_event(slider, LV_EVENT_VALUE_CHANGED, NULL);
+	assert(strcmp(lv_label_get_text(readout), "250") == 0);
+	lv_slider_set_value(slider, 900, LV_ANIM_OFF);
+	lv_obj_send_event(slider, LV_EVENT_VALUE_CHANGED, NULL);
+	assert(strcmp(lv_label_get_text(readout), "250") == 0);
+	lv_slider_set_value(slider, 0, LV_ANIM_OFF);
+	lv_obj_send_event(slider, LV_EVENT_VALUE_CHANGED, NULL);
+	assert(strcmp(lv_label_get_text(readout), "30") == 0);
+
+	// Tap tempo: two taps a quarter of a second apart are 240 BPM.
+	lv_obj_t *tap = lv_obj_get_parent(find_label(metronome_screen, tr("metronome_tap")));
+	lv_tick_inc(250);
+	lv_obj_send_event(tap, LV_EVENT_CLICKED, NULL);
+	lv_tick_inc(250);
+	lv_obj_send_event(tap, LV_EVENT_CLICKED, NULL);
+	assert(strcmp(lv_label_get_text(readout), "240") == 0);
+	// The slider follows a tap: there is one tempo on the page, shown twice.
+	assert(lv_slider_get_value(slider) == 240);
+
+	// Taps faster than the scale allows leave the tempo at the top of it.
+	for (int i = 0; i < 3; i++) {
+		lv_tick_inc(60);
+		lv_obj_send_event(tap, LV_EVENT_CLICKED, NULL);
+	}
+	assert(strcmp(lv_label_get_text(readout), "250") == 0);
+
+	// A bar of seven is seven dots, and the chosen beat wears the accent.
+	choose_beats(metronome_screen, 7);
+	assert(config_get_int("metronome", "beats", 0) == 7);
+	lv_obj_update_layout(metronome_screen);
+	for (int i = 0; i < 7; i++) {
+		assert(!lv_obj_is_hidden(lv_obj_get_child(dots, i)));
+	}
+	lv_color_t accent = theme()->accent;
+	assert(lv_color_eq(lv_obj_get_style_bg_color(lv_obj_get_parent(beat_choice(metronome_screen, 7)), LV_PART_MAIN),
+					   accent));
+	assert(!lv_color_eq(lv_obj_get_style_bg_color(lv_obj_get_parent(beat_choice(metronome_screen, 1)), LV_PART_MAIN),
+						accent));
+
+	// A bar of three is three dots; the rest are not drawn at all.
+	choose_beats(metronome_screen, 3);
+	for (int i = 0; i < 3; i++) {
+		assert(!lv_obj_is_hidden(lv_obj_get_child(dots, i)));
+	}
+	for (int i = 3; i < 7; i++) {
+		assert(lv_obj_is_hidden(lv_obj_get_child(dots, i)));
+	}
+
+	// Running: the click is given the tempo and the bar the page is showing.
+	assert(!click_started);
+	lv_obj_t *start = lv_obj_get_parent(find_label(metronome_screen, tr("metronome_start")));
+	lv_obj_send_event(start, LV_EVENT_CLICKED, NULL);
+	assert(click_started);
+	assert(click_tempo == 250);
+	assert(click_bar == 3);
+
+	// The dots follow the beat the click thread has written, not a clock of the
+	// page's own: the first of the bar is the lit one, in the accent colour.
+	click_written = 1;
+	click_last = 0;
+	lv_tick_inc(40);
+	lv_timer_handler();
+	assert(lv_obj_get_style_bg_opa(lv_obj_get_child(dots, 0), LV_PART_MAIN) == LV_OPA_COVER);
+	assert(lv_color_eq(lv_obj_get_style_bg_color(lv_obj_get_child(dots, 0), LV_PART_MAIN), accent));
+	assert(lv_obj_get_style_bg_opa(lv_obj_get_child(dots, 1), LV_PART_MAIN) != LV_OPA_COVER);
+
+	// The second beat moves the flash on, so what is lit is a count and not a
+	// decoration that happens to be on the first dot.
+	click_written = 2;
+	click_last = 1;
+	lv_tick_inc(40);
+	lv_timer_handler();
+	assert(lv_obj_get_style_bg_opa(lv_obj_get_child(dots, 1), LV_PART_MAIN) == LV_OPA_COVER);
+	assert(lv_obj_get_style_bg_opa(lv_obj_get_child(dots, 0), LV_PART_MAIN) != LV_OPA_COVER);
+
+	// A new bar while it is running reaches the click without stopping it.
+	choose_beats(metronome_screen, 2);
+	assert(click_started);
+	assert(click_bar == 2);
+
+	// Leaving the page stops the click: the page is the only place it can be
+	// stopped from.
+	lv_screen_load(morepage_screen);
+	assert(!click_started);
+
+	// And coming back shows the tempo and the bar where they were left.
+	metronome_open();
+	assert(lv_screen_active() == metronome_screen);
+	assert(strcmp(lv_label_get_text(readout), "250") == 0);
+	assert(config_get_int("metronome", "bpm", 0) == 250);
+	assert(find_label(metronome_screen, tr("metronome_start")));
+	lv_screen_load(morepage_screen);
+}
+
 /* ---- the Notes page ------------------------------------------------------ */
 
 static void check_notes_page(gui_config_t *cfg, const char *dir, const char *tag, const char *tag_editor,
@@ -834,6 +1049,34 @@ static void check_notes_page(gui_config_t *cfg, const char *dir, const char *tag
 	assert(lv_obj_get_height(field) < read_height);
 	assert(find_image_button(toggle, &icon_check));
 	dump_snapshot(noteeditor_screen, tag_editor_edit);
+
+	// The 12-key Ukrainian ЙЦУКЕН rows, T9 keypad and held-key variants fit on
+	// the 240x320 panel as well.
+	assert(strcmp(kblayout_name(KB_LAYOUT_UKRAINIAN), "Українська") == 0);
+	assert(kblayout_row_len(KB_LAYOUT_UKRAINIAN, 0) == 12);
+	assert(kblayout_row_len(KB_LAYOUT_UKRAINIAN, 1) == 11);
+	assert(kblayout_row_len(KB_LAYOUT_UKRAINIAN, 2) == 9);
+	assert(strcmp(kblayout_letter(KB_LAYOUT_UKRAINIAN, 0, 11, false), "ї") == 0);
+	assert(strcmp(kblayout_letter(KB_LAYOUT_UKRAINIAN, 1, 10, true), "Є") == 0);
+	assert(kblayout_variant_count("г") == 1 &&
+		   strcmp(kblayout_variant(KB_LAYOUT_UKRAINIAN, "г", 0), "ґ") == 0);
+	assert(kblayout_variant_count("Г") == 1 &&
+		   strcmp(kblayout_variant(KB_LAYOUT_UKRAINIAN, "Г", 0), "Ґ") == 0);
+	assert(kblayout_variant_count("і") == 1 &&
+		   strcmp(kblayout_variant(KB_LAYOUT_UKRAINIAN, "і", 0), "ї") == 0);
+	kblayout_move_in_use(KB_LAYOUT_UKRAINIAN, 0);
+	keyboard_refresh_layout();
+	lv_obj_update_layout(noteeditor_screen);
+	check_within_panel(noteeditor_screen, cfg, "Note editor (Ukrainian keyboard)");
+	config_set_int("other", "keyboard_t9", 1);
+	keyboard_refresh_type();
+	lv_obj_update_layout(noteeditor_screen);
+	check_within_panel(noteeditor_screen, cfg, "Note editor (Ukrainian T9)");
+	config_set_int("other", "keyboard_t9", 0);
+	keyboard_refresh_type();
+	kblayout_move_in_use(KB_LAYOUT_ENGLISH, 0);
+	kblayout_move_others(KB_LAYOUT_UKRAINIAN, 0);
+	keyboard_refresh_layout();
 
 	// Typing, then leaving the page: the writing reaches the card even though
 	// the check button was never pressed. Nothing here is the only copy.
@@ -1018,6 +1261,7 @@ int main(int argc, char **argv) {
 	morepage_screen = lv_obj_create(NULL);
 	calculator_screen = lv_obj_create(NULL);
 	notes_screen = lv_obj_create(NULL);
+	metronome_screen = lv_obj_create(NULL);
 	noteeditor_screen = lv_obj_create(NULL);
 
 	/* The notes the card already has, put there the way a computer would
@@ -1050,6 +1294,7 @@ int main(int argc, char **argv) {
 	calculator_init(&cfg);
 	noteeditor_init(&cfg);
 	notes_init(&cfg);
+	metronome_init(&cfg);
 	morepage_init(&cfg);
 	player_drag_attaches = 0; // counting from here: only the viewers are built below
 	textview_init(&cfg); // the notes shelf shows a long note through it
@@ -1087,6 +1332,7 @@ int main(int argc, char **argv) {
 	check_more_audiobooks_option(&cfg);
 
 	check_calculator_page(&cfg, bp_is_tempotec_v1() ? "v1-calculator" : "hiby-calculator");
+	check_metronome_page(&cfg, bp_is_tempotec_v1() ? "v1-metronome" : "hiby-metronome");
 	check_notes_page(&cfg, dir, bp_is_tempotec_v1() ? "v1-notes" : "hiby-notes",
 					 bp_is_tempotec_v1() ? "v1-note-editor" : "hiby-note-editor",
 					 bp_is_tempotec_v1() ? "v1-note-editor-writing" : "hiby-note-editor-writing",
@@ -1094,6 +1340,6 @@ int main(int argc, char **argv) {
 					 bp_is_tempotec_v1() ? "v1-note-long" : "hiby-note-long");
 
 	lv_deinit();
-	printf("PASS calculator and notes pages (%s)\n", bp_is_tempotec_v1() ? "240x320" : "480x720");
+	printf("PASS calculator, notes and metronome pages (%s)\n", bp_is_tempotec_v1() ? "240x320" : "480x720");
 	return 0;
 }
