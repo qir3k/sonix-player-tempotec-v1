@@ -13,7 +13,7 @@
 
 The firmware builder starts with an official V1 update package, replaces the stock music player and interface with Sonix, then repackages the update as `v1.upt`.
 
-This checkout uses **`personal` for personal firmware releases**. Merging work from `dev` into `personal` starts a build, gives the personal build a new version, and publishes its `v1.upt` and matching checksum as a release in this repository. Pushes to `dev` do not package firmware. The `main` branch is the shareable version: it can produce an Actions artifact, and a release from it is optional. See [the release guide](docs/releases.md).
+This checkout is worked on **`dev`** and released from **`personal`**. New work is committed on `dev`; it is the branch to test from, and a push to it packages nothing. `personal` holds exactly what `dev` holds once a change has been tested there, and starting the build from it gives the personal firmware a new version and publishes its `v1.upt` and matching checksum as a release in this repository. `main` is no longer used for new work, and it is kept only as the shareable version: it can produce an Actions artifact, and a release from it is optional. See [the release guide](docs/releases.md).
 
 This is not an official TempoTec or HiBy release. **It has been tested on physical TempoTec Variations V1 hardware and works on the tested device.** It targets the **TempoTec Variations V1 only**; compatibility with the V1-A or other players in the Variations family is not established.
 
