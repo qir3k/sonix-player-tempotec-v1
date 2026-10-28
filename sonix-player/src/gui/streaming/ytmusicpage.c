@@ -900,7 +900,10 @@ static void play_item(const ytmusic_item_t *item) {
 		return;
 	}
 	pthread_detach(thread);
-	gui_notify_popup(tr("downloading"));
+	// Nothing else is said here: loading_show() is already the card with the
+	// spinner, the percentage and the bar. The "downloading" popup that used to
+	// be raised on top of it said the same thing twice, and the older of the two
+	// covered the progress it was announcing.
 }
 
 // ---------------------------------------------------------------------------
@@ -988,7 +991,7 @@ static void row_menu_save(void *user) {
 		return;
 	}
 	pthread_detach(thread);
-	gui_notify_popup(tr("downloading"));
+	// The loading card is the only progress there is; see play_item().
 }
 
 static void row_menu_play(void *user) {

@@ -259,4 +259,8 @@ extern const lv_image_dsc_t icon_menu_metronome;
 #define icon_save_state icon_import
 #define icon_airpods_transparency icon_now_playing
 
+// Hand-rasterised, not from the generated icons.c: see icon_plug.c. The same
+// svg and generator entry exist, so a regeneration can take it over.
+extern const lv_image_dsc_t icon_plug;
+
 #endif // ICONS_H

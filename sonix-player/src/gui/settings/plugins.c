@@ -38,11 +38,6 @@ void plugins_init(gui_config_t *cfg) {
 	lv_obj_add_style(plugins_screen, &theme_style_screen, 0);
 	lv_obj_t *list = settingsrow_page(plugins_screen, cfg, "plugins");
 
-	// The page's own sentence, as a caption on a first row that is not a
-	// switch: it explains what a switch costs and when it is paid.
-	lv_obj_t *intro = settingsrow_action(list, "plugins_installed", NULL, NULL);
-	settingsrow_add_caption(intro, "plugins_note");
-
 	for (int i = 0; i < addons_count(); i++) {
 		const addon_t *addon = addons_at(i);
 		if (!addon) {

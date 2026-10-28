@@ -146,6 +146,9 @@ ICONS = [
     ("album.svg", "album_big", 96),
     ("circle-play.svg", "circle_play", 34),
     ("ellipsis-vertical.svg", "ellipsis_vertical", 30),
+    # The Plugins row in Settings: a plug, because the three dots there read
+    # as "more of this page" rather than "extra modules you can switch on".
+    ("plug.svg", "plug", 30),
     ("list-music.svg", "list_music", 34),
     # Selection mode on the library lists and the file browser: its corner
     # buttons that add the chosen rows to a playlist, to the favourites and to

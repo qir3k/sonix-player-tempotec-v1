@@ -372,7 +372,7 @@ UI_CFLAGS = $(CFLAGS) -MMD -MP
 # The Wi-Fi page and its manual-entry page for hidden networks, on the same
 # renderer; the radio under it is a recording stub (see test_wifi_pages.c).
 WIFIPAGE_SRC = $(ROOT)/tests/ui/test_wifi_pages.c $(ROOT)/src/gui/wireless/wifisettings.c \
-            $(ROOT)/src/gui/shell/settingsrow.c $(ROOT)/src/gui/shell/keyboard.c \
+            $(ROOT)/src/gui/settings/plugins.c $(ROOT)/src/gui/shell/settingsrow.c $(ROOT)/src/gui/shell/keyboard.c \
             $(ROOT)/src/gui/shell/popover.c $(ROOT)/src/gui/shell/spinner.c \
 			$(wildcard $(ROOT)/src/system/input/swipedict.c) \
             $(ROOT)/src/gui/shell/theme.c $(ROOT)/src/gui/shell/icons.c \
