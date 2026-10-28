@@ -4,8 +4,12 @@
 
 #include "win_compat_host.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <windows.h>
+#include <errno.h>
+#include <windows.h>
 
 int win_mkdir(const char *path, int mode) {
 	(void)mode;
@@ -22,6 +26,44 @@ int win_fchmod(int fd, unsigned mode) {
 
 struct tm *win_gmtime_r(const time_t *timep, struct tm *result) {
 	return gmtime_s(result, timep) == 0 ? result : NULL;
+}
+
+struct tm *win_localtime_r(const time_t *timep, struct tm *result) {
+	return localtime_s(result, timep) == 0 ? result : NULL;
+}
+
+int win_fsync(int fd) {
+	// mingw has no fsync; _commit flushes the same descriptor to the disk.
+	return _commit(fd);
+}
+
+int win_usleep(unsigned usec) {
+	Sleep(usec / 1000u);
+	return 0;
+}
+
+char *win_mkdtemp(char *tmpl) {
+	// mingw has no mkdtemp: fill the XXXXXX in and take the first folder that
+	// does not already exist, the same contract the POSIX call has.
+	static unsigned seed;
+	if (!tmpl) return NULL;
+	size_t len = strlen(tmpl);
+	if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) return NULL;
+	for (unsigned attempt = 0; attempt < 1000; attempt++) {
+		unsigned r = GetTickCount() ^ (seed++ * 2654435761u) ^ GetCurrentProcessId();
+		for (int i = 0; i < 6; i++) {
+			tmpl[len - 6 + (size_t)i] = (char)('a' + (r % 26));
+			r /= 26;
+		}
+		if (_mkdir(tmpl) == 0) return tmpl;
+	}
+	return NULL;
+}
+
+int win_rename(const char *from, const char *to) {
+	if (MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING)) return 0;
+	errno = EACCES;
+	return -1;
 }
 
 char *win_strcasestr(const char *haystack, const char *needle) {

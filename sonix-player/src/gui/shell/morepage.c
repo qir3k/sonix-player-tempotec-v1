@@ -12,6 +12,7 @@
 #include "src/gui/gearboy/gearboypage.h"
 #include "src/gui/library/audiobooks.h"
 #include "src/gui/library/filespage.h"
+#include "src/gui/metronome/metronome.h"
 #include "src/gui/notes/notes.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/gridpage.h"
@@ -21,6 +22,7 @@
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
+#include "src/system/addons/addons.h"
 
 lv_obj_t *morepage_screen;
 
@@ -67,6 +69,9 @@ static bool more_tokyo_icon(const char *label, const lv_image_dsc_t **icon, them
 	} else if (strcmp(label, "notes") == 0) {
 		*icon = &icon_notes;
 		*tone = THEME_SEMANTIC_PURPLE;
+	} else if (strcmp(label, "metronome") == 0) {
+		*icon = &icon_metronome;
+		*tone = THEME_SEMANTIC_GREEN;
 	} else {
 		return false;
 	}
@@ -135,6 +140,10 @@ static const grid_entry_t MORE_ENTRIES[] = {
 	// it was left holding, and the notes shelf reads the card.
 	{"calculator", &icon_menu_calculator, NULL, calculator_open},
 	{"notes", &icon_menu_notes, NULL, notes_open},
+	// An action for the calculator's reason: the tempo and the bar come back
+	// from the settings as they were left, and the page repaints them on the
+	// way in.
+	{"metronome", &icon_menu_metronome, NULL, metronome_open},
 };
 
 #define MORE_ENTRIES_MAX 12
@@ -147,6 +156,24 @@ static const grid_entry_t MORE_ENTRIES[] = {
 // this page offers Books, exactly as it always has, and with it on Books has
 // moved up to the home screen and this entry becomes the Audiobooks section
 // instead. The place, the count and the page's shape are the same either way.
+// Which addon a More row belongs to, by the slug the arrangement stores. A row
+// whose module is switched off is not offered at all: the page it opens was
+// never built (see gui.c), so the row would lead to an empty screen.
+static const char *more_addon_of(const char *slug) {
+	if (!slug) {
+		return NULL;
+	}
+	if (strcmp(slug, "gearboy") == 0) return "gearboy";
+	if (strcmp(slug, "flappy_bird") == 0) return "flappy";
+	if (strcmp(slug, "calculator") == 0) return "calculator";
+	if (strcmp(slug, "notes") == 0) return "notes";
+	if (strcmp(slug, "metronome") == 0) return "metronome";
+	// The shelf is the ebook module; Audiobooks is the library's own page and
+	// stays whatever the books shelf is set to.
+	if (strcmp(slug, "books") == 0) return "ebook";
+	return NULL;
+}
+
 static int more_entries_build(grid_entry_t *out, int max) {
 	int count = 0;
 	bool books_on_home = main_menu_books();
@@ -159,12 +186,20 @@ static int more_entries_build(grid_entry_t *out, int max) {
 			continue;
 		}
 		const char *slug = menuorder_slug(MENUORDER_MORE, id);
+		const char *addon = more_addon_of(slug);
+		if (addon && !addons_enabled(addon)) {
+			continue;
+		}
 		for (size_t entry = 0; entry < sizeof(MORE_ENTRIES) / sizeof(MORE_ENTRIES[0]); entry++) {
 			if (strcmp(MORE_ENTRIES[entry].label, slug) != 0) {
 				continue;
 			}
 			out[count] = MORE_ENTRIES[entry];
-			if (books_on_home && strcmp(slug, "books") == 0) {
+			// The swap is made whenever the home screen holds the shelf *or*
+			// the shelf is switched off: either way this slot has to offer
+			// Audiobooks, which lives in the player's library and is not an
+			// addon of its own.
+			if ((books_on_home || !addons_enabled("ebook")) && strcmp(slug, "books") == 0) {
 				out[count].label = "audiobooks";
 				out[count].icon = &icon_menu_audiobooks;
 				out[count].target = NULL;

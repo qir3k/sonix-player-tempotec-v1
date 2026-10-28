@@ -106,7 +106,8 @@
 
 typedef enum {
 	JOB_NONE = 0,
-	JOB_POWER, // arg_int: 1 on, 0 park off, -1 deliberate off
+	JOB_POWER,       // arg_int: 1 on, 0 park off, -1 deliberate off
+	JOB_POWER_CYCLE, // the boot bring-up: see bluetooth_init()
 	JOB_SCAN,
 	JOB_SCAN_STOP,
 	JOB_REFRESH,
@@ -3466,6 +3467,24 @@ static void *bluetooth_worker(void *arg) {
 				pthread_mutex_unlock(&lock);
 				break;
 
+			case JOB_POWER_CYCLE:
+				// The boot bring-up: whatever the firmware's init left running is
+				// put down first, and the stack is then built from nothing -- the
+				// two halves of the Bluetooth switch, in the order it does them.
+				// It runs here, on the worker, so the wait for the daemons to go
+				// does not hold the interface up. See bluetooth_init().
+				//
+				// A firmware bring-up still in flight is waited out first: killing
+				// brcm_patchram_plus halfway through loading the chip's firmware
+				// leaves a radio nothing can talk to until the next boot.
+				wait_out_stock_bringup();
+				bluetooth_power_down_stack();
+				do_power(true, false);
+				pthread_mutex_lock(&lock);
+				g_busy = false;
+				pthread_mutex_unlock(&lock);
+				break;
+
 			case JOB_SCAN:
 				do_scan();
 				break;
@@ -3696,7 +3715,22 @@ void bluetooth_init(void) {
 	sysserver_listen(notification_cb);
 
 	if (g_enabled && bluetooth_available()) {
-		job_t job = {.type = JOB_POWER, .arg_int = 1};
+		// Bluetooth was left on, and the bring-up is a power cycle rather than an
+		// adoption of what is already running.
+		//
+		// The boot scripts start the whole stack themselves -- rfkill, patchram,
+		// bluetoothd, bluealsa -- in their own order and for their own purposes,
+		// and this player used to take that over as it found it. What that cost
+		// was the connection: a paired pair of earbuds was refused at every
+		// Device1.Connect until the user switched Bluetooth off and on again,
+		// which is exactly this call followed by the bring-up, by hand.
+		//
+		// So the boot path is the same path as that gesture: put the stack the
+		// scripts left down, then build this player's own. Nothing on screen
+		// changes -- the work is on the worker, which it always was -- and the
+		// setting itself is untouched, so a battery pulled while the radio was
+		// parked still comes back as "Bluetooth is on".
+		job_t job = {.type = JOB_POWER_CYCLE};
 		g_busy = true;
 		post_job(&job);
 	} else if (g_enabled) {

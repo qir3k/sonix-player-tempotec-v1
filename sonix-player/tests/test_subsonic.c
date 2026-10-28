@@ -555,7 +555,7 @@ static void test_leases(void) {
 	assert(subsonicstream_queue(tracks, 2, 0, paths, pointers, &count, &selected, error, sizeof(error)));
 	assert(count == 2 && selected == 0 && subsonicstream_owns(paths[0]));
 	assert(!strstr(paths[0], "alice") && !strstr(paths[0], "&t="));
-	assert(subsonicstream_prepare(paths[0]));
+	assert(subsonicstream_prepare(paths[0], sizeof(paths[0])));
 	int duration, bitrate;
 	streambridge_t *first = subsonicstream_acquire(paths[0], &duration, &bitrate);
 	assert(first && duration == 180 && bitrate == 256 && streambridge_prime(first));
@@ -563,7 +563,7 @@ static void test_leases(void) {
 	wait_buffer(first, STREAMBRIDGE_CAPACITY);
 	subsonicstream_prefetch(paths[1]);
 	usleep(100000);
-	assert(subsonicstream_prepare(paths[1]));
+	assert(subsonicstream_prepare(paths[1], sizeof(paths[1])));
 	double start = now();
 	streambridge_t *second = subsonicstream_acquire(paths[1], NULL, NULL);
 	assert(second && second != first && streambridge_prime(second) && now() - start < 0.2);
@@ -577,7 +577,7 @@ static void test_leases(void) {
 	wait_buffer(second, STREAMBRIDGE_CAPACITY - sizeof(bytes)); // retain the initial probe history
 	subsonicstream_prefetch(paths[1]); // repeat-one must fetch a separate stream at byte zero
 	usleep(100000);
-	assert(subsonicstream_prepare(paths[1]));
+	assert(subsonicstream_prepare(paths[1], sizeof(paths[1])));
 	streambridge_t *repeat = subsonicstream_acquire(paths[1], NULL, NULL);
 	assert(repeat && repeat != second && streambridge_prime(repeat));
 	subsonicstream_release(second);
@@ -588,7 +588,7 @@ static void test_leases(void) {
 	// The other completion order: codec teardown can win the race with the
 	// GUI's automatic advance. It must retain the already cached spare.
 	assert(subsonicstream_queue(tracks, 2, 0, paths, pointers, &count, &selected, error, sizeof(error)));
-	assert(subsonicstream_prepare(paths[0]));
+	assert(subsonicstream_prepare(paths[0], sizeof(paths[0])));
 	first = subsonicstream_acquire(paths[0], NULL, NULL);
 	assert(first && streambridge_prime(first));
 	wait_buffer(first, STREAMBRIDGE_CAPACITY);
@@ -596,7 +596,7 @@ static void test_leases(void) {
 	usleep(100000);
 	subsonicstream_release(first);
 	assert(subsonicstream_network_wanted()); // don't park Wi-Fi in the handoff gap
-	assert(subsonicstream_prepare(paths[1]));
+	assert(subsonicstream_prepare(paths[1], sizeof(paths[1])));
 	start = now();
 	second = subsonicstream_acquire(paths[1], NULL, NULL);
 	assert(second && streambridge_prime(second) && now() - start < 0.2);
@@ -608,7 +608,7 @@ static void test_leases(void) {
 	// HTTP request repeatedly or keep Wi-Fi wanted after playback stops.
 	strcpy(tracks[1].id, "stream-fail");
 	assert(subsonicstream_queue(tracks, 2, 0, paths, pointers, &count, &selected, error, sizeof(error)));
-	assert(subsonicstream_prepare(paths[0]));
+	assert(subsonicstream_prepare(paths[0], sizeof(paths[0])));
 	first = subsonicstream_acquire(paths[0], NULL, NULL);
 	assert(first && streambridge_prime(first));
 	wait_buffer(first, STREAMBRIDGE_CAPACITY);
@@ -627,11 +627,11 @@ static void test_leases(void) {
 	assert(strcmp(error, "subsonic_raw_unsupported") == 0);
 	assert(subsonicstream_queue(tracks, 2, 0, paths, pointers, &count, &selected, error, sizeof(error)));
 	assert(count == 1 && strstr(paths[0], ".flac"));
-	assert(subsonicstream_prepare(paths[0]));
+	assert(subsonicstream_prepare(paths[0], sizeof(paths[0])));
 	first = subsonicstream_acquire(paths[0], NULL, NULL);
 	assert(first); // reset while an outgoing decoder still owns its source
 	subsonicstream_reset();
-	assert(streambridge_failed(first) && subsonicstream_prepare(paths[0]));
+	assert(streambridge_failed(first) && subsonicstream_prepare(paths[0], sizeof(paths[0])));
 	assert(!subsonicstream_acquire(paths[0], NULL, NULL));
 	assert(subsonicstream_take_error(error, sizeof(error)) && strcmp(error, "subsonic_invalid_id") == 0);
 	assert(subsonicstream_metadata(paths[0], &metadata) && metadata.title[0] == 0);

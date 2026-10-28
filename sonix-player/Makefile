@@ -59,6 +59,28 @@ endif
 #                               card produces routinely.
 CFLAGS = -O3 -g -Wall -MMD -MP -D_FILE_OFFSET_BITS=64 -I. -I$(LVGL_DIR) -DLV_CONF_INCLUDE_SIMPLE=1 -DGB_CORE=1
 
+# The InnerTube key YouTube Music's requests carry, compiled in rather than
+# committed (see the comment on YTMUSIC_API_KEY in
+# src/system/streaming/ytmusic.c: it is Google's public web-client key, not a
+# credential of anybody's, but it is not this repository's to publish and a
+# scanner flags the AIza... form wherever it sits).
+#
+# Three ways in, in this order: the environment or the command line
+# (make YTMUSIC_API_KEY=...), then a .ytmusic-key file beside this Makefile
+# (gitignored), which is what a machine that builds images repeatedly wants.
+# A build with none of them still works -- every other feature is unaffected --
+# and YouTube Music answers ytmusic_api_key_missing at its first request.
+# (an environment variable that is exported but empty -- what a workflow with
+# no secret set passes -- is "defined" to make, so the file is read whenever the
+# value is blank rather than only when it is unset).
+YTMUSIC_API_KEY ?= $(shell cat .ytmusic-key 2>/dev/null)
+ifeq ($(strip $(YTMUSIC_API_KEY)),)
+YTMUSIC_API_KEY := $(shell cat .ytmusic-key 2>/dev/null)
+endif
+ifneq ($(strip $(YTMUSIC_API_KEY)),)
+CFLAGS += -DYTMUSIC_API_KEY='"$(strip $(YTMUSIC_API_KEY))"'
+endif
+
 # The target image carries only what the player can reach.
 #
 # -ffunction-sections -fdata-sections put every function and every object of

@@ -712,9 +712,22 @@ int main(int argc, char **argv) {
 	}
 
 	/* Hidden labels still translate, and all six destinations remain clickable. */
-	assert(lang_set("Français"));
+	char display_name[64];
+	lang_display_name("Ukrainian", display_name, sizeof(display_name));
+	assert(strcmp(display_name, "Українська") == 0);
+	assert(lang_set("Ukrainian"));
 	check_grid(grid, true);
 	lv_obj_t *music_label = child_of_type(lv_obj_get_child(grid, 0), &lv_label_class);
+	assert(strcmp(lv_label_get_text(music_label), tr("music")) == 0);
+	assert(strcmp(tr("music"), "Музика") == 0);
+	lang_display_name("Russian", display_name, sizeof(display_name));
+	assert(strcmp(display_name, "Русский") == 0);
+	assert(lang_set("Russian"));
+	check_grid(grid, true);
+	assert(strcmp(lv_label_get_text(music_label), tr("music")) == 0);
+	assert(strcmp(tr("music"), "Музыка") == 0);
+	assert(lang_set("Français"));
+	check_grid(grid, true);
 	assert(strcmp(lv_label_get_text(music_label), tr("music")) == 0);
 	assert(lang_set("English"));
 	assert(strcmp(lv_label_get_text(music_label), tr("music")) == 0);

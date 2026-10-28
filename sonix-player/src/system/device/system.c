@@ -52,6 +52,7 @@
 #include "src/system/device/sysserver.h"
 #include "src/system/core/utils.h"
 #include "src/system/core/utils.h"
+#include "src/system/library/geniusdb.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -235,56 +236,88 @@ static void scan_power_supplies(int *percent, bool *charging) {
 	closedir(dir);
 }
 
-void sync_battery_from_sysfs(void) {
-	// The host build has no power supplies at all; the two override files let
-	// the status bar be worked on without a device (see main.c).
-	if (g_battery_cfg && g_battery_cfg->battery_capacity_file) {
-		battery_charging_cache = false;
+// One reading of the supplies, with nothing cached and nothing logged.
+//
+// This is the same rule sync_battery_from_sysfs() applies, for the caller that
+// runs before the services do: the charging screen (chargescreen.c) is drawn
+// before system_start_services(), so it cannot use the cache that the status
+// bar polls into. On the device `cfg` carries no paths and the supplies are
+// enumerated; on the host the two override files from main.c stand in for a
+// battery and a charger.
+//
+// `percent` is -1 when no gauge answered. `charging` is true when a charge is
+// going in or a charger is online. Returns true when there is a level, which
+// is what tells a caller the -1 is a reading of nothing rather than a zero.
+bool battery_read_now(const battery_config_t *cfg, int *percent, bool *charging) {
+	int level = -1;
+	bool on_cable = false;
 
-		if (g_battery_cfg->battery_status_file) {
-			char *content = read_file_content(g_battery_cfg->battery_status_file);
+	if (cfg && cfg->battery_capacity_file) {
+		if (cfg->battery_status_file) {
+			char *content = read_file_content(cfg->battery_status_file);
 			if (content) {
 				content[strcspn(content, "\r\n")] = '\0';
-				// "Full" is NOT charging: counting it as such leaves the
-				// battery icon and the red LED in their charging state long
-				// after the charge has finished.
-				battery_charging_cache = (strcmp(content, "Charging") == 0);
+				// "Full" is NOT charging: counting it as such leaves the battery
+				// icon and the red LED in their charging state long after the
+				// charge has finished. The cable is still there, and for the
+				// charging screen that is the answer that matters -- see
+				// usb_vbus_present() there.
+				on_cable = (strcmp(content, "Charging") == 0);
 				free(content);
 			}
 		}
 
-		char *content = read_file_content(g_battery_cfg->battery_capacity_file);
-		if (!content) {
-			strcpy(battery_cache, "!!");
-			return;
+		char *content = read_file_content(cfg->battery_capacity_file);
+		if (content) {
+			content[strcspn(content, "\r\n")] = '\0';
+			if (content[0] >= '0' && content[0] <= '9') {
+				level = atoi(content);
+				level = level < 0 ? 0 : (level > 100 ? 100 : level);
+			}
+			free(content);
 		}
-
-		content[strcspn(content, "\r\n")] = '\0';
-		snprintf(battery_cache, sizeof(battery_cache), "%s", content);
-		free(content);
-		return;
+	} else {
+		scan_power_supplies(&level, &on_cable);
 	}
+
+	if (percent) {
+		*percent = level;
+	}
+	if (charging) {
+		*charging = on_cable;
+	}
+	return level >= 0;
+}
+
+void sync_battery_from_sysfs(void) {
+	// The host build has no power supplies at all; the two override files let
+	// the status bar be worked on without a device (see main.c).
+	bool overridden = g_battery_cfg && g_battery_cfg->battery_capacity_file;
 
 	// One dump on the first read: enough to tell a missing gauge from one that
 	// is there and reporting zero.
-	static bool logged;
-	if (!logged) {
-		logged = true;
-		log_power_supplies();
+	if (!overridden) {
+		static bool logged;
+		if (!logged) {
+			logged = true;
+			log_power_supplies();
+		}
 	}
 
 	int percent = -1;
 	bool charging = false;
-	scan_power_supplies(&percent, &charging);
+	bool have_level = battery_read_now(g_battery_cfg, &percent, &charging);
 
-	static bool source_logged;
-	if (!source_logged && percent >= 0) {
-		source_logged = true;
-		printf("battery: reading level from '%s'\n", battery_source);
+	if (!overridden) {
+		static bool source_logged;
+		if (!source_logged && have_level) {
+			source_logged = true;
+			printf("battery: reading level from '%s'\n", battery_source);
+		}
 	}
 
 	battery_charging_cache = charging;
-	if (percent < 0) {
+	if (!have_level) {
 		strcpy(battery_cache, "!!");
 	} else {
 		snprintf(battery_cache, sizeof(battery_cache), "%d", percent);
@@ -820,6 +853,7 @@ static void card_databases_detach(void) {
 	btlog_card_release();
 	library_close();
 	audiobookdb_close();
+	geniusdb_close();
 	printf("storage: card databases closed for removal\n");
 }
 
@@ -840,6 +874,8 @@ static void card_databases_attach(const char *root) {
 	library_open(path);
 	snprintf(path, sizeof(path), "%.*s/.local/audiobooks.db", room, root);
 	audiobookdb_open(path);
+	snprintf(path, sizeof(path), "%.*s/.local/genius.db", room, root);
+	geniusdb_open(path);
 
 	// The card may have been written somewhere else while it was out: looked
 	// over in the background, as soon as the index is open.
