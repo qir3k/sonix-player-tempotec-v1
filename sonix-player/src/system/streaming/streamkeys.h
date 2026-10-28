@@ -26,6 +26,7 @@
 //     [ytmusic]
 //     client_id = ...apps.googleusercontent.com
 //     client_secret = ...
+//     api_key = AIza...	(the InnerTube key; see YOUTUBE_MUSIC_SETUP.md)
 //
 //     [podcast]
 //     api_key = ...
@@ -103,6 +104,10 @@ const char *streamkeys_tidal_client_id(void);
 const char *streamkeys_tidal_client_secret(void);
 const char *streamkeys_ytmusic_client_id(void);
 const char *streamkeys_ytmusic_client_secret(void);
+// The InnerTube key, so a personal image can leave it out of the build and out
+// of every repository: the same file -- and the card's own copy of it -- is
+// where it lives. NULL when neither carries one.
+const char *streamkeys_ytmusic_api_key(void);
 // Podcast Index. This pair identifies this player rather than a HiBy
 // application: it is requested free on podcastindex.org, and each request is
 // signed with the SHA-1 of key + secret + time. Same rule as the other two:

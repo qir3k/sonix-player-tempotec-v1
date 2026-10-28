@@ -42,7 +42,44 @@ A build with none of those still compiles and every other feature works; YouTube
 Music then answers `ytmusic_api_key_missing` at its first request — a toast that
 says the build has no key, and one line on stderr naming this section — instead
 of sending a request the endpoint can only refuse, which used to arrive at the
-page as a search that simply found nothing.
+page as a search that simply found nothing. Unless a key is on the card, which
+is the next section and the one that involves neither a rebuild nor a
+repository.
+
+## The key on the microSD card (nothing shared, nothing rebuilt)
+
+The same value can come from the keys file instead of the build. It is read
+from `[ytmusic] api_key`, either from `streaming-keys.ini` at the root of the
+card or from the image's own copy of that file, and the card fills in what the
+image does not carry. That is the way to keep a key entirely to yourself: it is
+never compiled, never committed, never uploaded to a build service, and it
+stays in a file only your player reads.
+
+**Getting the value.** It is the key `music.youtube.com` hands every visitor,
+so it is read straight off that page — no account, no consent screen, no Google
+Cloud project:
+
+1. Open <https://music.youtube.com> in a desktop browser (signing in is not
+   needed for the key).
+2. Open the page source with `Ctrl+U` (`Cmd+U` on a Mac), or press `F12` and
+   open the **Console** tab.
+3. Search for `INNERTUBE_API_KEY`. The value beside it is the long `AIzaSy...`
+   string. In the console, `ytcfg.get('INNERTUBE_API_KEY')` prints the same
+   thing.
+
+**Putting it on the card.** Create or edit `streaming-keys.ini` in the root of
+the microSD card and add:
+
+```ini
+[ytmusic]
+api_key = AIzaSy...
+```
+
+Copy the card back into the player and restart. If the card already carries a
+`streaming-keys.ini`, add the `[ytmusic]` section to it — the other sections
+and their keys are read exactly as before. A key from either file wins over
+one compiled into the build, so it also replaces a baked-in key that has gone
+stale.
 
 ## Option 1: import a session from the browser (recommended)
 

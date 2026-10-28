@@ -219,6 +219,7 @@ static music_tile_id_t test_active_tiles[MUSIC_TILE_COUNT] = {
 	MUSIC_TILE_ALL_TRACKS, MUSIC_TILE_ALBUMS, MUSIC_TILE_ARTISTS,
 	MUSIC_TILE_ALBUM_ARTISTS, MUSIC_TILE_GENRES, MUSIC_TILE_YEARS,
 	MUSIC_TILE_PLAYLISTS, MUSIC_TILE_MOST_PLAYED, MUSIC_TILE_BROWSE,
+	MUSIC_TILE_SCAN, MUSIC_TILE_FAVOURITES, MUSIC_TILE_SEARCH,
 };
 static int test_active_tile_count = MUSIC_TILE_COUNT;
 
@@ -601,13 +602,16 @@ int main(int argc, char **argv) {
 	musicsettings_screen = lv_obj_create(NULL);
 	music_init(&cfg);
 	lv_obj_t *music_tile_grid = lv_obj_get_child(music_screen, 0);
-	assert(lv_obj_get_child_count(music_tile_grid) == MUSIC_TILE_COUNT);
+	/* Search and Favourites keep their corner buttons on this layout, so the
+	 * grid carries the rest of the arrangement. */
+	assert(lv_obj_get_child_count(music_tile_grid) == MUSIC_TILE_COUNT - 2);
 	assert(find_label(music_tile_grid, tr("music_years")));
 	assert(find_label(music_tile_grid, tr("music_most_played")));
 	if (bp_is_tempotec_v1()) {
 		lv_obj_t *tokyo_panel = lv_obj_get_child(music_screen, lv_obj_get_child_count(music_screen) - 1);
 		assert(find_label(tokyo_panel, tr("music_years")));
 		assert(find_label(tokyo_panel, tr("music_most_played")));
+		assert(find_label(tokyo_panel, tr("favourites")));
 	}
 
 	/* Rearrange and disable Years and Most played; verify both tile_grid and tokyo_music_panel update. */
@@ -630,6 +634,7 @@ int main(int argc, char **argv) {
 		assert(!find_label(tokyo_panel, tr("music_years")));
 		assert(!find_label(tokyo_panel, tr("music_most_played")));
 		assert(!find_label(tokyo_panel, tr("music_album_artist")));
+		assert(!find_label(tokyo_panel, tr("favourites")));
 	}
 
 	const grid_entry_t entries[] = {

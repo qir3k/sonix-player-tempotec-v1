@@ -144,6 +144,12 @@ bool main_menu_books(void) {
 }
 bool main_menu_browse(void) { return config_get_bool("ui", "home_browse", false); }
 
+// Whether the home screen offers the library slot at all: Audiobooks, or the
+// shelf when it holds that slot. With the audiobooks module off in Plugins its
+// pages were never built, so the tile would lead to an empty screen -- and
+// with the shelf off as well there is nothing to offer in its place.
+static bool home_library_shown(void) { return main_menu_books() || addons_enabled("audiobooks"); }
+
 static void set_home_books(bool enabled) {
 	if (main_menu_books() == enabled) {
 		return;
@@ -209,6 +215,9 @@ static void main_menu_refresh_tiles(void) {
 	for (int i = 0; i < ordered && count < item_count; i++) {
 		int id = order[i];
 		if (!visible[id]) {
+			continue;
+		}
+		if (id == MENU_HOME_AUDIOBOOKS && !home_library_shown()) {
 			continue;
 		}
 		ids[count] = id;
@@ -494,6 +503,7 @@ void main_menu_init(gui_config_t *cfg) {
 	for (int i = 0; i < ordered; i++) {
 		int id = order[i];
 		if (!visible[id]) continue;
+		if (id == MENU_HOME_AUDIOBOOKS && !home_library_shown()) continue;
 		switch (id) {
 		case 0: entries[count++] = (grid_entry_t){"music", &icon_menu_music, NULL, open_home_music}; break;
 		case 1: entries[count++] = (grid_entry_t){"streaming", &icon_menu_streaming, &streaming_screen, NULL}; break;

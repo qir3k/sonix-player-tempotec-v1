@@ -104,6 +104,7 @@ static void open_years(void) { medialist_open_years(); }
 static void open_playlists(void) { playlistpage_open(); }
 static void open_most_played(void) { medialist_open_most_played(); }
 static void open_browse(void) { switch_screen(browser_screen); }
+static void open_favourites(void) { medialist_open(tr("favourites"), LIBRARY_LIST_FAVOURITES, LIBRARY_FILTER_NONE, NULL); }
 
 // The scan is an ordinary destination now, so it needs the opener shape the
 // grid's entries take (no event) as well as the one a button takes.
@@ -129,6 +130,8 @@ static grid_entry_t entry_for_tile(music_tile_id_t id) {
 		return (grid_entry_t){"music_most_played", &icon_menu_most_played, NULL, open_most_played};
 	case MUSIC_TILE_SCAN:
 		return (grid_entry_t){"music_scan_library", &icon_menu_file_explorer, NULL, scan_action};
+	case MUSIC_TILE_FAVOURITES:
+		return (grid_entry_t){"favourites", &icon_heart_filled, NULL, open_favourites};
 	case MUSIC_TILE_BROWSE:
 	default:
 		return (grid_entry_t){"music_browse", &icon_menu_explorer, NULL, open_browse};
@@ -140,9 +143,11 @@ static int music_build_entries(grid_entry_t *entries, int max) {
 	int count = musicsettings_main_tiles(active, MUSIC_TILE_COUNT);
 	int built = 0;
 	for (int i = 0; i < count && built < max; i++) {
-		// Search stays in the header on the full-size layout. It is part of the
-		// saved order for Tokyo's tile grid, where it is an ordinary tile.
-		if (active[i] == MUSIC_TILE_SEARCH) {
+		// Search and Favourites both have a corner button of their own on the
+		// full-size layout, so drawing them here as well would offer the same
+		// destination twice. They are ordinary tiles in Tokyo's list, where the
+		// arrangement is the only place they come from.
+		if (active[i] == MUSIC_TILE_SEARCH || active[i] == MUSIC_TILE_FAVOURITES) {
 			continue;
 		}
 		entries[built++] = entry_for_tile(active[i]);
@@ -166,7 +171,7 @@ static void search_cb(lv_event_t *e) {
 
 static void favourites_cb(lv_event_t *e) {
 	(void)e;
-	medialist_open(tr("favourites"), LIBRARY_LIST_FAVOURITES, LIBRARY_FILTER_NONE, NULL);
+	open_favourites();
 }
 
 static void scan_cb(lv_event_t *e) {
@@ -347,6 +352,8 @@ static tokyo_tile_spec_t tokyo_spec_for_tile(music_tile_id_t id) {
 								   shortcut_most_played_cb};
 	case MUSIC_TILE_SCAN:
 		return (tokyo_tile_spec_t){"music_scan_library", &icon_refresh, THEME_SEMANTIC_CYAN, scan_row_cb};
+	case MUSIC_TILE_FAVOURITES:
+		return (tokyo_tile_spec_t){"favourites", &icon_heart_filled, THEME_SEMANTIC_RED, favourites_cb};
 	case MUSIC_TILE_SEARCH:
 		return (tokyo_tile_spec_t){"search", &icon_search, THEME_SEMANTIC_AMBER, browse_search_cb};
 	case MUSIC_TILE_BROWSE:
@@ -449,10 +456,6 @@ static void tokyo_music_populate(void) {
 		tokyo_tile_spec_t spec = tokyo_spec_for_tile(active[i]);
 		add_shortcut_row(tokyo_shortcut_card, spec.label, spec.icon, spec.tone, spec.callback, row_idx++);
 	}
-	// The heart, not the star: one mark for favourites across the player, the
-	// control centre and the library.
-	add_shortcut_row(tokyo_shortcut_card, "favourites", &icon_heart_filled, THEME_SEMANTIC_RED, favourites_cb,
-					 row_idx++);
 }
 
 static void tokyo_music_build(gui_config_t *cfg) {

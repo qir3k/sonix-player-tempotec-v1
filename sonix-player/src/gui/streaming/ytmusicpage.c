@@ -102,16 +102,20 @@ static char list_album[YTMUSIC_TITLE_MAX];
 // order as one list, the switched-off ones as another -- so somebody who opens
 // Top songs every day does not scroll past Explore to reach it, and somebody
 // who never opens Explore does not see it at all.
+//
+// Search is not one of these rows: it has a corner button in the title bar,
+// and a row here only ever offered the same page twice. An arrangement saved
+// by an older build still carries its old id and numbers the rest from 1;
+// yt_home_migrate() rewrites that once, and everything written afterwards is
+// in the numbers below.
 enum {
-	YT_HOME_SEARCH = 0,
-	YT_HOME_EXPLORE,
+	YT_HOME_EXPLORE = 0,
 	YT_HOME_CHARTS,
 	YT_HOME_FAVOURITES,
 	YT_HOME_PODCASTS,
 	YT_HOME_ROWS,
 };
 static const char *const YT_HOME_SLUGS[YT_HOME_ROWS] = {
-	"ytmusic_search",
 	"ytmusic_explore",
 	"ytmusic_charts",
 	"ytmusic_favourites",
@@ -1280,11 +1284,253 @@ static void section_clicked_cb(lv_event_t *e) {
 // home
 // ---------------------------------------------------------------------------
 
+static void search_keyboard_show(bool visible);
+
+// ---------------------------------------------------------------------------
+// search history
+//
+// The last few queries, newest first, in the config the way Tidal keeps its
+// own: a history is for picking up yesterday's search, not for keeping a log.
+// It takes the keyboard's place whenever nothing is being typed, so the page
+// opens on something to tap rather than on an empty field.
+// ---------------------------------------------------------------------------
+static lv_obj_t *search_history_list;
+static lv_obj_t *search_history_empty;
+
+#define SEARCH_HISTORY_MAX 8
+#define SEARCH_HISTORY_LEN 96
+
+static char history_terms[SEARCH_HISTORY_MAX][SEARCH_HISTORY_LEN];
+static int history_count;
+static bool history_loaded;
+
+static void search_history_rebuild(void);
+
+// Rebuilding deletes the rows, and one of them may be the very widget whose
+// tap asked for the rebuild: the work is queued so it runs once the event has
+// returned.
+static void search_history_rebuild_async(void *user) {
+	(void)user;
+	search_history_rebuild();
+}
+
+static void history_load(void) {
+	if (history_loaded) {
+		return;
+	}
+	history_loaded = true;
+	history_count = 0;
+	int stored = (int)config_get_int("ytmusic", "search_history_count", 0);
+	if (stored < 0) {
+		stored = 0;
+	}
+	if (stored > SEARCH_HISTORY_MAX) {
+		stored = SEARCH_HISTORY_MAX;
+	}
+	for (int i = 0; i < stored; i++) {
+		char key[24];
+		snprintf(key, sizeof(key), "search_history_%d", i);
+		const char *term = config_get("ytmusic", key, "");
+		if (term && term[0]) {
+			snprintf(history_terms[history_count], SEARCH_HISTORY_LEN, "%s", term);
+			history_count++;
+		}
+	}
+}
+
+static void history_save(void) {
+	config_set_int("ytmusic", "search_history_count", history_count);
+	// Past the end the keys are emptied rather than left where they were: a
+	// cleared history that a later read finds again is worse than none.
+	for (int i = 0; i < SEARCH_HISTORY_MAX; i++) {
+		char key[24];
+		snprintf(key, sizeof(key), "search_history_%d", i);
+		config_set("ytmusic", key, i < history_count ? history_terms[i] : "");
+	}
+	config_save();
+}
+
+// Puts the term on top, once: a search already in the list moves up instead of
+// filling the list with the same word repeated.
+static void history_remember(const char *term) {
+	history_load();
+	while (term && *term == ' ') {
+		term++;
+	}
+	if (!term || !*term) {
+		return;
+	}
+	char kept[SEARCH_HISTORY_MAX][SEARCH_HISTORY_LEN];
+	int kept_count = 0;
+	for (int i = 0; i < history_count && kept_count < SEARCH_HISTORY_MAX - 1; i++) {
+		if (strcmp(history_terms[i], term) == 0) {
+			continue;
+		}
+		snprintf(kept[kept_count], SEARCH_HISTORY_LEN, "%s", history_terms[i]);
+		kept_count++;
+	}
+	snprintf(history_terms[0], SEARCH_HISTORY_LEN, "%s", term);
+	for (int i = 0; i < kept_count; i++) {
+		snprintf(history_terms[i + 1], SEARCH_HISTORY_LEN, "%s", kept[i]);
+	}
+	history_count = kept_count + 1;
+	history_save();
+}
+
+// Runs what is in the field, and remembers it.
+static void search_run(void) {
+	const char *text = lv_textarea_get_text(search_field);
+	if (!text || !text[0]) {
+		return;
+	}
+	history_remember(text);
+	char query[YTMUSIC_QUERY_MAX];
+	snprintf(query, sizeof(query), "%s", text);
+	// The results take the page: a keyboard left up covers a list nobody asked
+	// for, and hides what came back.
+	search_keyboard_show(false);
+	start_list_request(LIST_SEARCH, false, search_filter, query, NULL, "ytmusic_search_results");
+}
+
+// The keyboard and the history cannot both have the space under the field --
+// one replaces the other, as on the Tidal page.
+static void search_keyboard_show(bool visible) {
+	if (!search_keyboard) {
+		return;
+	}
+	keyboard_set_visible(search_keyboard, visible);
+	if (visible) {
+		if (search_history_list) {
+			lv_obj_set_hidden(search_history_list, true);
+		}
+		if (search_history_empty) {
+			lv_obj_set_hidden(search_history_empty, true);
+		}
+	} else {
+		search_history_rebuild();
+	}
+}
+
+// One row of the history: the query, and an x to forget just that one.
+static void history_forget_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= history_count) {
+		return;
+	}
+	for (int i = index; i + 1 < history_count; i++) {
+		snprintf(history_terms[i], SEARCH_HISTORY_LEN, "%s", history_terms[i + 1]);
+	}
+	history_count--;
+	history_save();
+	gui_post(search_history_rebuild_async, NULL);
+}
+
+// Tapping a query runs it again, exactly as typing it would have.
+static void history_pick_cb(lv_event_t *e) {
+	if (switcher_back_drag_active() || player_sheet_drag_active()) {
+		return;
+	}
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= history_count) {
+		return;
+	}
+	lv_textarea_set_text(search_field, history_terms[index]);
+	search_run();
+}
+
+// Draws the history, in the space the keyboard leaves free.
+static void search_history_rebuild(void) {
+	if (!search_history_list) {
+		return;
+	}
+	history_load();
+	lv_obj_clean(search_history_list);
+
+	bool any = history_count > 0;
+	lv_obj_set_hidden(search_history_list, !any);
+	if (search_history_empty) {
+		lv_obj_set_hidden(search_history_empty, any);
+	}
+	if (!any) {
+		return;
+	}
+
+	const lv_font_t *font = page_cfg && page_cfg->screen_width < 320 ? &font_ui_18 : &font_ui_24;
+	for (int i = 0; i < history_count; i++) {
+		lv_obj_t *row = lv_btn_create(search_history_list);
+		lv_obj_set_width(row, lv_pct(100));
+		lv_obj_set_height(row, bp_pick(40, 68));
+		lv_obj_add_style(row, &theme_style_card, 0);
+		lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
+		lv_obj_set_style_radius(row, bp_pick(10, 12), 0);
+		lv_obj_set_style_border_width(row, 0, 0);
+		lv_obj_set_style_shadow_width(row, 0, 0);
+		lv_obj_set_style_pad_hor(row, bp_pick(8, 20), 0);
+		lv_obj_set_style_pad_column(row, bp_pick(4, 10), 0);
+		lv_obj_set_scrollable(row, false);
+		lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+		lv_obj_add_event_cb(row, history_pick_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		lv_obj_t *label = lv_label_create(row);
+		lv_label_set_text(label, history_terms[i]);
+		lv_obj_add_style(label, &theme_style_text, 0);
+		lv_obj_set_style_text_font(label, font, 0);
+		lv_obj_set_flex_grow(label, 1);
+		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+		lv_obj_set_height(label, lv_font_get_line_height(font));
+
+		lv_obj_t *x = lv_btn_create(row);
+		lv_obj_set_size(x, bp_pick(30, 44), bp_pick(30, 44));
+		lv_obj_set_style_bg_opa(x, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(x, 0, 0);
+		lv_obj_set_style_shadow_width(x, 0, 0);
+		lv_obj_set_style_pad_all(x, 0, 0);
+		lv_obj_add_event_cb(x, history_forget_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		lv_obj_t *glyph = lv_image_create(x);
+		lv_image_set_src(glyph, &icon_clear);
+		lv_obj_add_style(glyph, &theme_style_icon, 0);
+		lv_obj_set_style_image_opa(glyph, LV_OPA_60, 0);
+		lv_obj_center(glyph);
+	}
+}
+
+// From the settings page: forget every query at once.
+static void clear_search_history_cb(lv_event_t *e) {
+	(void)e;
+	if (switcher_back_drag_active()) {
+		return;
+	}
+	history_load();
+	history_count = 0;
+	history_save();
+	search_history_rebuild();
+	toast_success("search_history_cleared");
+}
+
+// Every return from the results lands here with the history, not the
+// keyboard: the query has already been run.
+static void search_loaded_cb(lv_event_t *e) {
+	no_art_loaded_cb(e);
+	if (search_keyboard && !keyboard_is_visible(search_keyboard)) {
+		search_history_rebuild();
+	}
+}
+
 static void show_search(ytmusic_filter_t filter) {
 	search_filter = filter;
 	lv_label_set_text(search_title, tr(filter == YTMUSIC_FILTER_PODCASTS ? "ytmusic_podcasts" : "ytmusic_search"));
 	lv_textarea_set_text(search_field, "");
 	keyboard_reset(search_keyboard);
+	// The history first, unless there is none to show: then the keyboard is
+	// what the page opens on, and the first tap has something to do.
+	history_load();
+	search_keyboard_show(history_count == 0);
 	lv_obj_add_state(search_field, LV_STATE_FOCUSED);
 	lv_obj_send_event(search_field, LV_EVENT_FOCUSED, NULL);
 	switch_screen(search_screen);
@@ -1292,16 +1538,15 @@ static void show_search(ytmusic_filter_t filter) {
 
 static void search_accept_cb(lv_event_t *e) {
 	(void)e;
-	const char *text = lv_textarea_get_text(search_field);
-	if (!text || !text[0]) return;
-	char query[YTMUSIC_QUERY_MAX];
-	snprintf(query, sizeof(query), "%s", text);
-	start_list_request(LIST_SEARCH, false, search_filter, query, NULL, "ytmusic_search_results");
+	search_run();
 }
 
 static void search_field_cb(lv_event_t *e) {
 	(void)e;
 	keyboard_set_field(search_keyboard, search_field);
+	// Tapping the field is what asks for the keyboard, and the history steps
+	// aside for it -- neither has the room to show at the same time.
+	search_keyboard_show(true);
 }
 
 static void search_cb(lv_event_t *e) {
@@ -1361,7 +1606,8 @@ static void build_search_page(void) {
 	search_field = lv_textarea_create(search_screen);
 	lv_textarea_set_one_line(search_field, true);
 	lv_textarea_set_placeholder_text(search_field, tr("artist_album_or_track"));
-	lv_obj_set_size(search_field, page_cfg->screen_width - 2 * page_cfg->padding, 62);
+	const int field_h = 62;
+	lv_obj_set_size(search_field, page_cfg->screen_width - 2 * page_cfg->padding, field_h);
 	lv_obj_align(search_field, LV_ALIGN_TOP_LEFT, page_cfg->padding, settingsrow_content_top(page_cfg));
 	lv_obj_add_style(search_field, &theme_style_card, 0);
 	lv_obj_set_scrollbar_mode(search_field, LV_SCROLLBAR_MODE_OFF);
@@ -1372,9 +1618,47 @@ static void build_search_page(void) {
 	lv_obj_set_style_text_font(search_field, &font_ui_24, 0);
 	keyboard_style_caret(search_field);
 	lv_obj_add_event_cb(search_field, search_field_cb, LV_EVENT_CLICKED, NULL);
+	// Under the field: the history while nothing is typed, the keyboard while
+	// something is. The two take the same space, so only one of them is ever
+	// shown (see search_keyboard_show).
+	int history_top = settingsrow_content_top(page_cfg) + field_h;
+	int history_h = page_cfg->screen_height - history_top - page_cfg->padding;
+	if (history_h < 40) {
+		history_h = 40;
+	}
+
+	search_history_list = lv_obj_create(search_screen);
+	lv_obj_set_size(search_history_list, page_cfg->screen_width - 2 * page_cfg->padding, history_h);
+	lv_obj_align(search_history_list, LV_ALIGN_TOP_LEFT, page_cfg->padding, history_top);
+	lv_obj_set_style_bg_opa(search_history_list, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(search_history_list, 0, 0);
+	lv_obj_set_style_radius(search_history_list, 0, 0);
+	lv_obj_set_style_pad_all(search_history_list, 0, 0);
+	lv_obj_set_style_pad_gap(search_history_list, bp_pick(4, 8), 0);
+	lv_obj_set_scroll_dir(search_history_list, LV_DIR_VER);
+	lv_obj_set_scrollbar_mode(search_history_list, LV_SCROLLBAR_MODE_AUTO);
+	lv_obj_set_event_bubble(search_history_list, true);
+	lv_obj_set_flex_flow(search_history_list, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_flex_align(search_history_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+	lv_obj_set_hidden(search_history_list, true);
+
+	search_history_empty = lv_label_create(search_screen);
+	lv_label_set_text(search_history_empty, tr("no_searches_yet"));
+	lv_obj_add_style(search_history_empty, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(search_history_empty, page_cfg->screen_width < 320 ? &font_ui_18 : &font_ui_24, 0);
+	lv_obj_set_width(search_history_empty, page_cfg->screen_width - 2 * page_cfg->padding);
+	lv_label_set_long_mode(search_history_empty, LV_LABEL_LONG_WRAP);
+	// Level with where the first history row would be: with nothing searched
+	// yet this label is the whole history.
+	lv_obj_align(search_history_empty, LV_ALIGN_TOP_LEFT, page_cfg->padding, history_top + 2);
+	lv_obj_set_hidden(search_history_empty, true);
+
 	search_keyboard = keyboard_create(search_screen, page_cfg->screen_width,
 		page_cfg->screen_width < 320 ? 144 : 316, search_field, NULL, "ok", search_accept_cb, NULL);
-	lv_obj_add_event_cb(search_screen, no_art_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	// The history is what the page opens on; the keyboard arrives with the
+	// first tap in the field.
+	search_keyboard_show(false);
+	lv_obj_add_event_cb(search_screen, search_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	switcher_attach_back_gesture(search_screen);
 
 	results_screen = lv_obj_create(NULL);
@@ -1547,9 +1831,64 @@ static void build_source_page(gui_config_t *cfg) {
 // the arrangement of the home page
 // ---------------------------------------------------------------------------
 
+// A number list, as both settings store it: "2,0,4".
+static int home_parse_id_list(const char *text, int *out, int max) {
+	int count = 0;
+	const char *p = text ? text : "";
+	while (*p && count < max) {
+		while (*p == ',' || *p == ' ') p++;
+		if (!*p) break;
+		out[count++] = atoi(p);
+		while (*p >= '0' && *p <= '9') p++;
+	}
+	return count;
+}
+
+// An arrangement written before Search left the list: those ids ran 0 for
+// Search through 4 for Podcasts, so everything after Search shifts down by one
+// and Search itself is dropped. The version key is written on the first read,
+// so the shift happens exactly once and an arrangement already written in the
+// new numbers is left alone.
+static void yt_home_migrate(void) {
+	if ((int)config_get_int("ytmusic", "home_rows_version", 0) >= 1) {
+		return;
+	}
+
+	int old[YT_HOME_ROWS + 1];
+	int n = home_parse_id_list(config_get("ytmusic", "home_order", ""), old, YT_HOME_ROWS + 1);
+	if (n > 0) {
+		char order[64] = "";
+		for (int i = 0; i < n; i++) {
+			if (old[i] <= 0 || old[i] > YT_HOME_ROWS) {
+				continue; // Search, or a number no build ever wrote
+			}
+			size_t used = strlen(order);
+			snprintf(order + used, sizeof(order) - used, "%s%d", used ? "," : "", old[i] - 1);
+		}
+		config_set("ytmusic", "home_order", order);
+	}
+
+	n = home_parse_id_list(config_get("ytmusic", "home_hidden", ""), old, YT_HOME_ROWS + 1);
+	if (n > 0) {
+		char hidden[64] = "";
+		for (int i = 0; i < n; i++) {
+			if (old[i] <= 0 || old[i] > YT_HOME_ROWS) {
+				continue;
+			}
+			size_t used = strlen(hidden);
+			snprintf(hidden + used, sizeof(hidden) - used, "%s%d", used ? "," : "", old[i] - 1);
+		}
+		config_set("ytmusic", "home_hidden", hidden);
+	}
+
+	config_set_int("ytmusic", "home_rows_version", 1);
+	config_save();
+}
+
 // Read again whenever the home page is built: a change made on the arrange page
 // is then what the page shows the next time it is looked at, without a restart.
 static void yt_home_order_load(void) {
+	yt_home_migrate();
 	for (int i = 0; i < YT_HOME_ROWS; i++) {
 		yt_home_order[i] = i;
 		yt_home_hidden[i] = false;
@@ -1848,6 +2187,9 @@ static void build_settings_page(gui_config_t *cfg) {
 	lv_obj_t *import_row = settingsrow_action(container, "ytmusic_import_session", import_session_cb, NULL);
 	settingsrow_add_icon(import_row, &icon_import, THEME_SEMANTIC_PURPLE);
 	settingsrow_add_caption(import_row, "ytmusic_import_session_note");
+	// The queries the search page keeps, cleared from here as Tidal's are
+	// cleared from its own settings.
+	settingsrow_action(container, "clear_search_history", clear_search_history_cb, NULL);
 	home_refresh_session_rows();
 	player_sheet_attach_drag(container, true);
 	switcher_attach_back_gesture(settings_screen);
@@ -1882,13 +2224,12 @@ static void home_build(void) {
 	// The rows in the order the user arranged them, with the switched-off ones
 	// left out -- see the arrange page behind the settings' "Home rows" row.
 	static void (*const handlers[YT_HOME_ROWS])(lv_event_t *) = {
-		search_cb, explore_start_cb, charts_cb, favourites_cb, podcasts_cb,
+		explore_start_cb, charts_cb, favourites_cb, podcasts_cb,
 	};
 	static const lv_image_dsc_t *const icons[YT_HOME_ROWS] = {
-		&icon_search, &icon_music2, &icon_music2, &icon_music_note, &icon_podcast_list,
+		&icon_music2, &icon_music2, &icon_music_note, &icon_podcast_list,
 	};
 	static const theme_semantic_t tones[YT_HOME_ROWS] = {
-		THEME_SEMANTIC_CYAN,
 		THEME_SEMANTIC_PURPLE,
 		THEME_SEMANTIC_RED,
 		THEME_SEMANTIC_RED,

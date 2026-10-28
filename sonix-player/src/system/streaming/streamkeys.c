@@ -23,6 +23,11 @@ static char tidal_client_id[64];
 static char tidal_client_secret[128];
 static char ytmusic_client_id[256];
 static char ytmusic_client_secret[256];
+// The InnerTube key the music.youtube.com page hands every visitor. It belongs
+// to Google rather than to this project, so it is a value from the keys file
+// like the rest of them -- and, being one value anybody can obtain, the piece
+// a personal copy of the player can carry on the card rather than in a build.
+static char ytmusic_api_key[128];
 static char podcast_key[64];
 static char podcast_secret[128];
 static char lastfm_key[64];
@@ -132,6 +137,9 @@ static void parse_line(char *line, char section[32]) {
 		} else if (strcmp(key, "client_secret") == 0) {
 			dest = ytmusic_client_secret;
 			dest_size = sizeof(ytmusic_client_secret);
+		} else if (strcmp(key, "api_key") == 0) {
+			dest = ytmusic_api_key;
+			dest_size = sizeof(ytmusic_api_key);
 		}
 	}
 
@@ -268,10 +276,14 @@ static bool load(const char *path) {
 static void report(const char *path) {
 	snprintf(source_path, sizeof(source_path), "%s", path);
 
-	printf("streamkeys: from %s -- Qobuz %s, Tidal %s, YouTube Music %s, Podcast %s, Last.fm %s\n", path,
+	// The InnerTube key is reported by its presence only, like every other
+	// value here: the log lands on the card and travels further than it does.
+	printf("streamkeys: from %s -- Qobuz %s, Tidal %s, YouTube Music %s (InnerTube key %s), Podcast %s, Last.fm %s\n",
+		   path,
 		   qobuz_app_id[0] && qobuz_app_secret[0] ? "yes" : "no",
 		   tidal_client_id[0] && tidal_client_secret[0] ? "yes" : "no",
 		   ytmusic_client_id[0] && ytmusic_client_secret[0] ? "yes" : "no",
+		   ytmusic_api_key[0] ? "yes" : "no",
 		   podcast_key[0] && podcast_secret[0] ? "yes" : "no",
 		   lastfm_key[0] && lastfm_secret[0] ? "yes" : "no");
 }
@@ -331,6 +343,7 @@ const char *streamkeys_tidal_client_id(void) { return or_null(tidal_client_id); 
 const char *streamkeys_tidal_client_secret(void) { return or_null(tidal_client_secret); }
 const char *streamkeys_ytmusic_client_id(void) { return or_null(ytmusic_client_id); }
 const char *streamkeys_ytmusic_client_secret(void) { return or_null(ytmusic_client_secret); }
+const char *streamkeys_ytmusic_api_key(void) { return or_null(ytmusic_api_key); }
 
 const char *streamkeys_podcast_key(void) { return or_null(podcast_key); }
 const char *streamkeys_podcast_secret(void) { return or_null(podcast_secret); }

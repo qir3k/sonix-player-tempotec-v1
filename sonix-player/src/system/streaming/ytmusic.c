@@ -526,28 +526,19 @@ ytmusic_login_state_t ytmusic_login_device_poll(ytmusic_device_login_t *login,
 // Fixed at the first request and never refetched: neither changes while the
 // player runs, and the version is today's date at boot.
 static bool ensure_context(char *error, size_t error_size) {
-	// A build with no key can make no InnerTube request at all: the endpoint
-	// answers a request without one with the same stub an unknown User-Agent
-	// gets, which used to be reported as "no rows" and left the page looking
-	// empty. Say which piece is missing, once, and name it.
-	if (!YTMUSIC_API_KEY[0]) {
-		static bool told;
-		if (!told) {
-			told = true;
-			fprintf(stderr, "ytmusic: this build carries no InnerTube key; rebuild with "
-							"YTMUSIC_API_KEY set (see YOUTUBE_MUSIC_SETUP.md)\n");
-		}
-		set_error(error, error_size, "ytmusic_api_key_missing");
-		return false;
-	}
-
 	pthread_mutex_lock(&api_lock);
 	if (api_key[0] && client_version[0]) {
 		pthread_mutex_unlock(&api_lock);
 		return true;
 	}
 
-	snprintf(api_key, sizeof(api_key), "%s", YTMUSIC_API_KEY);
+	// Where the key comes from: the keys file first -- the image's, or the one
+	// at the root of the microSD card, which is how a personal player carries
+	// a key without putting it in a build, in an archive or in any repository
+	// -- and the value this build was compiled with when the file has none.
+	const char *from_file = streamkeys_ytmusic_api_key();
+	snprintf(api_key, sizeof(api_key), "%s", (from_file && from_file[0]) ? from_file : YTMUSIC_API_KEY);
+	bool have_key = api_key[0] != '\0';
 	time_t now = time(NULL);
 	struct tm utc;
 	if (gmtime_r(&now, &utc)) {
@@ -557,8 +548,22 @@ static bool ensure_context(char *error, size_t error_size) {
 		snprintf(client_version, sizeof(client_version), "%s", YTMUSIC_CLIENT_VERSION_FALLBACK);
 	}
 	pthread_mutex_unlock(&api_lock);
-	(void)error;
-	(void)error_size;
+
+	// Without a key no InnerTube request can be made at all: the endpoint
+	// answers one with no key with the same stub an unknown User-Agent gets,
+	// which used to be reported as "no rows" and left the page looking empty.
+	// Say which piece is missing, once, and name both ways to supply it.
+	if (!have_key) {
+		static bool told;
+		if (!told) {
+			told = true;
+			fprintf(stderr, "ytmusic: no InnerTube key -- put api_key under [ytmusic] in "
+					"streaming-keys.ini (the microSD card's root or the image's), or "
+					"rebuild with YTMUSIC_API_KEY set (see YOUTUBE_MUSIC_SETUP.md)\n");
+		}
+		set_error(error, error_size, "ytmusic_api_key_missing");
+		return false;
+	}
 	return true;
 }
 

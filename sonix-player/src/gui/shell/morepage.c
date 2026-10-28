@@ -190,6 +190,13 @@ static int more_entries_build(grid_entry_t *out, int max) {
 		if (addon && !addons_enabled(addon)) {
 			continue;
 		}
+		// This slot holds Audiobooks whenever the shelf is elsewhere or off.
+		// That module can be off too, and then there is nothing behind the row
+		// at all -- its pages were never built -- so the row goes with it.
+		bool holds_audiobooks = (books_on_home || !addons_enabled("ebook")) && strcmp(slug, "books") == 0;
+		if (holds_audiobooks && !addons_enabled("audiobooks")) {
+			continue;
+		}
 		for (size_t entry = 0; entry < sizeof(MORE_ENTRIES) / sizeof(MORE_ENTRIES[0]); entry++) {
 			if (strcmp(MORE_ENTRIES[entry].label, slug) != 0) {
 				continue;
@@ -197,9 +204,8 @@ static int more_entries_build(grid_entry_t *out, int max) {
 			out[count] = MORE_ENTRIES[entry];
 			// The swap is made whenever the home screen holds the shelf *or*
 			// the shelf is switched off: either way this slot has to offer
-			// Audiobooks, which lives in the player's library and is not an
-			// addon of its own.
-			if ((books_on_home || !addons_enabled("ebook")) && strcmp(slug, "books") == 0) {
+			// Audiobooks, the library's own section.
+			if (holds_audiobooks) {
 				out[count].label = "audiobooks";
 				out[count].icon = &icon_menu_audiobooks;
 				out[count].target = NULL;
