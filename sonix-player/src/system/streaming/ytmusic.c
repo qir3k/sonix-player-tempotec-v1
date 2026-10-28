@@ -1643,6 +1643,39 @@ static bool read_thumbnail(const json_doc_t *doc, int renderer, char *out, size_
 	return false;
 }
 
+// The album of a song row.
+//
+// The second column is "artist <bullet> album <bullet> duration", one run per
+// piece, and the artist itself is several runs when a track lists more than one
+// (", " and " & " between the names). So the album is the group between the two
+// bullets -- unless that group is the length itself, which is the shape a
+// playlist or album track list has. Read from the runs rather than guessed from
+// the row's text, so an artist called "4:09" cannot be mistaken for one.
+static void read_album(const json_doc_t *doc, int renderer, ytmusic_item_t *item) {
+	int runs = json_path(doc, renderer, "flexColumns.1.musicResponsiveListItemFlexColumnRenderer.text.runs");
+	char album[YTMUSIC_TITLE_MAX] = "";
+	bool past_artist = false;
+	for (int i = 0; i < json_len(doc, runs); i++) {
+		char text[YTMUSIC_TITLE_MAX] = "";
+		if (!json_obj_str(doc, json_at(doc, runs, i), "text", text, sizeof(text)) || !text[0]) continue;
+		if (strstr(text, "\xE2\x80\xA2")) { // the bullet: " • "
+			if (past_artist) break;            // the album group has ended
+			past_artist = true;
+			continue;
+		}
+		if (!past_artist) continue; // the artist, and the "&" / "," between names
+		size_t used = strlen(album);
+		snprintf(album + used, sizeof(album) - used, "%s", text);
+	}
+	// A duration where the album should be: the page did not name one.
+	size_t len = strlen(album);
+	while (len > 0 && (album[len - 1] == ' ' || album[len - 1] == '\t')) album[--len] = '\0';
+	char *start = album;
+	while (*start == ' ' || *start == '\t') start++;
+	if (!start[0] || (isdigit((unsigned char)start[0]) && strchr(start, ':'))) return;
+	snprintf(item->album, sizeof(item->album), "%s", start);
+}
+
 // One row of any of the three shapes the store uses for a list entry: a song
 // row, a podcast episode (a multi-row item), or a card for a playlist, album or
 // show. A row with a video id plays; one that only names a page opens it.
@@ -1665,6 +1698,7 @@ static bool read_item(const json_doc_t *doc, int renderer, ytmusic_item_t *item)
 		json_str(doc, json_path(doc, renderer, "flexColumns.2.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), item->subtitle, sizeof(item->subtitle));
 	}
 	if (!item->subtitle[0]) json_str(doc, json_path(doc, renderer, "subtitle.runs.0.text"), item->subtitle, sizeof(item->subtitle));
+	if (item->kind == YTMUSIC_ITEM_TRACK) read_album(doc, renderer, item);
 	read_thumbnail(doc, renderer, item->thumbnail, sizeof(item->thumbnail));
 	char duration[32] = "";
 	json_str(doc, json_path(doc, renderer, "fixedColumns.0.musicResponsiveListItemFixedColumnRenderer.text.runs.0.text"), duration, sizeof(duration));
@@ -2424,6 +2458,24 @@ static bool write_playback_tags(const char *path, const ytmusic_track_t *track) 
 // transfer is kept as the fallback for a server that ignores Range.
 #define YTMUSIC_CHUNK (256 * 1024)
 
+// What the download is doing, for the page's loading card. A percentage rather
+// than a byte count: a 64-bit counter read from another thread on a 32-bit
+// device can tear, and being one step out on a bar is not a problem.
+static volatile int progress_percent = -1;
+static volatile int progress_active;
+static uint64_t progress_expected;
+
+void ytmusic_download_progress(int *percent, bool *running) {
+	if (percent) *percent = progress_percent;
+	if (running) *running = progress_active != 0;
+}
+
+static void progress_note(uint64_t done) {
+	if (progress_expected == 0) return;
+	uint64_t percent = done * 100 / progress_expected;
+	progress_percent = percent > 100 ? 100 : (int)percent;
+}
+
 // The file in ranged chunks. False when Range is not honoured (or nothing came
 // back), which is the caller's cue to download it in one piece instead.
 static bool download_ranged(const char *url, const char *part, uint64_t *downloaded, bool *complete) {
@@ -2515,6 +2567,7 @@ static bool download_ranged(const char *url, const char *part, uint64_t *downloa
 		}
 		free(body);
 		*downloaded += len;
+		progress_note(*downloaded);
 		empty_asks = 0;
 		// A short chunk is NOT the end of the file. Invidious proxies the bytes
 		// and hands back less than was asked for whenever its own upstream
@@ -2538,6 +2591,7 @@ static bool download_streamed(const char *url, const char *part, uint64_t *downl
 	if (!http_stream_open_ex(&stream, url, YTMUSIC_RELAY_TIMEOUT, &options)) {
 		return false;
 	}
+	if (stream.content_length64) progress_expected = stream.content_length64;
 	FILE *f = fopen(part, "wb");
 	if (!f) {
 		http_stream_close(&stream);
@@ -2557,6 +2611,7 @@ static bool download_streamed(const char *url, const char *part, uint64_t *downl
 			break;
 		}
 		*downloaded += (uint64_t)n;
+		progress_note(*downloaded);
 	}
 	free(buffer);
 	if (fclose(f) != 0) ok = false;
@@ -2671,8 +2726,8 @@ static void save_cover(const char *audio_path, const char *thumb_url) {
 	printf("ytmusic: cover saved, %zu bytes\n", len);
 }
 
-bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
-								   char *error, size_t error_size) {
+static bool download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
+								  char *error, size_t error_size) {
 	if (error && error_size) error[0] = '\0';
 	if (!track || !path || !path_size || strlen(track->id) != 11) {
 		set_error(error, error_size, "ytmusic_invalid_track");
@@ -2708,6 +2763,10 @@ bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, siz
 			continue;
 		}
 		printf("ytmusic: %.11s: fetching from %s: %s\n", track->id, label, url);
+		// The loading card's bar: the total is what this source said the file
+		// is, and is 0 when it never said.
+		progress_expected = expected;
+		progress_percent = -1;
 		remove(part);
 		uint64_t downloaded = 0;
 		bool complete = false;
@@ -2756,4 +2815,21 @@ bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, siz
 	set_error(error, error_size,
 			  last[0] ? last : (kept_any ? "ytmusic_download_incomplete" : "ytmusic_no_source"));
 	return false;
+}
+
+// The entry the page calls. The work is download_for_playback above; this marks
+// the span for the loading card, so a bar is shown from the first byte to the
+// last -- a track takes long enough over a public instance that being told
+// something is happening is the difference between waiting and thinking the
+// player has hung.
+bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
+								   char *error, size_t error_size) {
+	progress_expected = 0;
+	progress_percent = -1;
+	progress_active = 1;
+	bool ok = download_for_playback(track, path, path_size, error, error_size);
+	progress_active = 0;
+	progress_expected = 0;
+	progress_percent = -1;
+	return ok;
 }

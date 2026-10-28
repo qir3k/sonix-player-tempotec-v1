@@ -134,11 +134,28 @@ All of these are on **YouTube Music → the cog**:
   point; the order is kept in the config and read again whenever the home page is
   built.
 
+## While a song is loading
+
+A track is downloaded whole before the player is handed it, which over a public
+instance is tens of seconds. The page shows a card with a spinner, the progress
+in percent and a bar, driven by the downloader's own byte counter -- so a slow
+start is visibly working rather than indistinguishable from a tap that did
+nothing. The card takes the taps while it is up, so a second press cannot start a
+second download behind the first. The percent appears as soon as the source says
+how large the file is, and the card goes the moment the player starts or the
+download fails.
+
+The album in the folder path comes from the row YouTube sent (its second column
+is `artist • album • duration`) and, where a page does not name it -- an album's
+own track list, a playlist -- from the title of the list the song was opened in.
+Only when neither exists does the file land under `Unknown album`.
+
 ## Saving a song to the card
 
 Once a track has played, open the now-playing menu (the track's own menu, the
-same place Tidal and Qobuz offer it) and choose **Keep on card**: the file is
-copied out of the temporary cache into
+same place Tidal and Qobuz offer it) and choose **Keep on card**; a song's row
+has the same **Download** entry behind its three dots, without playing it first.
+Either way the file is copied out of the temporary cache into
 `<card>/Music/YouTube Music/<artist>/<album>/<title>.m4a`, with its `.tags`
 sidecar and its sleeve beside it, so the next library scan lists it as an
 ordinary track and it plays with no network at all.

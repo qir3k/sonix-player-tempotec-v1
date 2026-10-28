@@ -868,6 +868,77 @@ static void test_cache_owns_its_own_downloads(void) {
 	CHECK(!ytmusic_cache_owns(NULL));
 }
 
+// A song row as the store sends it: the second column is "artist • album •
+// duration", one run per piece, and the artist itself is three runs when a track
+// lists more than one. The album is the only thing here that is not the artist
+// and not the length, and it is what the download folder is named after.
+static const char SEARCH_SONG_ROW[] =
+	"{\"contents\":{\"singleColumnBrowseResultsRenderer\":{\"tabs\":[{\"tabRenderer\":{\"content\":"
+	"{\"sectionListRenderer\":{\"contents\":[{\"musicShelfRenderer\":{\"contents\":["
+	"{\"musicResponsiveListItemRenderer\":{"
+	"\"playlistItemData\":{\"videoId\":\"5NV6Rdv1a3I\"},"
+	"\"flexColumns\":["
+	"{\"musicResponsiveListItemFlexColumnRenderer\":{\"text\":{\"runs\":[{\"text\":\"Get Lucky\"}]}}},"
+	"{\"musicResponsiveListItemFlexColumnRenderer\":{\"text\":{\"runs\":["
+	"{\"text\":\"Daft Punk\"},{\"text\":\", \"},{\"text\":\"Pharrell Williams\"},"
+	"{\"text\":\" \xE2\x80\xA2 \"},{\"text\":\"Random Access Memories\"},"
+	"{\"text\":\" \xE2\x80\xA2 \"},{\"text\":\"6:10\"}]}}},"
+	"{\"musicResponsiveListItemFlexColumnRenderer\":{\"text\":{\"runs\":[{\"text\":\"1.9B plays\"}]}}}"
+	"],"
+	"\"fixedColumns\":[{\"musicResponsiveListItemFixedColumnRenderer\":{\"text\":{\"runs\":[{\"text\":\"6:10\"}]}}}],"
+	"\"thumbnail\":{\"musicThumbnailRenderer\":{\"thumbnail\":{\"thumbnails\":["
+	"{\"url\":\"https://lh3.test/x=w60\",\"width\":60}]}}}"
+	"}}]}}]}}]}}]}}";
+
+static void test_song_row_names_its_album(void) {
+	fake_reset();
+	fake_reply("youtubei/v1/browse", 200, SEARCH_SONG_ROW);
+	ytmusic_item_t items[YTMUSIC_ITEMS_MAX];
+	char error[192] = "";
+	int count = ytmusic_browse_items("VLPLtest123", items, 4, error, sizeof(error));
+	CHECK(count == 1);
+	if (count != 1) {
+		fprintf(stderr, "  the row was not read: %s\n", error);
+		return;
+	}
+	CHECK(items[0].kind == YTMUSIC_ITEM_TRACK);
+	CHECK(strcmp(items[0].subtitle, "Daft Punk") == 0);
+	CHECK(strcmp(items[0].album, "Random Access Memories") == 0);
+}
+
+// The loading card's numbers come from the downloader, and must not be left
+// saying something is running once it has finished -- a bar that never goes away
+// is worse than no bar at all.
+static void test_progress_is_cleared_when_the_download_ends(void) {
+	char probe[64] = "/tmp/sonix-ytmusic/progress.txt";
+	FILE *writable = fopen(probe, "wb");
+	if (!writable) {
+		fprintf(stderr, "  skipped: this host cannot write /tmp/sonix-ytmusic (%s)\n",
+				strerror(errno));
+		return;
+	}
+	fclose(writable);
+	remove(probe);
+	fake_reset();
+	fake_reply("inv.test/api/v1/videos/", 200, INVIDIOUS_FORMATS);
+	fake_reply("inv.test/latest_version", 206, AUDIO_BYTES);
+	config_set("ytmusic", "instances", "https://inv.test");
+	set_relay("");
+	CHECK(ytmusic_source_select("auto"));
+	ytmusic_track_t track;
+	memset(&track, 0, sizeof(track));
+	snprintf(track.id, sizeof(track.id), "%s", VID);
+	snprintf(track.title, sizeof(track.title), "%s", "Never Gonna Give You Up");
+	char path[512] = "", error[192] = "";
+	bool ok = ytmusic_download_for_playback(&track, path, sizeof(path), error, sizeof(error));
+	CHECK(ok);
+	int percent = 42;
+	bool running = true;
+	ytmusic_download_progress(&percent, &running);
+	CHECK(!running);
+	CHECK(percent == -1);
+}
+
 // A browser's export, which is what "put the session on the card" actually
 // means: the usual Netscape cookies.txt used to be refused as invalid, and a
 // refused import looks exactly like a session Google declined.
@@ -931,7 +1002,9 @@ int main(void) {
 	test_quality_choice_picks_the_stream();
 	test_region_choice();
 	test_cache_owns_its_own_downloads();
+	test_song_row_names_its_album();
 	test_netscape_cookie_file_is_imported();
+	test_progress_is_cleared_when_the_download_ends();
 
 	if (failures) {
 		fprintf(stderr, "%d failure%s\n", failures, failures == 1 ? "" : "s");

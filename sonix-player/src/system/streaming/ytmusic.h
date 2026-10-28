@@ -47,6 +47,10 @@ typedef struct {
 	char browse_id[YTMUSIC_BROWSE_ID_MAX];
 	char title[YTMUSIC_TITLE_MAX];
 	char subtitle[YTMUSIC_NAME_MAX];
+	// The album the row named, when the page carried one: a song row's second
+	// column is "artist • album • duration". Empty on pages that do not name
+	// it (an album's own track list), where the list's title stands in for it.
+	char album[YTMUSIC_TITLE_MAX];
 	// The artwork the list draws on the row, and empty when the page carried
 	// none: the row then keeps the glyph it was built with.
 	char thumbnail[YTMUSIC_ART_URL_MAX];
@@ -188,6 +192,11 @@ bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, siz
 // handed for a YouTube Music song, and the only kind of file the "save to the
 // card" action copies out of it.
 bool ytmusic_cache_owns(const char *path);
+
+// How far the download in flight has got, for the page's loading card. Percent
+// is -1 until the instance has said how big the file is, and `running` is false
+// when nothing is downloading.
+void ytmusic_download_progress(int *percent, bool *running);
 
 // The country whose store the catalogue answers from, and the language its
 // labels come back in ("PL"/"en"): what the region row on the settings page

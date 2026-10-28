@@ -161,9 +161,9 @@ while 4095 were asked for, which is the proxy behaviour that once ended a track
 after a minute: a short reply is not an ending, and neither is a `206` that carries
 nothing -- that is the instance's upstream pausing, and the download asks again
 from the byte it reached. The file is finished on a `416`, or after six empty
-replies in a row, and is then checked against the `clen` the instance named. The row's sleeve is fetched too
-and written beside the audio as `<id>.jpg`, so the check covers the artwork the
-player looks for. That run needs a writable `/tmp/sonix-ytmusic`, so a Windows
+replies in a row, and is then checked against the `clen` the instance named. The
+row's sleeve is fetched too and written beside the audio as `<id>.jpg`, so the
+check covers the artwork the player looks for. That run needs a writable `/tmp/sonix-ytmusic`, so a Windows
 host whose security software blocks that path prints a skip line instead of
 failing.
 
@@ -172,6 +172,12 @@ The settings the page stores are pinned too: the quality pill picks itag 141
 *Standard*; the region pair is stored and read back as two letter codes, with a
 malformed pair refused; and the playback cache owns only its own `.m4a` files,
 which is what decides whether the now-playing and row menus offer *Download*.
+A song row is parsed for the album it names (`artist • album • duration`, one run
+per piece, with the artist itself sometimes several runs), because that is what
+names the folder a download lands in; and the downloader's progress reads back as
+finished and unknown-percent once the file is whole, so the page's loading card
+cannot stay up for a download that has ended.
+
 A browser's `cookies.txt` export is imported as well as a single `Cookie` line:
 the Netscape lines for `youtube.com` and `google.com` become the session header,
 another domain's line is left out, and the card copy is removed afterwards.
