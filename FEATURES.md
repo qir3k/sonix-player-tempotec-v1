@@ -8,7 +8,9 @@
 
 `.wav` `.flac` `.mp3` `.ogg` `.opus` `.m4a` `.m4b` `.mp4` `.aac` `.wv` `.wvc` `.ape` `.dsf` `.dff` `.aif` `.aiff` `.aifc` `.caf`
 
-**CUE sheets** split a single ripped disc into up to 99 tracks, taking the format from the file the sheet points at. WAVs carrying their own RIFF markers work the same way.
+**CUE sheets** split a single ripped disc into up to 99 tracks, taking the format from the file the sheet points at (and finding the audio file by stem when its extension differs from the `FILE` line). WAVs carrying their own RIFF markers work the same way.
+
+**Format & tag tolerance** - Containers and codecs are identified from file contents rather than extensions, so misnamed files scan and play cleanly. FLAC files carrying leading ID3v2 headers, broken or non-standard ID3v2 tags (v2.4 non-syncsafe sizes, unsynchronised UTF-16 frames, zlib-compressed frames, BOM-less UTF-16, chained tags), multi-page Ogg Vorbis/Opus comment headers, and APEv2/ASF/MP4/RIFF/AIFF/CAF metadata are all read reliably.
 
 **WAV and AIFF tags** are read from the ID3 chunk taggers add to them, so titles in any script and the cover come through; a WAV's own INFO list fills in whatever that leaves empty.
 
@@ -79,22 +81,36 @@
 - **The queue is editable** - a long press on a row starts a selection and the trash button takes the chosen tracks out of the queue (the next one starts if the playing track went). Dragging a row by the grip at its right moves it; the queue on disk follows at once.
 - **The local queue survives a reboot**, with positions, and so does the volume. Ephemeral Subsonic queues do not.
 
+## Smart Mix
+
+- **Start from a track** - choose **Start Smart Mix** in a track's menu, its details card, a search result or a one-track list's play menu, and the player builds a mix of up to ten related tracks in the background, with a progress page and a cancel button. Episodes and streamed cache tracks are not offered as seeds.
+- **Saved as a playlist** - on the Playlist page, **Create Smart Mix** walks the library's own album and track lists to choose the starting track, or takes the single track being added to a playlist. The mix is written to the card as an ordinary playlist named after the seed (`Smart Mix - <track>`, with a ` (2)` tail when the name is taken), opens as its own track list, and leaves whatever is playing alone. The same action is reachable from selection mode's **Add to playlist**.
+- **Built entirely on the player** - after a scan or change check, the same library worker builds missing or outdated Smart Mix data from the scanned tags, as its own phase after the music scan. An existing library can build it when the card returns even with Detect changes disabled, without rescanning its files. No computer or network is required; the graph lives beside the index in `.local/genius.db`.
+- **Genre-based candidates** - one genre per cluster, ranked by shared album, artist and year. Each track keeps at most 32 candidates, with at most two per artist and three per album. Empty tags are treated as ordinary values rather than dropping the track.
+- **Progress and background work** - the scan page keeps its tracks-written count and shows Smart Mix indexing separately, with its own completed/total percentage and a time estimate. **Continue in background** leaves the job running and returns to the same page later; the display may turn off while the device stays awake. Cancel stops the active phase and prevents the later phases.
+- **Complete generations** - a bounded staging database is synced and then published by a same-directory rename, so a half-written graph never replaces the working one. Cancellation, a changed input, a reached limit or a write error leaves the previous graph in place. Removing the card stops and waits for the worker before unmount, and abandoned staging is discarded on the next build. The generation records the producer, the algorithm and the SHA-256 of the exact normalized input paths and tags, plus the static graph digest, so a graph built from the same inputs elsewhere is recognized without rebuilding.
+- **Bounded indexing** - up to 4,096 library rows (including ignored empty paths), 1 MiB of retained path/tag text, 4,096 bytes per field, 4 MiB of builder allocations and a 2 MiB snapshot. Ranking evaluates at most 4,096 scores and seven passes of that genre per track. Reaching a limit preserves the old graph and leaves the library usable; a Smart Mix failure never fails an otherwise successful scan.
+- **An ordered queue** - spacing and selection decide the sequence, so shuffle and repeat do not alter a playing mix, and the fixed order survives a reboot.
+- Missing data, too few similar tracks and a resource limit each raise their own message, and snapshot memory and graph traversal have explicit limits.
+
 ## Now playing
 
-- Artwork edge to edge across the top, and the same picture flipped, blurred and dimmed behind the controls.
+- Artwork edge to edge across the top, and the same picture flipped, blurred and dimmed behind the controls. Embedded or folder covers up to 32 MB are memory-mapped directly from the card, pre-fetched for the upcoming track, and cached as JPEGs (up to 1,000 Now Playing sleeves alongside list thumbnails) with a dedicated cache-lookup worker for near-instant skips.
 - **Alternative layout** - the progress bar becomes a **waveform**
 - **Immersive layout** - the picture itself, edge to edge across the whole panel: the sleeve fills the screen and is centre-cropped, at its own brightness, with nothing laid over it. The controls stand on a frosted band: the foot of the same photograph, lightly blurred, dimmed to the darkness the type reads on and tinted so the sleeve's colour survives in it, cut to the deck's rectangle - so the artwork is still seen through the glass, softly, while the names, the bar, the clocks and the transport are read on top; the chevron and the source marks take their chance in white over the sharp part. Anything holding artwork gets one - local files, podcasts, audiobooks, Subsonic and the streaming services alike - and without a picture the page falls back to its own colour with the controls in the theme's ink.
 - **Poster layout** - the sleeve at the size of the panel: the full width of the screen and every row the deck leaves, held at the top with square corners, nothing stretched side to side and no strip of page left beside the picture. The picture is decoded at exactly that rectangle and filled from the middle, so a square cover gives up a little of its top and bottom rather than its sides; the deck below stands on its own opaque ground rather than over the artwork. Anything holding artwork gets one, and without a picture the empty sleeve stands edge to edge in the cover's colour with the controls in the theme's ink; the favourite marker is the same heart the player, the control centre and the library all draw, kept a step smaller on this deck; and the foot of the sleeve fades into the deck over its last pixels instead of meeting the controls at a line.
 - **Album Art Max layout** - the sleeve instead of the controls: the picture at the width of the panel with the status bar kept above it, the format, the shuffle mode, the menu and the heart in one row under that bar, and a minimal scrub bar along the foot of the artwork, with the artist, the track name and the place in the queue on a black strip below. There is no transport on the page - the physical keys are the transport, which the status bar's play/pause mark confirms - and double-tapping the left or right side of the picture is the previous or next track. Nothing is written over the photograph and the strip carries everything that names the track: the artist first, in the record's colour, then the title in the theme's ink, each given the width of its own words so that neither scrolls unless it has to. The scrub bar, the heart, the format line and the queue count are all drawn in the colour of the album art, so the page belongs to the record rather than to the theme. The bar is a thin band of colour that deepens towards the playhead, which is a tab rather than a knob. The two clocks appear in the middle of the picture, large, only while a track is being scrubbed (a finger on the bar or a held skip key), with the artwork dimmed behind them. *Scrub bar on the left* moves the bar up the left edge instead, where the thumb travels vertically. The V1's panel only, where every number in it is measured; the other boards keep the standard arrangement.
 - **Player layout** - Standard, Waveform, Alternative, Immersive, Poster or Album Art Max, in Settings → Music → Display options; the choice is remembered across restarts.
 - **Tint controls from album art** - optional, off by default, in the same Display options: the play/pause button and the played part of the progress bar take the main colour of the playing track's artwork, in every layout, while previous and next keep their colour. The colour is the one already worked out from the decoded artwork, so nothing extra is decoded and playback is untouched; a track with no artwork keeps the theme's colours.
+- **The control centre** - pulled down from the status bar, or up from the bottom edge with **Appearance → Stock gestures** on: the round quick controls, the brightness bar under them -- or the volume, with **Screen → Volume in control centre** -- and the playing track over its transport. **Tap the title or the artist to open Now Playing** for what is playing, and the control centre closes on the way: the player comes up over the page, or is simply revealed when it was already open behind the panel. The two lines do nothing while the card says there is nothing playing.
 - **Cover Flow** - an album carousel: pull up from the bottom of the main menu and it follows the finger up over the page; drag it back down -- from anywhere on the sheet, or from the grip under the status bar -- and it goes away. With **Appearance → Stock gestures** on it comes down from the top edge of any page instead, and goes back up, as on the original firmware. Off by default in Settings → Music → Display options.
+- **Lyrics and LRCLIB** - swipe left on the artwork to show the playing track's lyrics, read from a sidecar `.lrc` or `.txt` file beside the track or from its embedded tags; synced lyrics follow the song line by line, tapping a line seeks there, and the screen stays lit while reading. On a local track with no lyrics, the same swipe offers to look them up on **LRCLIB** (and offers to turn Wi-Fi on first when Wi-Fi is off, starting the search automatically once connected), lists the ranked synced and plain matches with a full-text preview, and saves the chosen lyrics atomically as `<track>.lrc` beside the file; while lyrics are open, the corner search button looks up alternatives on LRCLIB to replace them.
 - **Queue**, **Details** and, while an audiobook is loaded, **Chapters**.
 
 ## Streaming
 
 - **Subsonic / Gonic** - a new Streaming destination for your own server. Test the connection, browse music folders or artists/albums in pages of 200, and play the page as a queue. MP3 256/320, Opus, or original FLAC/MP3/Opus; transcoding runs on the server. Two fixed 1 MiB RAM rings isolate HTTP/TLS from decoding, refill near 50%, and pre-cache 512 KiB of the upcoming track near 90%. No growing disk cache or playback seeking; compatible-format gapless uses the existing ALSA handoff. Remembering credentials is optional and stores an unencrypted private file. See [setup and limitations](docs/subsonic.md).
-- **Tidal** - sign in with the code on screen or with the QR-Code; Low, High, CD and Hi-res quality. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player. Search is a page of its own with a field under the pills (Tracks, Albums, Artists) and the last ten searches kept beneath it, and the rows, pills and titles follow the V1's 240 px panel rather than the 480 px one. A list's first page is kept on the card, so opening a tab shows its names at once instead of fetching them again; a change made on the page drops the copy it made wrong, and a copy nobody has touched is read for half a day. A long press on a row of the favourites, of an album's tracks, of search results or of a playlist's own tracks starts a selection: tick as many rows as wanted, then favourite, unfavourite or take out all of them from the corner — a playlist's tracks go by position, the last of them first, so the positions the rest are renumbered by are never the ones still to come. A whole playlist stays a single-row action, since it is deleted outright rather than changed. **Keep on card** in the player's track menu copies the track that is playing — which had to be downloaded to play it anyway — into `Music/Tidal/<artist>/<album>` with its tags and its cover, where it stays like any file of your own: no cache sweep takes it, and the next library scan finds it with its title and artist.
+- **Tidal** - sign in with the code on screen or with the QR-Code; Low, High, CD and Hi-res quality. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player. Search is a page of its own with a field under the pills (Tracks, Albums, Artists) and the last ten searches kept beneath it, and the rows, pills and titles follow the V1's 240 px panel rather than the 480 px one. A list's first page is kept on the card, so opening a tab shows its names at once instead of fetching them again; a change made on the page drops the copy it made wrong, and a copy nobody has touched is read for half a day. A long press on a row of the favourites, of an album's tracks, of search results or of a playlist's own tracks starts a selection: tick as many rows as wanted, then favourite, unfavourite or take out all of them from the corner — a playlist's tracks go by position, the last of them first, so the positions the rest are renumbered by are never the ones still to come. A whole playlist stays a single-row action, since it is deleted outright rather than changed. **Keep on card** in the player's track menu copies the track that is playing — which had to be downloaded to play it anyway — into `Music/Tidal/<artist>/<album>` with its tags and its cover, where it stays like any file of your own: no cache sweep takes it, and the next library scan finds it with its title and artist. Favourite artists are a list of their own. A list of tracks can be downloaded as a queue, with the one in hand cancellable, and the cache on the card refuses a write it cannot fit: it checks the card's free space and stops at a 1 GiB ceiling.
 - **Qobuz** - sign in with the account; MP3 320, FLAC 16/44.1, 24/96 and 24/192. Search, albums, artists, playlists, favourites and the featured lists. Favourites and playlists can be managed from the player.
 - **Podcasts** - the Podcast Index catalogue: search, trending, follow up to 100
 shows kept on the device. Downloaded episodes land in the card's `Podcast`
@@ -122,7 +138,8 @@ The order button in the heading turns an episode list round: newest first, or
 oldest first, remembered in the config and shared with the card's list.
 - **Radio** - the radio-browser.info directory by language, country or genre,
 plus search, favourites, recently played, and **My stations** read from a
-`radio.txt` you write yourself in the card root. MP3 and AAC, HTTPS with real
+`radio.txt` you write yourself in the card root. MP3, AAC and FLAC (native,
+mid-stream join, and chained Ogg FLAC with song titles, up to 24-bit), HTTPS with real
 certificate checking (plus an opt-in relaxed mode for a server of your own with
 a self-signed certificate), and HLS.
 - **Radio → Recommended** - the stations where you are, most played first: the
@@ -181,8 +198,16 @@ circle opens the radio's settings page on it.
   queue, favourites, artwork and commands. Over Bluetooth the link keeps out of the
   music's way: while headphones are playing, bulk syncs wait and small transfers
   run at a trickle; over Wi-Fi nothing changes.
-- **YouTube Music** - search, charts, Explore, albums, playlists and podcasts, all signed out: the public pages answer a guest, and no account is needed to find or play anything. Signing in (Settings, device code) is only for the personal library -- likes, history, your own playlists. Streams are audio-only AAC; nothing carrying a video track is ever fetched.
-  Google now refuses direct playback to every client without a browser-grade attestation this device cannot run, so guest playback goes through a relay you name yourself: `[ytmusic] relay_base = https://...` in `device_config.ini`, pointing at any Piped-API-compatible server (one Docker container on a machine of your own does it). Playback, downloads and the audio-only filter all run through it. Without a relay set, search and browsing still work and a track answers `ytmusic_relay_needed`.
+- **YouTube Music** - search, charts, Explore, albums, playlists and podcasts, all signed out: the public pages answer a guest, and no account is needed to find or play anything. Signing in (Settings, device code) is only for the personal library -- likes, history, your own playlists; the Favourites tab itself needs the browser session imported from the card, because that is the only credential the music endpoints accept for the library, and the player says so instead of showing an empty list. Streams are audio-only AAC; nothing carrying a video track is ever fetched. A track plays with nothing else on the network: the player asks YouTube's phone-app player for an audio address and fetches it itself, in 256 KB ranges rather than one long transfer (an unsigned address read straight through is throttled to about 32 KB/s; read in ranges it is not), and it does not care that no attestation can run here. When Google refuses that request, playback falls back to a Piped or Invidious instance -- the built-in public hosts, or `[ytmusic] instances = ...` -- and then to a relay of your own, `[ytmusic] relay_base = http://...`. The settings page (Streaming -> YouTube Music -> the cog) lists every source and pins one if you want it first; see `sonix-player/YOUTUBE_MUSIC_SETUP.md`. An instance only contributes when it can pass the bytes on: Invidious's `/latest_version?local=true` does (the instance fetches the audio and forwards it), a Piped instance that only names a `googlevideo` address does not, because that address belongs to the machine that resolved it and is refused from anywhere else. The relay, `tools/ytmusic-relay.py`, resolves the track and serves the audio from itself, which is how it works from another machine. When every source has been refused the player says that instead of asking for a relay, which is no longer required.
+  Every list draws the artwork the entry came with -- album sleeves, song covers, podcast art -- the same shared cover loader the Tidal, Qobuz and Podcasts tabs use, with each image kept on the card under `.local/qobuz-art`.
+  The title bar carries three corner buttons, in Tidal's order from the left: the magnifier (search), the download tray (the songs kept on the card, opened in the music browser at `Music/YouTube Music`) and the gear (this page's settings). Search and the tray are one tap from the home list instead of two.
+  A row that plays (a song, an episode) carries no chevron: the chevron means "this opens another list", which is what an album or a show row does.
+  The download is finished only on a `416`: a short range reply -- and a `206` carrying nothing, which is an instance's upstream pausing rather than an ending -- is asked for again from the byte reached, and the file is checked against the byte count the instance named. That is what used to cut a three-minute track off after a minute (a ~1 MB file the player then reported as a 35 kbit/s stream).
+  Settings gained four rows. **Sleep timer** is the music transport's own, the one the card and Tidal share, because a YouTube track plays through the same player. **Audio quality** chooses between the 256 kbit/s AAC stream (itag 141) where an instance offers one and the 128 kbit/s one everywhere else, with Standard pinning 128 for a slow instance. **Recommendations for** picks the country's store and the language of the row names -- Poland with English rows is one of the pairs -- through the InnerTube `gl` / `hl` of every request. **Home rows** opens a page where the five home rows are moved up and down and switched on or off, so Explore can be hidden or pushed below the rest.
+  A track starts playing as soon as enough of it has arrived -- an eighth of the file, between 192 kB and 1 MB, and never before the container's `moov` index is in, since without it the decoder has nothing to read -- and the rest keeps downloading behind the player, so a song begins in seconds instead of after the whole thing. The card with the spinner, the percent and the bar follows the downloader's own byte count while that happens, and swallows taps until playback starts or the download fails. **Download** in the row's menu is the explicit copy: that one waits for the whole file and puts it in `Music/YouTube Music/<artist>/<album>`.
+  A track that has played can be kept for good from the now-playing menu, the same place Tidal and Qobuz offer it, and a song's row has the same Download entry behind its three dots: it is copied out of the temporary cache into `<card>/Music/YouTube Music/<artist>/<album>/<title>.m4a` with its tags and sleeve, and plays offline from the library afterwards. The album is the one the row named (`artist • album • duration`); where a page does not name it, the title of the list the song was opened from stands in, so a download lands in a named folder rather than `Unknown album`.
+  A session imported from the card may be a browser's `cookies.txt` export as well as one line of `Cookie` header: the usual export was refused as invalid before, which looked exactly like a session Google had declined. The Google sign-in row says what it does not do, since the music endpoints refuse its token for the library.
+- **Plugins** - the optional modules are listed in **Settings -> Plugins**, each with a switch and a line saying what it adds: Tidal, Qobuz, YouTube Music, Podcasts, Subsonic, Radio, the calculator, notes, Flappy Bird, the Game Boy emulator and the books shelf. Switching one off means it is not initialised at all -- its pages are never built, so the memory they would hold stays free -- and its rows are not drawn in Streaming or More. Everything ships on, and the change takes effect after a restart, which the row says. The model, and how to add a module, are in `sonix-player/docs/ADDONS.md`.
 - **USB mass storage** - connect the device to a PC or a Smartphone to manage the files on the SD Card.
 
 ## Podcasts on the card
@@ -242,10 +267,10 @@ circle opens the radio's settings page on it.
 
 ## Tools
 
-> **Calculator** and **Notes** are in the **More** menu, under the file
-> manager. Both are drawn for the panel they are on: on the 240x320 V1 the
-> twenty keys stay a finger's width, and the whole page -- display, keypad and
-> labels -- fits without scrolling.
+> **Calculator**, **Notes** and **Metronome** are in the **More** menu, under
+> the file manager. All three are drawn for the panel they are on: on the
+> 240x320 V1 the twenty keys stay a finger's width, and each page -- display,
+> keypad and labels -- fits without scrolling.
 
 - **Calculator** - a display and the twenty keys of an ordinary pocket
   calculator: the four operations, sign, percent, backspace and clear. The sum
@@ -278,6 +303,20 @@ circle opens the radio's settings page on it.
   > written as UTF-8; a file saved as UTF-16 or Windows-1252 is read and shown
   > correctly too, and a note longer than the editor holds is offered to the
   > file manager's viewer instead of being cut short here.
+- **Metronome** - a tempo from **30 to 250 BPM**, a bar of **one to seven
+  beats**, and a click on every beat with the first of the bar accented and
+  lit. The tempo is dragged on a slider or taken from the finger with **Tap**,
+  which averages the last few taps rather than the last gap alone, so one
+  hurried tap does not move the tempo a dozen beats. A tap slower than 30 or
+  faster than 250 leaves the tempo at that end of the scale instead of outside
+  it, and the button works while the click is running. The click is synthesised
+  in the player -- two short bursts, a bright one on the downbeat -- so there is
+  nothing extra to ship, and it is played through the same output as the music:
+  starting it stops local playback and the radio, as the emulator does. The
+  dots follow the beat the audio thread has actually written, so what is on the
+  glass cannot drift from what is in the ear. The tempo and the bar are
+  remembered across visits and across a reboot; leaving the page stops the
+  click, because the page is the only place it can be stopped from.
 
 ## Games
 
@@ -320,17 +359,42 @@ circle opens the radio's settings page on it.
 - **Appearance → Browse on home screen** - replaces the Music tile with Browse, opening the card’s file browser in the card’s `Music` folder directly; a card without that folder still opens at its root. The chevron and the root button still walk up to the rest of the card. Off by default; Music remains available when switched off.
 - **Appearance → Show Books on home screen** - replaces the Audiobooks tile with Books, opening the EPUB shelf directly from home. Off by default; Audiobooks remain available when switched off. Switched on, the two swap places in **More** as well: its Books row becomes Audiobooks, so both libraries stay one tap away and neither is listed twice.
 - **Appearance → Main menu icons only** - optionally hide the six main-menu tile labels and show larger, centered icons. Dedicated native-pixel art avoids stretching small toolbar glyphs or repeatedly filtering the colored illustrations. Applies immediately in every theme and is saved across restarts; other menus, the status bar and the now-playing strip are unchanged. Off by default.
-- **Appearance → Stock gestures** - moves the two sheets to the edges the original firmware pulls them from: Cover Flow down from the top edge of any page, and the control centre up from the bottom of the screen. Off by default, which keeps this player's own arrangement — the control centre pulled down from the status bar, Cover Flow pulled up from the bottom of the main menu — so an update never moves a gesture that is already in the fingers. Both sheets pick the new edges up at the next pull, with no restart; the grip each one is dragged out by moves with them, and in the stock arrangement the extra control-centre buttons are unfolded with a tap on the handle under the brightness slider rather than by dragging the card down.
+- **Appearance → Stock gestures** - moves the two sheets to the edges the original firmware pulls them from: Cover Flow down from the top edge of any page, and the control centre up from the bottom of the screen. Off by default, which keeps this player's own arrangement — the control centre pulled down from the status bar, Cover Flow pulled up from the bottom of the main menu — so an update never moves a gesture that is already in the fingers. Both sheets pick the new edges up at the next pull, with no restart; the grip each one is dragged out by moves with them, and in the stock arrangement the extra control-centre buttons are unfolded with a tap on the handle under the slider rather than by dragging the card down.
 - **Appearance → Boot screen** - the picture the next power-on opens with: Retrospace (the default), Space, Travelling in space, Stock, the firmware's own light and dark pictures, or **Custom**, one of your own. The choice is written to the flash marker the boot script reads, so it takes effect at the next boot.
   > **Custom** is a JPEG or PNG from the `Bootlogo` folder in the root of the card, picked from the list under **Custom picture** on the same page. Any size will do: it is scaled to fill the panel and cropped where it overflows, so a landscape photograph boots as a full-screen picture rather than a band between two black bars. The chosen picture is copied into the player, which is why it still boots with the card out — and why a change to the file on the card means choosing it again.
 - **Appearance → Font** - the face the whole interface is drawn with: MiSans (the default), Neon 80s and, where the image carries them, Roboto or Roboto Mono. Text can also be sized Normal or Large. Any `.ttf` or `.otf` file put in the `Fonts` folder on the card is offered beside those, so people can install their own; a face without Cyrillic, Hangul, kanji or Greek still draws the whole interface, because MiSans stays behind it for the letters it does not have.
 - **Screen** - brightness (5% to 100%), screen-off timeout, double-tap to wake, screensaver,
   and 180° rotation with the touch rotated with it.
+- **Screen → Volume in control centre** - what the slider under the control centre's round buttons does. Off, the default, it is the brightness bar, exactly where the stock firmware has it and where this player has always had it. On, the same bar sets the output volume instead: the sun becomes a speaker that changes with the level (silent, quiet, loud) and the bar turns red past 55%, the warning colour the volume pill over the player uses. It is the same level the volume keys, the status bar and the pill carry. The switch takes effect at the next pull, with no restart.
 - **Screensaver** - choose to show the cover of the current playing track or pictures from the `Screensaver` folder. On the V1's Amber on Black and OLED themes the artwork fills the whole panel and the title, artist and clock are read on a blurred band cut from the foot of that same artwork, so the picture continues through it instead of showing a flat grey rectangle; Dark and Light keep their blurred strip. The time is white in every palette, whatever accent is chosen, and a podcast episode is named by its own title with the podcast's author under it. Under **Album art**, **Fill** keeps that full-bleed look (the default). **Framed** shows the whole cover instead, at its own resolution, in a rounded frame with margins round it, above the title, artist and clock. That frame is 160 px on the V1. The cover is decoded for exactly that size and never enlarged, so it never turns into blocks.
   > Pictures must be baseline (not progressive) JPEGs, portrait, and no larger than 480x800. The V1 crops and scales them to fill its 240x320 screen. For the sharpest result with nothing cropped, make them 240x320 or 480x640, the screen's own 3:4 shape.
 
 - **Power** - standby, LED behaviour, automatic power-off from thirty seconds to
   six hours, and a charge limit from 80 to 100 %.
+- **Battery** - the last few percent are managed rather than run out. At **5 %**
+  the player warns: a red card, held for eight seconds, and the panel is brought
+  back up first if it was dark, because a warning nobody sees is not one. That
+  wake is brief: ten seconds later the panel goes dark again, unless the screen
+  has been touched in the meantime. At **1 %** it switches itself off the
+  ordinary way - position written, databases closed, card unmounted - instead of
+  letting the cell drop out from under it. Both work with the screen off and in
+  standby, and neither happens while the charger is in, whether the cell is
+  taking a charge or is held at the limit. Below 10 % the player also refuses to
+  suspend to RAM: a sleeping player cannot watch its own gauge, and the clean
+  shutdown at one percent is worth more than the sleep. The warning is given
+  once per discharge; it comes back after the battery has been charged past
+  7 %.
+- **Charging with the player off** - a player that was switched off and is then
+  put on a charger comes up on a battery screen rather than the library: the
+  level as a filling battery, the percentage, and whether the charger is still
+  charging, finished, or gone. It darkens itself after ten seconds
+  (`[power] charge_screen_seconds` in `device_config.ini`, minimum five);
+  **press power** to bring it back, **hold power** to start the player after
+  all. The screen is told apart from an ordinary boot by a marker the player
+  keeps on the writable partition while it is running -- and drops as it
+  switches itself off -- so a reboot, a crash or a firmware update still starts
+  the player as usual. `[power] charge_screen = 0` in `device_config.ini` turns
+  the screen off entirely.
 - **Power → Hold power for the menu** - what a held power button does. On, the
   default, the hold brings up the power menu and switching off or rebooting
   takes a slide to confirm. Off, the same hold switches the player off where it
@@ -348,15 +412,17 @@ circle opens the radio's settings page on it.
   connection, and daylight-saving rules) or lets you set it by hand; the clock
   is written through to the RTC, with a 24-hour clock option.
 - **Language** - English, Italiano, Deutsch, Español, Français, Nederlands,
-  Polski, Português BR. The eight language files are read from the resource
-  folder, so dropping another `.ini` in beside them adds a language. Titles and
-  tags come out in whatever script the interface font covers too - Cyrillic,
-  Greek, kana, kanji, Hangul, Thai and Arabic, Arabic right to left - so a
-  Russian or Japanese album title still reads.
+  Polski, Português BR, Українська, Русский, 日本語. The eleven language files are read from the
+  resource folder, so dropping another `.ini` in beside them adds a language.
+  In Japanese the interface draws its kana, kanji and CJK punctuation from the
+  bundled Rodin face rather than MiSans, whose kanji are the Chinese shapes.
+  Titles and tags come out in whatever script the interface font covers too -
+  Cyrillic, Greek, kana, kanji, Hangul, Thai and Arabic, Arabic right to left -
+  so a Russian, Ukrainian or Japanese album title still reads.
 - **Remap buttons** - the three media buttons and the two volume buttons, each
   assignable to nothing, play/pause, previous, next, volume up or volume down.
-- **Keyboard layout** - six layouts: English, Italian, German, Spanish, French
-  and Russian.
+- **Keyboard layout** - ten layouts: English, Italian, German, Spanish, French,
+  Russian, Dutch, Polish, Portuguese and Ukrainian.
 - **Screenshots** - under More: volume up and the power key save the screen to
   the card.
 - **System** - device, DAC, serial number, card space, OS version, firmware

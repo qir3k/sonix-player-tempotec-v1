@@ -42,7 +42,7 @@ static __thread char last_error[192];
 
 // URL of the last hop of this thread's last successful request; see
 // http_last_final_url() in http.h.
-static __thread char last_final_url[2600];
+static __thread char last_final_url[HTTP_URL_MAX + 64];
 
 const char *http_last_final_url(void) { return last_final_url; }
 
@@ -67,7 +67,7 @@ const char *http_last_error(void) {
 
 typedef struct {
 	char host[256];
-	char path[2048]; // always starts with '/'
+	char path[HTTP_URL_MAX]; // always starts with '/'
 	int port;
 	bool secure; // https://
 } url_t;
@@ -883,7 +883,7 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 
 	clear_last_error();
 
-	char current[2600];
+	char current[HTTP_URL_MAX + 64];
 	snprintf(current, sizeof(current), "%s", url);
 
 	// The request changes hop by hop: after a redirect that changes the
@@ -902,7 +902,7 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 		}
 
 		int status = 0;
-		char location[2048] = "";
+		char location[HTTP_URL_MAX] = "";
 		char err[192] = "";
 		bool ok = get_once(&u, &hop_req, out, out_len, limit, timeout_secs, &status, location, sizeof(location), err,
 						   sizeof(err));
@@ -917,6 +917,14 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 			return true;
 		}
 		if (status < 300 || status >= 400 || !location[0]) {
+			return false;
+		}
+		// A Location longer than this buffer was cut short. Following it sends
+		// a truncated address -- and with a signed media address that means a
+		// 403 from the server that received it, which reads from outside as a
+		// broken stream rather than as a buffer that was too small.
+		if (strlen(location) >= sizeof(location) - 1) {
+			set_last_error("%s", tr("http_redirect_too_long"));
 			return false;
 		}
 
@@ -967,6 +975,15 @@ static bool stream_open_once(http_stream_t *st, const char *url, int timeout_sec
 							 char *location, size_t location_size, const http_stream_options_t *options) {
 	url_t u;
 	if (!url_parse(url, &u)) {
+		// Never silent: a caller that only sees `false` has nothing to say to
+		// the user, and this one used to end as "could not reach the stream"
+		// with no reason in the log -- which is how a media address handed out
+		// by somebody else's machine went unexplained. The head of the address
+		// is enough to recognise it; the rest may be a signed query.
+		char head[72];
+		snprintf(head, sizeof(head), "%.64s", url && url[0] ? url : "(no address)");
+		fprintf(stderr, "http: cannot read the address %.64s\n", head);
+		set_last_error(tr("http_bad_address"), head);
 		return false;
 	}
 
@@ -1013,6 +1030,14 @@ static bool stream_open_once(http_stream_t *st, const char *url, int timeout_sec
 		return false;
 	}
 	if (status != 200) {
+		// The reason a stream was refused, in the log and in last_error, the
+		// way get_once() does for an ordinary request: Google answers 403 to a
+		// media address that was resolved from a different machine, and that
+		// is a thing worth reading rather than guessing at.
+		fprintf(stderr, "http: %s%.*s -> status %d\n", u.host, (int)strcspn(u.path, "?"), u.path, status);
+		if (!last_error[0]) {
+			set_last_error(tr("http_server_answered"), status);
+		}
 		conn_close(&conn);
 		return false;
 	}
@@ -1066,16 +1091,20 @@ bool http_stream_open_ex(http_stream_t *st, const char *url, int timeout_secs, c
 	st->fd = -1;
 	clear_last_error();
 
-	char current[2600];
+	char current[HTTP_URL_MAX + 64];
 	snprintf(current, sizeof(current), "%s", url);
 
 	for (int hop = 0; hop <= HTTP_MAX_REDIRECTS; hop++) {
 		int status = 0;
-		char location[2048] = "";
+		char location[HTTP_URL_MAX] = "";
 		if (stream_open_once(st, current, timeout_secs, &status, location, sizeof(location), options)) {
 			return true;
 		}
 		if (status < 300 || status >= 400 || !location[0]) {
+			return false;
+		}
+		if (strlen(location) >= sizeof(location) - 1) {
+			set_last_error("%s", tr("http_redirect_too_long"));
 			return false;
 		}
 

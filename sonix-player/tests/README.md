@@ -15,6 +15,8 @@ make -C sonix-player/tests mostplayed
 make -C sonix-player/tests aamlayout
 make -C sonix-player/tests podcastplayed
 make -C sonix-player/tests extractkeys
+make -C sonix-player/tests ytmusic
+make -C sonix-player/tests relay
 ```
 
 These require only a C compiler, Make and Python 3 (plus standard pthread/dl/math libraries). They **do not require LVGL, ALSA, a MIPS toolchain, a music server, a real account, or downloaded audio**.
@@ -71,8 +73,12 @@ on its own thread and writes through `audio_external_write()`, and
 `radio_push_pcm()` runs `eq_process()` on the stereo 16-bit frames about to
 be written. The suite links the real `eq.c` and drives that function: with
 EQ, PEQ and MSEB all off it is a no-op; with each one on in turn a sine
-changes; and both 44.1 kHz and 48 kHz, the rates stations arrive at, run.
-The config store is a temporary file; nothing else is stubbed.
+changes; and every rate a station can arrive at runs -- 22.05, 24 and 32 kHz
+for low-bitrate HE-AAC and speech streams as well as the usual 44.1 and
+48 kHz, each with the all-off no-op checked alongside it. A mono station is
+widened to an identical stereo pair before the chain, exactly as
+`radio_push_pcm()` does, and the tuned output has to stay identical on both
+channels. The config store is a temporary file; nothing else is stubbed.
 
 USB DAC mode is the other source outside `audio.c`: the computer's PCM comes
 off `/dev/uac_sa` as 32-bit left-justified words and `usbdac.c` runs
@@ -113,6 +119,117 @@ are stubbed; `tests/stubs/` carries the two LVGL typedefs `power.h` needs so
 this stays a plain-C suite. The Wi-Fi page itself -- the "Add hidden network"
 row and the manual-entry page behind it -- is covered by `test_wifi_pages`
 in the headless UI suite below.
+
+## YouTube Music, against pages the device really received
+
+`make -C sonix-player/tests ytmusic` links the real `ytmusic.c` against a fake
+HTTP layer, so the resolver runs end to end on any host, and replays whole
+responses the device received (`tests/fixtures/`): a search page, the charts,
+the Explore page and the signed-out liked-songs page.
+
+It pins what the resolver does with them: the reply is chosen by mime and
+bitrate (m4a/AAC only, never a webm, never anything over the cap); the
+phone-app player's refusal does not end the search, while a reply that is
+playable is used as it stands -- that is the standalone path, and the fixture is
+the reply the device's own request shape really got; and each fixture parses
+into the rows the page showed
+once the faults it guarded against were fixed -- twenty songs from a search
+page, the charts, three *named* Explore carousels (a heading that failed to read
+drew three rows all labelled Explore), the artwork URL of every card, and the
+library page answering that the imported session is what Favourites is missing.
+
+It also pins where the bytes are fetched from, because a relay's answer is not
+always fetchable: an audio address on the relay's own base is used as it stands,
+an address on somebody else's machine -- what a public Piped or Invidious
+instance answers with, bound to that machine and too long for the player's URL
+buffer -- is replaced with the relay's `/audio/<video-id>`, and a relay with no
+such endpoint answers `ytmusic_relay_not_serving` instead of the old
+"could not reach the stream".
+
+Instances are pinned the same way. A pinned Invidious host's formats reply
+(`/api/v1/videos/{id}`) is turned into that host's own
+`/latest_version?id=...&itag=140&local=true` -- the endpoint that fetches the
+audio and passes it on, which is the only instance shape that works from a
+different machine; a Piped host is used only when its answer already points at
+itself; and one that merely names a `googlevideo` address is passed over rather
+than handed to the downloader. The settings list is checked too: the default,
+the device on its own, the relay only once one is configured, and the built-in
+instances, so the page offers something on a player that was never set up.
+
+The order is pinned as well, because the order is what fixes a 403: an instance
+is asked before the device in "auto", and the device's own playable reply is
+still used when no instance can answer. And the downloader walks the same list --
+the first instance refusing its bytes is passed over, the second one's file is
+written and holds every byte it sent. That reply comes back in 1000-byte pieces
+while 4095 were asked for, which is the proxy behaviour that once ended a track
+after a minute: a short reply is not an ending, and neither is a `206` that carries
+nothing -- that is the instance's upstream pausing, and the download asks again
+from the byte it reached. The file is finished on a `416`, or after six empty
+replies in a row, and is then checked against the `clen` the instance named. The
+row's sleeve is fetched too and written beside the audio as `<id>.jpg`, so the
+check covers the artwork the player looks for.
+
+Playback starts before the download ends, and that is pinned as well: with the
+same 1000-byte pieces, `ytmusic_stream_for_playback` calls its `ready` callback
+once, at 3000 of the 4095 bytes, with the file still announced to `growfile` --
+so the page may hand it to the player -- and by the time the call returns the
+file is whole and no longer growing. That is what lets a song begin in seconds
+instead of after the whole transfer, and the callback firing on a *partial*
+file is the part that cannot be assumed. The fixture body starts with an `ftyp`
+and a `moov` box for a reason: an M4A has no sample table until the index
+arrives, so the early start waits for it, and a body without one would prove the
+start happens but not that the decoder could open what it was handed.
+
+The cache directory is `/tmp/sonix-ytmusic` on the device. The suite points
+`SONIX_YTMUSIC_CACHE` at its own `.build/ytmusic-cache` first, because a Windows
+host can refuse every create under `\tmp` (the CRT answers EACCES, and an
+earlier version of these checks printed a skip line instead of running them).
+
+The InnerTube key is a build input, never a file in the repository, so the suite
+is built twice: `test_ytmusic` carries a dummy key (`test-key-not-a-credential`,
+another value the fake network never sees), and `test_ytmusic_keyless` is built
+with an empty one and checks the only thing that build can check -- that the
+first search returns `ytmusic_api_key_missing` instead of sending a request the
+endpoint can only refuse. Both are run by `make ytmusic`.
+
+The settings the page stores are pinned too: the quality pill picks itag 141
+(256 kbit/s AAC) when the instance offers it and 140 when the choice is
+*Standard*; the region pair is stored and read back as two letter codes, with a
+malformed pair refused; and the playback cache owns only its own `.m4a` files,
+which is what decides whether the now-playing and row menus offer *Download*.
+A song row is parsed for the album it names (`artist • album • duration`, one run
+per piece, with the artist itself sometimes several runs), because that is what
+names the folder a download lands in; and the downloader's progress reads back as
+finished and unknown-percent once the file is whole, so the page's loading card
+cannot stay up for a download that has ended.
+
+A browser's `cookies.txt` export is imported as well as a single `Cookie` line:
+the Netscape lines for `youtube.com` and `google.com` become the session header,
+another domain's line is left out, and the card copy is removed afterwards.
+
+## The YouTube Music relay
+
+`make -C sonix-player/tests relay` builds nothing: it runs
+`test_ytmusic_relay.py`, which drives the relay the player asks for when a track
+is played (`tools/ytmusic-relay.py`) with its network taken out. The yt-dlp call
+is a canned record, so the suite pins what the relay does with one: which streams
+it will offer (m4a/AAC only, best first, never anything carrying a video track),
+what URL it hands the player, and that the audio endpoint serves the upstream
+bytes with the upstream's own `Content-Length` -- which is what the player's
+download-complete check compares against.
+
+What it exists for is the URL it hands over. The relay used to pass on the
+googlevideo URL yt-dlp resolved, which the player then fetched from another
+address: Google answers that with 403, and the URL is longer than the player's
+own buffer. Both arrive at the device as "could not reach the stream". The
+relay now serves the audio from itself, and the suite checks that the reply names
+the relay -- the address the player already reached it on -- and stays short.
+
+The player's side of that contract is checked in the C suite above: it never
+fetches a media address the relay only pointed at, which is what made a public
+instance look like a broken stream. Neither the relay nor an instance is needed
+for playback any more -- both are fallbacks for when Google refuses the device's
+own player request.
 
 ## Real codec integration
 

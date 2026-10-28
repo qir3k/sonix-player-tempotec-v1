@@ -4,6 +4,11 @@
 #include "src/system/core/config.h"
 #include "src/system/core/json.h"
 #include "src/system/core/sha1.h"
+#include "src/system/decode/growfile.h"
+
+// Declared here because the tag writer near the top of the file also needs to
+// know where a file it is describing sits; defined beside the downloader.
+static const char *playback_cache_dir(void);
 #include "src/system/net/http.h"
 #include "src/system/streaming/streamkeys.h"
 
@@ -39,18 +44,29 @@
 // urn:ietf:...:device_code grant issues a token the music endpoints refuse.
 #define YTMUSIC_OAUTH_DEVICE_GRANT "http://oauth.net/grant_type/device/1.0"
 
-// The web client's public InnerTube key. It is not an account credential: it
-// is the key music.youtube.com hands every visitor, and every open-source
-// YouTube Music client carries it. It is used directly rather than scraped
-// from the page, because the page now answers a client whose User-Agent it
-// does not recognise -- and this player is not a browser -- with a "your
-// browser is deprecated" stub that contains no key at all. That stub is what
-// ytmusic_context_unreadable was.
+// The web client's InnerTube key, supplied by the build.
 //
+// It is not an account credential and not a secret of anybody's: it is the key
+// the music.youtube.com page hands every visitor, and it is used directly
+// rather than scraped from the page because that page answers a client whose
+// User-Agent it does not recognise -- and this player is not a browser -- with
+// a "your browser is deprecated" stub that contains no key at all. That stub is
+// what ytmusic_context_unreadable was.
+//
+// It is still not committed: it belongs to Google rather than to this
+// repository, secret scanners flag the AIza... form wherever it appears (GitHub
+// did, on the commit that first carried it), and a key baked into a public
+// image is one Google can rotate out from under every build of it. So the
+// value arrives from the build -- `make YTMUSIC_API_KEY=...`, the environment,
+// or a .ytmusic-key file the Makefile reads -- and a build that was given none
+// says so at the first request rather than sending one that cannot work.
+#ifndef YTMUSIC_API_KEY
+#define YTMUSIC_API_KEY ""
+#endif
+
 // The client version is the page's build stamp, in the same "1.YYYYMMDD.01.00"
 // form the public clients use, derived from today's date so it never goes
 // stale in a shipped image.
-#define YTMUSIC_API_KEY "***REMOVED***"
 #define YTMUSIC_CLIENT_VERSION_FALLBACK "1.20250101.01.00"
 
 static pthread_mutex_t session_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -216,6 +232,56 @@ bool ytmusic_set_session_cookie(const char *cookie, char *error, size_t error_si
 	return true;
 }
 
+// The card file may be a whole browser export -- a Netscape cookies.txt of a
+// few thousand bytes -- while the Cookie header built from it is only the
+// YouTube and Google lines, which is why the file has its own, larger limit.
+#define YTMUSIC_SESSION_FILE_MAX (64 * 1024)
+
+// A browser's "export cookies" writes a Netscape file -- one tab-separated
+// line per cookie -- and that is what people put on the card, because it is the
+// only thing their browser will hand them. Reading only a single bare Cookie
+// header meant the usual export was refused as "invalid", which looked exactly
+// like a session Google had rejected. Both shapes are read now: a Netscape file
+// is turned into a Cookie header here, and anything else is taken as one.
+static bool cookies_from_netscape(const char *file, char *out, size_t size) {
+	size_t used = 0;
+	out[0] = '\0';
+	char line[1024];
+	const char *p = file;
+	while (*p) {
+		size_t n = 0;
+		while (p[n] && p[n] != '\n' && n + 1 < sizeof(line)) n++;
+		memcpy(line, p, n);
+		line[n] = '\0';
+		// Whatever is left of an over-long line is dropped rather than split:
+		// half a cookie value is a wrong cookie, not a shorter one.
+		while (p[n] && p[n] != '\n') n++;
+		p += n;
+		if (*p == '\n') p++;
+		char *cr = strchr(line, '\r');
+		if (cr) *cr = '\0';
+		if (line[0] == '#' || line[0] == '\0') continue;
+		// domain, flag, path, secure, expiry, name, value
+		char *field[7];
+		int count = 0;
+		char *at = line;
+		while (count < 7) {
+			field[count++] = at;
+			char *tab = strchr(at, '\t');
+			if (!tab) break;
+			*tab = '\0';
+			at = tab + 1;
+		}
+		if (count < 7) continue;
+		if (!strstr(field[0], "youtube.com") && !strstr(field[0], "google.com")) continue;
+		if (!field[5][0]) continue;
+		int wrote = snprintf(out + used, size - used, "%s%s=%s", used ? "; " : "", field[5], field[6]);
+		if (wrote <= 0 || (size_t)wrote >= size - used) return false;
+		used += (size_t)wrote;
+	}
+	return used > 0;
+}
+
 bool ytmusic_import_session_file(const char *card_root, char *error, size_t error_size) {
 	if (error && error_size) error[0] = '\0';
 	if (!card_root || !card_root[0] || strnlen(card_root, 512) >= 512) {
@@ -229,7 +295,7 @@ bool ytmusic_import_session_file(const char *card_root, char *error, size_t erro
 		return false;
 	}
 	struct stat st;
-	if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size >= YTMUSIC_COOKIE_MAX) {
+	if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > YTMUSIC_SESSION_FILE_MAX) {
 		set_error(error, error_size, "ytmusic_session_file_invalid");
 		return false;
 	}
@@ -238,28 +304,41 @@ bool ytmusic_import_session_file(const char *card_root, char *error, size_t erro
 		set_error(error, error_size, "ytmusic_session_file_unreadable");
 		return false;
 	}
-	char *cookie = calloc(YTMUSIC_COOKIE_MAX, 1);
-	if (!cookie) {
+	char *file = calloc(YTMUSIC_SESSION_FILE_MAX + 1, 1);
+	if (!file) {
 		fclose(f);
 		set_error(error, error_size, "ytmusic_out_of_memory");
 		return false;
 	}
-	bool read_ok = fgets(cookie, YTMUSIC_COOKIE_MAX, f) != NULL;
-	int extra = fgetc(f); // reject a second line or truncated input
+	size_t got = fread(file, 1, YTMUSIC_SESSION_FILE_MAX, f);
+	file[got] = '\0';
 	fclose(f);
-	char *line_end = strpbrk(cookie, "\r\n");
-	if (line_end) *line_end = '\0';
-	char *value = strncmp(cookie, "cookie=", 7) == 0 ? cookie + 7 : cookie;
-	// Accept the exact value emitted by browser cookie exporters as well as a
-	// bare Cookie header value. Keeping the field name would otherwise result
-	// in an invalid nested `Cookie: Cookie: ...` request after import/reboot.
-	if (strncasecmp(value, "Cookie:", 7) == 0) {
-		value += 7;
-		while (*value == ' ' || *value == '\t') value++;
+	bool ok = false;
+	if (got > 0 && strchr(file, '\t') &&
+		(strstr(file, "youtube.com") || strstr(file, "google.com"))) {
+		char *header = calloc(YTMUSIC_COOKIE_MAX, 1);
+		if (header) {
+			if (cookies_from_netscape(file, header, YTMUSIC_COOKIE_MAX)) {
+				ok = ytmusic_set_session_cookie(header, error, error_size);
+			}
+			memset(header, 0, YTMUSIC_COOKIE_MAX);
+			free(header);
+		}
+	} else {
+		char *line_end = strpbrk(file, "\r\n");
+		if (line_end) *line_end = '\0';
+		char *value = strncmp(file, "cookie=", 7) == 0 ? file + 7 : file;
+		// Accept the exact value emitted by browser cookie exporters as well as a
+		// bare Cookie header value. Keeping the field name would otherwise result
+		// in an invalid nested `Cookie: Cookie: ...` request after import/reboot.
+		if (strncasecmp(value, "Cookie:", 7) == 0) {
+			value += 7;
+			while (*value == ' ' || *value == '\t') value++;
+		}
+		ok = got > 0 && ytmusic_set_session_cookie(value, error, error_size);
 	}
-	bool ok = read_ok && extra == EOF && ytmusic_set_session_cookie(value, error, error_size);
-	memset(cookie, 0, YTMUSIC_COOKIE_MAX);
-	free(cookie);
+	memset(file, 0, YTMUSIC_SESSION_FILE_MAX);
+	free(file);
 	if (!ok) {
 		if (!error || !error_size || !error[0]) set_error(error, error_size, "ytmusic_session_file_invalid");
 		return false;
@@ -447,6 +526,21 @@ ytmusic_login_state_t ytmusic_login_device_poll(ytmusic_device_login_t *login,
 // Fixed at the first request and never refetched: neither changes while the
 // player runs, and the version is today's date at boot.
 static bool ensure_context(char *error, size_t error_size) {
+	// A build with no key can make no InnerTube request at all: the endpoint
+	// answers a request without one with the same stub an unknown User-Agent
+	// gets, which used to be reported as "no rows" and left the page looking
+	// empty. Say which piece is missing, once, and name it.
+	if (!YTMUSIC_API_KEY[0]) {
+		static bool told;
+		if (!told) {
+			told = true;
+			fprintf(stderr, "ytmusic: this build carries no InnerTube key; rebuild with "
+							"YTMUSIC_API_KEY set (see YOUTUBE_MUSIC_SETUP.md)\n");
+		}
+		set_error(error, error_size, "ytmusic_api_key_missing");
+		return false;
+	}
+
 	pthread_mutex_lock(&api_lock);
 	if (api_key[0] && client_version[0]) {
 		pthread_mutex_unlock(&api_lock);
@@ -541,6 +635,16 @@ static bool refresh_access_token(char *error, size_t error_size) {
 		return false;
 	}
 	return true;
+}
+
+// True when the account is the imported browser session, which is the only
+// credential the music endpoints accept for the library pages.
+static bool session_cookie_attached(void) {
+	char cookie[YTMUSIC_COOKIE_MAX];
+	ytmusic_session_cookie(cookie, sizeof(cookie));
+	bool has = cookie[0] != '\0';
+	memset(cookie, 0, sizeof(cookie));
+	return has;
 }
 
 // True when the player holds something it can send as an account: the
@@ -866,20 +970,120 @@ static bool youtubei_post(const char *endpoint, const char *body, bool login_req
 #define YTMUSIC_ANDROID_VERSION "20.10.38"
 #define YTMUSIC_ANDROID_SDK 30
 
+// ---------------------------------------------------------------------------
+// the market the catalogue answers in
+// ---------------------------------------------------------------------------
+
+// Two letters, or the fallback. Google takes these as ISO codes and answers a
+// malformed one with a page for somewhere else, so nothing but letters is let
+// through.
+static void two_letters(const char *in, const char *fallback, bool upper, char out[3]) {
+	char a = in && in[0] ? in[0] : fallback[0];
+	char b = in && in[0] && in[1] ? in[1] : fallback[1];
+	if (!isalpha((unsigned char)a) || !isalpha((unsigned char)b)) {
+		a = fallback[0];
+		b = fallback[1];
+	}
+	out[0] = upper ? (char)toupper((unsigned char)a) : (char)tolower((unsigned char)a);
+	out[1] = upper ? (char)toupper((unsigned char)b) : (char)tolower((unsigned char)b);
+	out[2] = '\0';
+}
+
+// YouTube Music chooses what to recommend -- Explore, Top songs, the charts --
+// from `gl`, the country's store, and `hl`, the language its labels come back
+// in. They are independent on purpose: Polish charts with English row names is
+// a real setup, and it is what somebody who lives in Poland and reads English
+// wants. Both are set on the settings page and both are only ever two letters.
+static void catalogue_bounds(char *gl, size_t gl_size, char *hl, size_t hl_size) {
+	char market[3], language[3];
+	two_letters(config_get("ytmusic", "region", ""), "US", true, market);
+	two_letters(config_get("ytmusic", "language", ""), "en", false, language);
+	snprintf(gl, gl_size, "%s", market);
+	snprintf(hl, hl_size, "%s", language);
+}
+
+// Whether the best format offered is wanted, or the safe one. 140 is the
+// 128 kbit/s AAC every instance carries; 141 is the same codec at 256, which
+// sounds markedly better on anything but earbuds and costs twice the bytes over
+// a public instance. High is the default and Standard is the way back when a
+// download over a busy instance is too slow to start.
+static bool high_quality_wanted(void) {
+	const char *choice = config_get("ytmusic", "quality", "high");
+	return !choice || strcmp(choice, "standard") != 0;
+}
+
+bool ytmusic_quality_high(void) { return high_quality_wanted(); }
+
+void ytmusic_quality_set(bool high) {
+	config_set("ytmusic", "quality", high ? "high" : "standard");
+	config_save();
+}
+
+// The pairs the region row offers. The labels are tags, translated where the
+// row is drawn: a country name is the one string a language file is for.
+// "Worldwide" is the US store, which is what a request with no preference gets
+// and what most of the catalogue is indexed against.
+static const struct {
+	const char *region;
+	const char *language;
+	const char *label;
+} REGIONS[] = {
+	{"US", "en", "ytmusic_region_worldwide"},
+	{"PL", "en", "ytmusic_region_poland_english"},
+	{"PL", "pl", "ytmusic_region_poland"},
+	{"CZ", "cs", "ytmusic_region_czechia"},
+	{"DE", "de", "ytmusic_region_germany"},
+	{"GB", "en", "ytmusic_region_uk"},
+};
+
+int ytmusic_regions(ytmusic_region_t *out, int limit) {
+	if (!out || limit <= 0) return 0;
+	int count = 0;
+	for (size_t i = 0; i < sizeof(REGIONS) / sizeof(REGIONS[0]) && count < limit; i++) {
+		snprintf(out[count].region, sizeof(out[count].region), "%s", REGIONS[i].region);
+		snprintf(out[count].language, sizeof(out[count].language), "%s", REGIONS[i].language);
+		snprintf(out[count].label, sizeof(out[count].label), "%s", REGIONS[i].label);
+		count++;
+	}
+	return count;
+}
+
+void ytmusic_region_active(char *region, size_t region_size, char *language, size_t language_size) {
+	char market[3], lang[3];
+	two_letters(config_get("ytmusic", "region", ""), "US", true, market);
+	two_letters(config_get("ytmusic", "language", ""), "en", false, lang);
+	if (region && region_size) snprintf(region, region_size, "%s", market);
+	if (language && language_size) snprintf(language, language_size, "%s", lang);
+}
+
+bool ytmusic_region_select(const char *region, const char *language) {
+	if (!region || !language) return false;
+	if (!isalpha((unsigned char)region[0]) || !isalpha((unsigned char)region[1]) || region[2]) return false;
+	if (!isalpha((unsigned char)language[0]) || !isalpha((unsigned char)language[1]) || language[2]) return false;
+	char market[3], lang[3];
+	two_letters(region, "US", true, market);
+	two_letters(language, "en", false, lang);
+	config_set("ytmusic", "region", market);
+	config_set("ytmusic", "language", lang);
+	config_save();
+	return true;
+}
+
 static bool android_player(const char *video_id, char **response, char *error, size_t error_size) {
 	if (!ensure_context(error, error_size)) return false;
 	char key[sizeof(api_key)];
 	pthread_mutex_lock(&api_lock);
 	snprintf(key, sizeof(key), "%s", api_key);
 	pthread_mutex_unlock(&api_lock);
-	char url[512], body[1024];
+	char url[512], body[1024], gl[3], hl[3];
+	catalogue_bounds(gl, sizeof(gl), hl, sizeof(hl));
 	snprintf(url, sizeof(url), "https://www.youtube.com/youtubei/v1/player?key=%s&prettyPrint=false", key);
 	snprintf(body, sizeof(body),
 		"{\"context\":{\"client\":{\"clientName\":\"ANDROID\",\"clientVersion\":\"%s\","
 		"\"androidSdkVersion\":%d,\"osName\":\"Android\",\"osVersion\":\"11\","
-		"\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"%s\","
+		"\"hl\":\"%s\",\"gl\":\"%s\"}},\"videoId\":\"%s\","
 		"\"contentCheckOk\":true,\"racyCheckOk\":true}",
-		YTMUSIC_ANDROID_VERSION, YTMUSIC_ANDROID_SDK, video_id);
+		YTMUSIC_ANDROID_VERSION, YTMUSIC_ANDROID_SDK, hl, gl, video_id);
 	const char *headers = "Content-Type: application/json\r\nOrigin: https://www.youtube.com\r\nReferer: https://www.youtube.com/\r\n"
 						  "X-YouTube-Client-Name: 3\r\nX-YouTube-Client-Version: " YTMUSIC_ANDROID_VERSION "\r\n";
 	http_req_t req = {.method = "POST", .extra_headers = headers, .body = body,
@@ -924,34 +1128,299 @@ static bool android_player(const char *video_id, char **response, char *error, s
 // WebM YouTube wraps Opus in, and the video streams are never fetched at all.
 #define YTMUSIC_RELAY_MAX_KBPS 320
 
-static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
-							int *duration, char *title, size_t title_size,
-							char *artist, size_t artist_size, char *error, size_t error_size) {
+// A relay that resolves with yt-dlp has to run it before it can answer, and a
+// cold run fetches the player script and solves a signature first: fifteen
+// seconds is enough for a request to Google and not for that. The relay calls
+// get their own, longer one; everything else keeps the short one.
+#define YTMUSIC_RELAY_TIMEOUT 60
+
+// The relay's own address, without the trailing slashes the setting may carry.
+// False when nothing usable is configured -- no setting, or not an address.
+static bool relay_base_address(char *out, size_t size) {
 	const char *configured = config_get("ytmusic", "relay_base", "");
 	if (!configured[0]) {
-		set_error(error, error_size, "ytmusic_relay_needed");
 		return false;
 	}
-	char base[256];
-	snprintf(base, sizeof(base), "%s", configured);
-	size_t base_len = strlen(base);
-	while (base_len > 0 && base[base_len - 1] == '/') base[--base_len] = '\0';
+	snprintf(out, size, "%s", configured);
+	size_t len = strlen(out);
+	while (len > 0 && out[len - 1] == '/') out[--len] = '\0';
 	// http:// is accepted as well as https://: a relay is often a machine on
-	// the same LAN, where there is no certificate to serve. The stream URLs it
-	// hands out are its own affair, and Google's are https regardless.
-	if (!base_len || (strncmp(base, "https://", 8) != 0 && strncmp(base, "http://", 7) != 0)) {
-		set_error(error, error_size, "ytmusic_relay_needed");
+	// the same LAN, where there is no certificate to serve.
+	if (!len || (strncmp(out, "https://", 8) != 0 && strncmp(out, "http://", 7) != 0)) {
+		out[0] = '\0';
+		return false;
+	}
+	return true;
+}
+
+// Where the player fetches a track's bytes from.
+//
+// A relay answers with a media URL, and the ones a Piped or Invidious instance
+// answers with point at Google's own servers. Those cannot be fetched from here
+// at all: the address is bound to the machine that resolved it -- the same
+// request from a different client on a different address is answered 403 -- and
+// it is several thousand characters long, past this player's URL buffer, so
+// what would be requested is a truncated address that is refused without saying
+// why. That is what "could not reach the stream" used to mean, and it left no
+// trace anywhere.
+//
+// So the bytes are always fetched from the relay itself: from the URL it
+// answered with when that URL is its own address, and from /audio/<video-id>
+// -- the endpoint tools/ytmusic-relay.py serves -- when it is somebody else's.
+// A relay that does neither is reported as such instead of having its address
+// quietly fetched and refused.
+//
+// `itag` is the format the reply was read for, carried into the proxied address
+// so the relay serves that one rather than choosing again -- the choice of
+// m4a/AAC under the bitrate cap is this end's, and it should stay that way.
+//
+// `proxied` (optional) says the second path was taken: the one that needs the
+// relay to serve the bytes itself.
+bool ytmusic_relay_stream_url(const char *base, const char *video_id, long itag, const char *reported,
+							  char *out, size_t out_size, bool *proxied) {
+	if (proxied) {
+		*proxied = false;
+	}
+	if (!base || !base[0] || !video_id || strlen(video_id) != 11 || !out || out_size == 0) {
+		return false;
+	}
+	size_t base_len = strlen(base);
+	if (reported && reported[0] && strncmp(reported, base, base_len) == 0 &&
+		(reported[base_len] == '\0' || reported[base_len] == '/' || reported[base_len] == '?')) {
+		snprintf(out, out_size, "%s", reported);
+		return true;
+	}
+	int built = itag > 0 ? snprintf(out, out_size, "%s/audio/%.11s?f=%ld", base, video_id, itag)
+						 : snprintf(out, out_size, "%s/audio/%.11s", base, video_id);
+	if (built < 0 || built >= (int)out_size) {
+		out[0] = '\0';
+		return false;
+	}
+	if (proxied) {
+		*proxied = true;
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Instances
+// ---------------------------------------------------------------------------
+//
+// A Piped or Invidious instance resolves a track on a machine that can do the
+// attestation this device cannot. What it hands back decides whether that is
+// any use here:
+//
+//   * Piped answers /streams/{id} with audioStreams whose URLs point at
+//     Google's own hosts. Those are bound to the address that resolved them,
+//     so fetching one from here is refused; a Piped instance only helps when
+//     it fronts the bytes itself, and then its URL already points at it.
+//   * Invidious answers /api/v1/videos/{id}, and has /latest_version?id=...
+//     &itag=...&local=true for the bytes: the instance fetches the audio and
+//     passes it on, which is the one shape that works from another machine.
+//     That is what is asked for once the formats reply names an itag.
+//
+// Public instances come and go, and the survivors are counted in single
+// digits: when this list was last measured against a real track, one public
+// host answered /api/v1/videos and then served actual audio bytes through
+// /latest_version?local=true, while every Piped host on the published list
+// answered 502, 403 or nothing at all. So the list starts with the host that
+// was measured, and the settings page can pin another (a self-hosted instance
+// is the version of this that keeps working).
+static const char *const builtin_instances[] = {
+	"https://yt.chocolatemoo53.com",
+	"https://inv.nadeko.net",
+	"https://invidious.nerdvpn.de",
+	"https://invidious.tiekoetter.com",
+	// Piped hosts answer this player's API shape when they are up; every one
+	// named on the official list was down when the hosts above were measured,
+	// so they sit after the hosts that were not.
+	"https://pipedapi.kavin.rocks",
+	"https://pipedapi.adminforge.de",
+};
+
+// One instance request, not a page: the ones that are down fail on the
+// connection, and the ones that answer do it quickly. Waiting the relay's
+// minute on each would turn a failed track into a two-minute stall.
+#define YTMUSIC_INSTANCE_TIMEOUT 12
+// How many of the built-in hosts are tried before the player gives up: they
+// are guesses, and a play attempt should not wait on six of them.
+#define YTMUSIC_INSTANCE_TRIES 4
+// Room for the [ytmusic] instances line, which lists hosts by hand.
+#define YTMUSIC_INSTANCE_LIST_MAX 512
+
+// A base address as the player needs it: scheme kept, trailing slashes gone.
+// False when it is not an http(s) address at all, which is what a bare host
+// name typed into the settings is.
+static bool normalise_instance(const char *in, char *out, size_t size) {
+	if (!in || !out || size < 16) return false;
+	while (*in == ' ' || *in == '\t') in++;
+	if (!in[0]) return false;
+	// A bare host is what people type -- "invidious.example" -- and https is
+	// what every instance serves, so it is filled in rather than refused.
+	bool scheme = strncmp(in, "https://", 8) == 0 || strncmp(in, "http://", 7) == 0;
+	int n = scheme ? snprintf(out, size, "%s", in) : snprintf(out, size, "https://%s", in);
+	if (n <= 0 || (size_t)n >= size) {
+		out[0] = '\0';
+		return false;
+	}
+	size_t len = strlen(out);
+	while (len > 8 && out[len - 1] == '/') out[--len] = '\0';
+	// A host name is all that may follow the scheme: no path, no space.
+	const char *host = out + (strncmp(out, "https://", 8) == 0 ? 8 : 7);
+	return host[0] != '\0' && strpbrk(host, " \t/?#") == NULL;
+}
+
+// The instance a choice pins, or empty for the three built-in answers.
+static bool pinned_instance(char *out, size_t size) {
+	const char *active = config_get("ytmusic", "source", "auto");
+	if (!active[0] || strcmp(active, "auto") == 0 || strcmp(active, "direct") == 0 ||
+		strcmp(active, "relay") == 0) {
+		return false;
+	}
+	return normalise_instance(active, out, size);
+}
+
+static bool instance_add(char out[][YTMUSIC_SOURCE_MAX], int *count, int limit, const char *base) {
+	char normalised[YTMUSIC_SOURCE_MAX];
+	if (*count >= limit || !normalise_instance(base, normalised, sizeof(normalised))) return false;
+	for (int i = 0; i < *count; i++) {
+		if (strcmp(out[i], normalised) == 0) return false;
+	}
+	snprintf(out[(*count)++], YTMUSIC_SOURCE_MAX, "%s", normalised);
+	return true;
+}
+
+int ytmusic_instance_bases(char out[][YTMUSIC_SOURCE_MAX], int limit) {
+	int count = 0;
+	char pinned[YTMUSIC_SOURCE_MAX];
+	if (pinned_instance(pinned, sizeof(pinned))) instance_add(out, &count, limit, pinned);
+	// [ytmusic] instances is a comma or space separated list, and replaces the
+	// built-in hosts rather than adding to them: someone who has a working
+	// instance does not want six dead ones tried before it.
+	const char *configured = config_get("ytmusic", "instances", "");
+	if (configured[0]) {
+		char list[YTMUSIC_INSTANCE_LIST_MAX];
+		snprintf(list, sizeof(list), "%s", configured);
+		for (char *token = strtok(list, " ,;\t\r\n"); token; token = strtok(NULL, " ,;\t\r\n")) {
+			instance_add(out, &count, limit, token);
+		}
+		return count;
+	}
+	for (size_t i = 0; i < sizeof(builtin_instances) / sizeof(builtin_instances[0]); i++) {
+		instance_add(out, &count, limit, builtin_instances[i]);
+	}
+	return count;
+}
+
+// The stored choice, "auto" when nothing was ever chosen.
+static const char *source_value(void) {
+	const char *active = config_get("ytmusic", "source", "auto");
+	return active[0] ? active : "auto";
+}
+
+int ytmusic_sources(ytmusic_source_t *out, int limit) {
+	if (!out || limit <= 0) return 0;
+	int count = 0;
+	static const struct {
+		const char *value;
+		const char *label;
+	} built_in[] = {
+		{"auto", "ytmusic_source_auto"},
+		{"direct", "ytmusic_source_direct"},
+		{"relay", "ytmusic_source_relay"},
+	};
+	for (size_t i = 0; i < sizeof(built_in) / sizeof(built_in[0]) && count < limit; i++) {
+		// The relay is only a choice once there is one configured: a row that
+		// cannot play anything is worse than no row.
+		if (strcmp(built_in[i].value, "relay") == 0) {
+			char base[256];
+			bool pinned = strcmp(source_value(), "relay") == 0;
+			if (!relay_base_address(base, sizeof(base)) && !pinned) continue;
+			snprintf(out[count].value, YTMUSIC_SOURCE_MAX, "%s", built_in[i].value);
+			snprintf(out[count].label, YTMUSIC_SOURCE_MAX, "%s", built_in[i].label);
+			count++;
+			continue;
+		}
+		snprintf(out[count].value, YTMUSIC_SOURCE_MAX, "%s", built_in[i].value);
+		snprintf(out[count].label, YTMUSIC_SOURCE_MAX, "%s", built_in[i].label);
+		count++;
+	}
+	char bases[YTMUSIC_SOURCES_MAX][YTMUSIC_SOURCE_MAX];
+	int instances = ytmusic_instance_bases(bases, YTMUSIC_SOURCES_MAX);
+	for (int i = 0; i < instances && count < limit; i++) {
+		const char *host = strstr(bases[i], "://");
+		snprintf(out[count].value, YTMUSIC_SOURCE_MAX, "%.*s", YTMUSIC_SOURCE_MAX - 1, bases[i]);
+		snprintf(out[count].label, YTMUSIC_SOURCE_MAX, "%.*s", YTMUSIC_SOURCE_MAX - 1,
+				 host ? host + 3 : bases[i]);
+		count++;
+	}
+	return count;
+}
+
+void ytmusic_source_active(char *out, size_t size) {
+	if (!out || !size) return;
+	snprintf(out, size, "%s", source_value());
+}
+
+bool ytmusic_source_select(const char *value) {
+	if (!value || !value[0]) return false;
+	char chosen[YTMUSIC_SOURCE_MAX];
+	if (strcmp(value, "auto") == 0 || strcmp(value, "direct") == 0 || strcmp(value, "relay") == 0) {
+		snprintf(chosen, sizeof(chosen), "%s", value);
+	} else if (!normalise_instance(value, chosen, sizeof(chosen))) {
+		snprintf(chosen, sizeof(chosen), "%s", value);
+		return false;
+	}
+	config_set("ytmusic", "source", chosen);
+	// The choice is in force either way; a settings file that cannot be
+	// written only means it will not survive a reboot, which is not a reason
+	// to refuse it now.
+	if (!config_save()) {
+		fprintf(stderr, "ytmusic: the source could not be saved, kept for this session\n");
+	}
+	return true;
+}
+
+static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
+							int *duration, char *title, size_t title_size,
+							char *artist, size_t artist_size, bool *proxied,
+							char *error, size_t error_size) {
+	if (proxied) *proxied = false;
+	char base[256];
+	if (!relay_base_address(base, sizeof(base))) {
+		// No relay is not a missing setup step any more: the device plays a
+		// track by itself, and an instance is the other way in. What is left
+		// to say is that every one of them refused.
+		set_error(error, error_size, "ytmusic_no_source");
 		return false;
 	}
 
 	char endpoint[320];
 	snprintf(endpoint, sizeof(endpoint), "%s/streams/%.11s", base, video_id);
 	char *body = NULL;
+	int relay_status = 0;
 	pthread_mutex_lock(&request_lock);
-	bool got = http_get(endpoint, &body, NULL, YTMUSIC_RESPONSE_LIMIT, YTMUSIC_TIMEOUT);
+	// The body of a refusal is kept: it is where the relay says why, and that
+	// belongs in the log rather than in the guess of "no reply".
+	bool got = http_get_ex(endpoint, NULL, true, &body, NULL, YTMUSIC_RESPONSE_LIMIT,
+						   YTMUSIC_RELAY_TIMEOUT, &relay_status);
 	pthread_mutex_unlock(&request_lock);
 	if (!got) {
+		fprintf(stderr, "ytmusic: relay did not answer at %.64s (%s)\n", endpoint,
+				http_last_error() ? http_last_error() : "no reason given");
 		set_error(error, error_size, "ytmusic_relay_unreachable");
+		return false;
+	}
+	if (relay_status >= 400) {
+		// A relay that does not know /streams/{id} is not the kind of relay
+		// this player can use, whatever else it answers: Invidious serves its
+		// own API shape, not this one. Its reply says which it is, in the log.
+		fprintf(stderr, "ytmusic: relay answered %d for %.11s: %.160s\n", relay_status, video_id,
+				body ? body : "");
+		free(body);
+		set_error(error, error_size,
+				  relay_status == 404 || relay_status == 405 ? "ytmusic_relay_not_serving"
+															 : "ytmusic_relay_unreadable");
 		return false;
 	}
 
@@ -976,6 +1445,22 @@ static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
 			}
 		}
 		if (best >= 0 && json_obj_str(&doc, best, "url", url, url_size) && url[0]) {
+			// The address the relay answered with is only worth fetching when it
+			// is the relay's own; see ytmusic_relay_stream_url(). This is the
+			// one place that rewrite belongs: an address the device resolved
+			// itself, through a signed-in session, is fetchable as it stands
+			// and is left alone.
+			char chosen[YTMUSIC_URL_MAX];
+			bool through_relay = false;
+			long itag = json_obj_long(&doc, best, "itag", 0);
+			if (ytmusic_relay_stream_url(base, video_id, itag, url, chosen, sizeof(chosen),
+										&through_relay) &&
+				through_relay) {
+				snprintf(url, url_size, "%s", chosen);
+				printf("ytmusic: %.11s: the relay's own address is elsewhere, so its /audio endpoint is used\n",
+					   video_id);
+			}
+			if (proxied) *proxied = through_relay;
 			ok = true;
 			if (duration) *duration = (int)json_obj_long(&doc, root, "duration", 0);
 			if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
@@ -991,6 +1476,145 @@ static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
 	if (ok) {
 		printf("ytmusic: relay served an audio stream for %.11s\n", video_id);
 	}
+	return ok;
+}
+
+// One instance, asked for the formats of a track and turned into an address
+// this player can fetch. Two API shapes are tried, because a Piped host and an
+// Invidious host answer different ones and either kind can be pinned:
+//
+//   Piped     /streams/{id}                 audioStreams[].url
+//   Invidious /api/v1/videos/{id}           adaptiveFormats[].itag
+//
+// The second only turns into bytes through /latest_version?local=true, which
+// is why the itag is what is carried out of that reply rather than its URL.
+static bool instance_audio_url(const char *base, const char *video_id, char *url, size_t url_size,
+							   int *duration, char *title, size_t title_size,
+							   char *artist, size_t artist_size, bool *proxied,
+							   uint64_t *expected_bytes, char *error, size_t error_size) {
+	if (proxied) *proxied = false;
+	if (expected_bytes) *expected_bytes = 0;
+	if (!base || !base[0] || !video_id || strlen(video_id) != 11) return false;
+	size_t base_len = strlen(base);
+	char endpoint[YTMUSIC_SOURCE_MAX + 160], *body = NULL;
+	int status = 0;
+	// Whether the host answered at all, which decides which failure to name:
+	// "no playable audio" is only true of a host that replied.
+	bool answered = false;
+
+	// Piped first: it is the shape the relay already speaks, and the one a
+	// Piped instance answers without a query string of its own.
+	snprintf(endpoint, sizeof(endpoint), "%s/streams/%.11s", base, video_id);
+	pthread_mutex_lock(&request_lock);
+	bool got = http_get_ex(endpoint, NULL, true, &body, NULL, YTMUSIC_RESPONSE_LIMIT,
+						   YTMUSIC_INSTANCE_TIMEOUT, &status);
+	pthread_mutex_unlock(&request_lock);
+	if (got && body && status < 400) {
+		answered = true;
+		json_doc_t doc;
+		if (json_parse_limited(youtubei_json_start(body), &doc, 128 * 1024)) {
+			int root = json_root(&doc);
+			int streams = json_get(&doc, root, "audioStreams");
+			int best = -1;
+			long best_rate = -1;
+			for (int i = 0; i < json_len(&doc, streams); i++) {
+				int stream = json_at(&doc, streams, i);
+				char mime[96] = "", candidate[YTMUSIC_URL_MAX] = "";
+				json_obj_str(&doc, stream, "mimeType", mime, sizeof(mime));
+				if (strncasecmp(mime, "audio/mp4", 9) != 0) continue;
+				if (!json_obj_str(&doc, stream, "url", candidate, sizeof(candidate)) || !candidate[0]) continue;
+				long rate = json_obj_long(&doc, stream, "bitrate", 0);
+				if (rate <= 0 || rate > YTMUSIC_RELAY_MAX_KBPS * 1000L) continue;
+				if (rate > best_rate) {
+					best = stream;
+					best_rate = rate;
+				}
+			}
+			if (best >= 0) {
+				char candidate[YTMUSIC_URL_MAX] = "";
+				if (json_obj_str(&doc, best, "url", candidate, sizeof(candidate)) && candidate[0] &&
+					strncmp(candidate, base, base_len) == 0 &&
+					(candidate[base_len] == '/' || candidate[base_len] == '?' ||
+					 candidate[base_len] == '\0')) {
+					// The instance fronts the bytes itself, which is the only kind
+					// of address from somebody else this player can fetch.
+					snprintf(url, url_size, "%s", candidate);
+					if (duration) *duration = (int)json_obj_long(&doc, root, "duration", 0);
+					if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
+					if (artist && artist_size) json_obj_str(&doc, root, "uploader", artist, artist_size);
+					json_free(&doc);
+					free(body);
+					return true;
+				}
+			}
+			json_free(&doc);
+		}
+	}
+	free(body);
+	body = NULL;
+
+	// Invidious: the formats reply names the itag, and /latest_version with
+	// local=true is the endpoint that fetches and passes the audio on.
+	snprintf(endpoint, sizeof(endpoint), "%s/api/v1/videos/%.11s?fields=title,author,lengthSeconds,adaptiveFormats",
+			 base, video_id);
+	status = 0;
+	pthread_mutex_lock(&request_lock);
+	got = http_get_ex(endpoint, NULL, true, &body, NULL, YTMUSIC_RESPONSE_LIMIT, YTMUSIC_INSTANCE_TIMEOUT,
+					  &status);
+	pthread_mutex_unlock(&request_lock);
+	bool ok = false;
+	if (got && body && status < 400) {
+		answered = true;
+		json_doc_t doc;
+		if (json_parse_limited(youtubei_json_start(body), &doc, YTMUSIC_RESPONSE_LIMIT)) {
+			int root = json_root(&doc);
+			int formats = json_get(&doc, root, "adaptiveFormats");
+			int best = -1;
+			long best_rate = -1;
+			for (int i = 0; i < json_len(&doc, formats); i++) {
+				int format = json_at(&doc, formats, i);
+				char mime[96] = "";
+				json_obj_str(&doc, format, "type", mime, sizeof(mime));
+				if (strncasecmp(mime, "audio/mp4", 9) != 0) continue;
+				long itag = json_obj_long(&doc, format, "itag", 0);
+				if (itag <= 0) continue;
+				// Past the cap the device is decoding audio it cannot hear
+				// anyway. High takes the best the instance offers -- 141 is 256
+				// kbit/s AAC where it exists; Standard pins 140, the 128 kbit/s
+				// format every instance carries.
+				long rate = json_obj_long(&doc, format, "bitrate", 0);
+				if (rate <= 0 || rate > YTMUSIC_RELAY_MAX_KBPS * 1000L) continue;
+				long score = high_quality_wanted() ? rate : (itag == 140 ? (1L << 30) : rate);
+				if (score > best_rate) {
+					best = format;
+					best_rate = score;
+				}
+			}
+			if (best >= 0) {
+				long itag = json_obj_long(&doc, best, "itag", 0);
+				int built = snprintf(url, url_size, "%s/latest_version?id=%.11s&itag=%ld&local=true",
+									 base, video_id, itag);
+				if (built > 0 && (size_t)built < url_size) {
+					ok = true;
+					if (proxied) *proxied = true;
+					// What the whole stream is, from the instance's own reply: the
+					// downloader checks the file against it, so a transfer that
+					// stopped halfway cannot pass for a finished track.
+					if (expected_bytes) {
+						*expected_bytes = (uint64_t)json_obj_long(&doc, best, "clen", 0);
+					}
+					printf("ytmusic: %.11s: %.48s offers itag %ld at %ld kbps\n", video_id, base,
+						   itag, json_obj_long(&doc, best, "bitrate", 0) / 1000);
+					if (duration) *duration = (int)json_obj_long(&doc, root, "lengthSeconds", 0);
+					if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
+					if (artist && artist_size) json_obj_str(&doc, root, "author", artist, artist_size);
+				}
+			}
+		}
+		json_free(&doc);
+	}
+	free(body);
+	if (!ok && answered) set_error(error, error_size, "ytmusic_instance_no_stream");
 	return ok;
 }
 
@@ -1028,6 +1652,61 @@ static bool token_browse_id(const json_doc_t *doc, int renderer, char *out, size
 	return false;
 }
 
+// The artwork of one row: the largest size the page offers, which is the last
+// entry of the thumbnails array. A song carries it under "thumbnail" and a
+// playlist, album or show card under "thumbnailRenderer"; below that the two
+// shapes are the same. Empty when the row has no artwork, which is a row that
+// keeps its placeholder glyph.
+static bool read_thumbnail(const json_doc_t *doc, int renderer, char *out, size_t size) {
+	static const char *const paths[] = {
+		"thumbnail.musicThumbnailRenderer.thumbnail.thumbnails",
+		"thumbnailRenderer.musicThumbnailRenderer.thumbnail.thumbnails",
+	};
+	out[0] = '\0';
+	for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+		int list = json_path(doc, renderer, paths[i]);
+		for (int j = json_len(doc, list) - 1; j >= 0; j--) {
+			if (json_obj_str(doc, json_at(doc, list, j), "url", out, size) && out[0]) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+// The album of a song row.
+//
+// The second column is "artist <bullet> album <bullet> duration", one run per
+// piece, and the artist itself is several runs when a track lists more than one
+// (", " and " & " between the names). So the album is the group between the two
+// bullets -- unless that group is the length itself, which is the shape a
+// playlist or album track list has. Read from the runs rather than guessed from
+// the row's text, so an artist called "4:09" cannot be mistaken for one.
+static void read_album(const json_doc_t *doc, int renderer, ytmusic_item_t *item) {
+	int runs = json_path(doc, renderer, "flexColumns.1.musicResponsiveListItemFlexColumnRenderer.text.runs");
+	char album[YTMUSIC_TITLE_MAX] = "";
+	bool past_artist = false;
+	for (int i = 0; i < json_len(doc, runs); i++) {
+		char text[YTMUSIC_TITLE_MAX] = "";
+		if (!json_obj_str(doc, json_at(doc, runs, i), "text", text, sizeof(text)) || !text[0]) continue;
+		if (strstr(text, "\xE2\x80\xA2")) { // the bullet: " • "
+			if (past_artist) break;            // the album group has ended
+			past_artist = true;
+			continue;
+		}
+		if (!past_artist) continue; // the artist, and the "&" / "," between names
+		size_t used = strlen(album);
+		snprintf(album + used, sizeof(album) - used, "%s", text);
+	}
+	// A duration where the album should be: the page did not name one.
+	size_t len = strlen(album);
+	while (len > 0 && (album[len - 1] == ' ' || album[len - 1] == '\t')) album[--len] = '\0';
+	char *start = album;
+	while (*start == ' ' || *start == '\t') start++;
+	if (!start[0] || (isdigit((unsigned char)start[0]) && strchr(start, ':'))) return;
+	snprintf(item->album, sizeof(item->album), "%s", start);
+}
+
 // One row of any of the three shapes the store uses for a list entry: a song
 // row, a podcast episode (a multi-row item), or a card for a playlist, album or
 // show. A row with a video id plays; one that only names a page opens it.
@@ -1050,6 +1729,8 @@ static bool read_item(const json_doc_t *doc, int renderer, ytmusic_item_t *item)
 		json_str(doc, json_path(doc, renderer, "flexColumns.2.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), item->subtitle, sizeof(item->subtitle));
 	}
 	if (!item->subtitle[0]) json_str(doc, json_path(doc, renderer, "subtitle.runs.0.text"), item->subtitle, sizeof(item->subtitle));
+	if (item->kind == YTMUSIC_ITEM_TRACK) read_album(doc, renderer, item);
+	read_thumbnail(doc, renderer, item->thumbnail, sizeof(item->thumbnail));
 	char duration[32] = "";
 	json_str(doc, json_path(doc, renderer, "fixedColumns.0.musicResponsiveListItemFixedColumnRenderer.text.runs.0.text"), duration, sizeof(duration));
 	item->duration = parse_duration(duration);
@@ -1206,8 +1887,8 @@ static void ytmusic_log_empty_body(const char *what, const char *body) {
 		mkdir(folder, 0755);
 		snprintf(path, sizeof(path), "%s/empty-%s.json", folder, what);
 	} else {
-		mkdir("/tmp/sonix-ytmusic", 0700);
-		snprintf(folder, sizeof(folder), "%s", "/tmp/sonix-ytmusic");
+		mkdir(playback_cache_dir(), 0700);
+		snprintf(folder, sizeof(folder), "%s", playback_cache_dir());
 		snprintf(path, sizeof(path), "%s/empty-%s.json", folder, what);
 	}
 	FILE *f = fopen(path, "wb");
@@ -1296,15 +1977,45 @@ static int collect_items_compact(const char *response, ytmusic_item_t *items, in
 }
 
 // The heading of one carousel of the Explore page.
+//
+// The heading lives in the carousel's header, a small object at the front of
+// it -- but the carousel itself is the whole shelf, and on a real Explore page
+// that is a couple of hundred kilobytes and far more tokens than a bounded
+// parse will take. Parsing all of it to read one string used to run past that
+// ceiling and answer "no heading" for every row on the page, which drew three
+// rows all labelled Explore. So the header object is cut out first and parsed
+// on its own, which costs one scan of the carousel's first few hundred bytes.
 static void read_section_title(const char *object, char *out, size_t size) {
+	static const char *const headers[] = {
+		"\"musicCarouselShelfBasicHeaderRenderer\"",
+		"\"musicCardShelfHeaderBasicRenderer\"",
+	};
 	out[0] = '\0';
-	json_doc_t doc;
-	if (!json_parse_limited(object, &doc, 8000)) return;
-	int root = json_root(&doc);
-	if (!json_str(&doc, json_path(&doc, root, "header.musicCarouselShelfBasicHeaderRenderer.title.runs.0.text"), out, size) || !out[0]) {
-		json_str(&doc, json_path(&doc, root, "header.musicCardShelfRenderer.title.runs.0.text"), out, size);
+	for (size_t i = 0; i < sizeof(headers) / sizeof(headers[0]); i++) {
+		const char *key = strstr(object, headers[i]);
+		if (!key) continue;
+		const char *value = skip_json_space(key + strlen(headers[i]));
+		if (*value != ':') continue;
+		value = skip_json_space(value + 1);
+		if (*value != '{') continue;
+		const char *end = json_compound_end(value);
+		if (!end) continue;
+		size_t len = (size_t)(end - value);
+		char *header = malloc(len + 1);
+		if (!header) return;
+		memcpy(header, value, len);
+		header[len] = '\0';
+		json_doc_t doc;
+		if (json_parse_limited(header, &doc, 2000)) {
+			int root = json_root(&doc);
+			if (!json_str(&doc, json_path(&doc, root, "title.runs.0.text"), out, size) || !out[0]) {
+				json_str(&doc, json_path(&doc, root, "title.simpleText"), out, size);
+			}
+			json_free(&doc);
+		}
+		free(header);
+		if (out[0]) return;
 	}
-	json_free(&doc);
 }
 
 // The cards under one carousel. The carousel is a slice of the whole page, so
@@ -1356,7 +2067,8 @@ int ytmusic_search_items(const char *query, ytmusic_filter_t filter,
 		return -1;
 	}
 	if (limit > YTMUSIC_ITEMS_MAX) limit = YTMUSIC_ITEMS_MAX;
-	char escaped[512], request[1400];
+	char escaped[512], request[1400], gl[3], hl[3];
+	catalogue_bounds(gl, sizeof(gl), hl, sizeof(hl));
 	if (!json_escape(query, escaped, sizeof(escaped))) {
 		set_error(error, error_size, "ytmusic_search_too_long");
 		return -1;
@@ -1366,8 +2078,8 @@ int ytmusic_search_items(const char *query, ytmusic_filter_t filter,
 	const char *params = filter == YTMUSIC_FILTER_PODCASTS ? "EgWKAQJQAWoMEA4QChADEAQQCRAF"
 														 : "EgWKAQIIAWoKEAkQBRAKEAMQBA==";
 	snprintf(request, sizeof(request),
-		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"query\":\"%s\",\"params\":\"%s\"}",
-		escaped, params);
+		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"%s\",\"gl\":\"%s\"}},\"query\":\"%s\",\"params\":\"%s\"}",
+		hl, gl, escaped, params);
 	char *body = NULL;
 	// Search is public. Never attach the Google OAuth bearer token here: the
 	// music catalogue can answer an OAuth request with a successful but empty
@@ -1392,10 +2104,11 @@ int ytmusic_browse_items(const char *browse_id, ytmusic_item_t *items, int limit
 		return -1;
 	}
 	if (limit > YTMUSIC_ITEMS_MAX) limit = YTMUSIC_ITEMS_MAX;
-	char request[512];
+	char request[512], gl[3], hl[3];
+	catalogue_bounds(gl, sizeof(gl), hl, sizeof(hl));
 	snprintf(request, sizeof(request),
-		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"%s\"}",
-		browse_id);
+		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"%s\",\"gl\":\"%s\"}},\"browseId\":\"%s\"}",
+		hl, gl, browse_id);
 	char *body = NULL;
 	bool used_account = false;
 	// Public albums, charts and search-result cards should load even when a
@@ -1417,6 +2130,18 @@ int ytmusic_browse_items(const char *browse_id, ytmusic_item_t *items, int limit
 			free(private_page);
 		}
 		if (error && error_size) error[0] = '\0';
+	}
+	// The liked songs -- "VLLM" -- are the account's own list, and the only
+	// credential Google's music endpoints accept for it is the browser session
+	// imported from the card. The Google sign-in token is refused, and refused
+	// *quietly*: the page comes back with no rows and no error, so Favourites
+	// sat there saying "no results" for an account that was in fact signed in.
+	// Where the imported session is what is missing, say that instead of
+	// showing an empty list that can never fill.
+	if (count == 0 && strcmp(browse_id, "VLLM") == 0 && account_attached() &&
+		!session_cookie_attached()) {
+		set_error(error, error_size, "ytmusic_library_needs_session");
+		return -1;
 	}
 	fprintf(stderr, "ytmusic: browse %s returned %d rows\n", browse_id, count);
 	if (count < 0) {
@@ -1473,8 +2198,11 @@ int ytmusic_explore_sections(ytmusic_section_t *sections, int limit,
 	if (limit > YTMUSIC_SECTIONS_MAX) limit = YTMUSIC_SECTIONS_MAX;
 	// Explore, the store's own front page of new releases and charts. It is a
 	// public page, so it answers without an account.
-	const char *request =
-		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"browseId\":\"FEmusic_explore\"}";
+	char request[512], gl[3], hl[3];
+	catalogue_bounds(gl, sizeof(gl), hl, sizeof(hl));
+	snprintf(request, sizeof(request),
+		"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20250101.00.00\",\"hl\":\"%s\",\"gl\":\"%s\"}},\"browseId\":\"FEmusic_explore\"}",
+		hl, gl);
 	char *body = NULL;
 	// Explore is public too; keep it independent of an attached account just
 	// like search, so a rejected token cannot turn the front page empty.
@@ -1545,11 +2273,149 @@ static bool player_reply_media(const char *body, const char *video_id, char *url
 	return ok;
 }
 
+// One source's answer to "where are the bytes", named the way the log and the
+// settings page speak about it: an instance base address, or one of these
+// words.
+#define YTMUSIC_VIA_WEB "web"
+#define YTMUSIC_VIA_DIRECT "direct"
+#define YTMUSIC_VIA_RELAY "relay"
+
+// The imported browser session, through the web music player: it knows the
+// account's region and, with Premium, its own stream. An OAuth token alone is
+// not enough -- that client refuses one outright -- so this asks only when a
+// cookie was imported from a browser.
+static bool web_session_audio_url(const char *video_id, char *url, size_t url_size,
+								  int *duration, char *title, size_t title_size,
+								  char *artist, size_t artist_size, char *error,
+								  size_t error_size) {
+	char cookie[YTMUSIC_COOKIE_MAX];
+	ytmusic_session_cookie(cookie, sizeof(cookie));
+	bool have = cookie[0] != '\0';
+	memset(cookie, 0, sizeof(cookie));
+	if (!have) return false;
+	char request[1024], gl[3], hl[3];
+	catalogue_bounds(gl, sizeof(gl), hl, sizeof(hl));
+	snprintf(request, sizeof(request),
+			 "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"%s\",\"hl\":\"%s\",\"gl\":\"%s\"}},\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}",
+			 client_version[0] ? client_version : YTMUSIC_CLIENT_VERSION_FALLBACK, hl, gl, video_id);
+	char *body = NULL;
+	bool ok = youtubei_post("player", request, true, &body, NULL, error, error_size) &&
+		player_reply_media(body, video_id, url, url_size, duration, title, title_size, artist,
+						   artist_size, error, error_size);
+	free(body);
+	return ok;
+}
+
+// One source, asked. False when it has nothing, with `error` naming why when
+// it said more than a shrug.
+static bool resolve_via(const char *source, const char *video_id, char *url, size_t url_size,
+						int *duration, char *title, size_t title_size, char *artist,
+						size_t artist_size, bool *proxied, uint64_t *expected_bytes, char *error,
+						size_t error_size) {
+	if (!source || !source[0]) return false;
+	if (proxied) *proxied = false;
+	if (expected_bytes) *expected_bytes = 0;
+	if (strcmp(source, YTMUSIC_VIA_WEB) == 0) {
+		return web_session_audio_url(video_id, url, url_size, duration, title, title_size, artist,
+									 artist_size, error, error_size);
+	}
+	if (strcmp(source, YTMUSIC_VIA_DIRECT) == 0) {
+		char *body = NULL;
+		bool asked = android_player(video_id, &body, error, error_size);
+		bool ok = asked && player_reply_media(body, video_id, url, url_size, duration, title,
+											  title_size, artist, artist_size, error, error_size);
+		free(body);
+		return ok;
+	}
+	if (strcmp(source, YTMUSIC_VIA_RELAY) == 0) {
+		return relay_audio_url(video_id, url, url_size, duration, title, title_size, artist,
+							   artist_size, proxied, error, error_size);
+	}
+	return instance_audio_url(source, video_id, url, url_size, duration, title, title_size,
+							  artist, artist_size, proxied, expected_bytes, error, error_size);
+}
+
+// What a source is called in the log: a host reads better than an address, and
+// "this device" better than "direct".
+static const char *source_label(const char *source, char *out, size_t size) {
+	if (strcmp(source, YTMUSIC_VIA_WEB) == 0) {
+		snprintf(out, size, "%s", "the browser session");
+	} else if (strcmp(source, YTMUSIC_VIA_DIRECT) == 0) {
+		snprintf(out, size, "%s", "this device");
+	} else if (strcmp(source, YTMUSIC_VIA_RELAY) == 0) {
+		snprintf(out, size, "%s", "the relay");
+	} else {
+		const char *host = strstr(source, "://");
+		snprintf(out, size, "%s", host ? host + 3 : source);
+	}
+	return out;
+}
+
+// The answers one play attempt walks, in order, and the only place that order
+// is written down:
+//
+//   1. The imported browser session, when there is one: it knows the account's
+//      region and, with Premium, its own stream.
+//   2. The instances, the pinned one first. This is the path measured to work
+//      on this device with no other machine involved: an Invidious instance
+//      fetches the audio from Google and passes the bytes on through
+//      /latest_version?local=true, so a track plays with nothing but the
+//      player and its Wi-Fi.
+//   3. The device itself, through the phone-app player. It resolves an address
+//      Google then refuses to serve (403 on every media fetch in the field
+//      log), so it is a hopeful extra here rather than the primary answer --
+//      but the day that refusal stops, it plays with no instance at all.
+//   4. The relay, which needs another machine and so comes last.
+//
+// A pin to "direct" or "relay" replaces the whole list with that one answer.
+// An instance pin is tried first and the rest still follow it.
+static int play_sources(char out[][YTMUSIC_SOURCE_MAX], int limit) {
+	if (!out || limit <= 0) return 0;
+	int count = 0;
+	const char *source = source_value();
+	bool relay_only = strcmp(source, "relay") == 0;
+	bool direct_only = strcmp(source, "direct") == 0;
+	if (relay_only) {
+		snprintf(out[count++], YTMUSIC_SOURCE_MAX, "%s", YTMUSIC_VIA_RELAY);
+		return count;
+	}
+	if (direct_only) {
+		snprintf(out[count++], YTMUSIC_SOURCE_MAX, "%s", YTMUSIC_VIA_DIRECT);
+		return count;
+	}
+	// Two slots are kept for the device and the relay: an instance list
+	// somebody wrote must not push them out of the walk.
+	int room = limit > 2 ? limit - 2 : 1;
+	char cookie[YTMUSIC_COOKIE_MAX];
+	ytmusic_session_cookie(cookie, sizeof(cookie));
+	bool have_session = cookie[0] != '\0';
+	memset(cookie, 0, sizeof(cookie));
+	if (have_session && count < room) {
+		snprintf(out[count++], YTMUSIC_SOURCE_MAX, "%s", YTMUSIC_VIA_WEB);
+	}
+	char bases[YTMUSIC_SOURCES_MAX][YTMUSIC_SOURCE_MAX];
+	int instances = ytmusic_instance_bases(bases, YTMUSIC_SOURCES_MAX);
+	// The built-in list is a guess at what might be up today; when it is the
+	// list in use, a few tries is enough to know. A list somebody wrote
+	// themselves is tried whole, because each entry there is a machine they
+	// chose.
+	if (!config_get("ytmusic", "instances", "")[0] && instances > YTMUSIC_INSTANCE_TRIES) {
+		instances = YTMUSIC_INSTANCE_TRIES;
+	}
+	for (int i = 0; i < instances && count < room; i++) {
+		snprintf(out[count++], YTMUSIC_SOURCE_MAX, "%.*s", YTMUSIC_SOURCE_MAX - 1, bases[i]);
+	}
+	if (count < limit) snprintf(out[count++], YTMUSIC_SOURCE_MAX, "%s", YTMUSIC_VIA_DIRECT);
+	if (count < limit) snprintf(out[count++], YTMUSIC_SOURCE_MAX, "%s", YTMUSIC_VIA_RELAY);
+	return count;
+}
+
 bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 					  int *duration, char *title, size_t title_size,
-					  char *artist, size_t artist_size,
+					  char *artist, size_t artist_size, bool *relay_proxied,
 					  char *error, size_t error_size) {
 	if (error && error_size) error[0] = '\0';
+	if (relay_proxied) *relay_proxied = false;
 	if (!video_id || strlen(video_id) != 11 || !url || !url_size) {
 		set_error(error, error_size, "ytmusic_invalid_track");
 		return false;
@@ -1561,56 +2427,29 @@ bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 		}
 	}
 
-	// Nothing here needs an account: search and the pages are answered signed
-	// out, and a track plays whether or not anybody has signed in.
-	//
-	// The order of the three answers to "where are the bytes":
-	//
-	//   1. A saved browser session, through the web music player: it knows the
-	//      account's region and, with Premium, its own stream. Still first for
-	//      whoever has signed in; it is not tried with an OAuth token alone --
-	//      that client refuses such a token outright.
-	//   2. The phone-app player. Every request it sends is refused today (see
-	//      relay_audio_url), but it costs one fast 400, and the day Google
-	//      relaxes the wall it is the zero-config answer again.
-	//   3. The relay, last, so its error is the one the user sees: it is the
-	//      actionable one -- set a relay, or fix the one set -- while a
-	//      refusal from Google is not. Guest streaming goes through it, and
-	//      the audio-only filter there is the whole of what is fetched.
-	char cookie[YTMUSIC_COOKIE_MAX];
-	ytmusic_session_cookie(cookie, sizeof(cookie));
-	bool try_web = cookie[0] != '\0';
-	memset(cookie, 0, sizeof(cookie));
-	if (try_web) {
-		char request[1024];
-		snprintf(request, sizeof(request),
-			"{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"%s\",\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}",
-			client_version[0] ? client_version : YTMUSIC_CLIENT_VERSION_FALLBACK, video_id);
-		char *body = NULL;
-		bool ok = youtubei_post("player", request, true, &body, NULL, error, error_size) &&
-			player_reply_media(body, video_id, url, url_size, duration, title, title_size,
-							   artist, artist_size, error, error_size);
-		free(body);
-		if (ok) return true;
-		if (error && error_size) error[0] = '\0';
+	char sources[YTMUSIC_SOURCES_MAX][YTMUSIC_SOURCE_MAX];
+	int count = play_sources(sources, YTMUSIC_SOURCES_MAX);
+	// The error left standing is the last one a source had something to say
+	// about: "the relay does not serve /streams" is actionable, and a generic
+	// "no source" would throw it away.
+	char last[192] = "";
+	for (int i = 0; i < count; i++) {
+		char label[YTMUSIC_SOURCE_MAX], reason[192] = "";
+		source_label(sources[i], label, sizeof(label));
+		if (resolve_via(sources[i], video_id, url, url_size, duration, title, title_size,
+						artist, artist_size, relay_proxied, NULL, reason, sizeof(reason))) {
+			printf("ytmusic: %.11s: %s served it\n", video_id, label);
+			return true;
+		}
+		// A half-written address is worse than none: the caller fetches what
+		// this buffer holds.
+		url[0] = '\0';
+		if (relay_proxied) *relay_proxied = false;
+		if (reason[0]) snprintf(last, sizeof(last), "%s", reason);
+		fprintf(stderr, "ytmusic: %.11s: %s had nothing (%s)\n", video_id, label,
+				reason[0] ? reason : "no reason given");
 	}
-
-	char *body = NULL;
-	bool android_ok = android_player(video_id, &body, error, error_size);
-	if (android_ok) {
-		bool ok = player_reply_media(body, video_id, url, url_size, duration, title, title_size,
-									 artist, artist_size, error, error_size);
-		free(body);
-		if (ok) return true;
-	} else {
-		free(body);
-	}
-	if (error && error_size) error[0] = '\0';
-
-	if (relay_audio_url(video_id, url, url_size, duration, title, title_size, artist, artist_size,
-						error, error_size)) {
-		return true;
-	}
+	set_error(error, error_size, last[0] ? last : "ytmusic_no_source");
 	return false;
 }
 
@@ -1643,74 +2482,561 @@ static bool write_playback_tags(const char *path, const ytmusic_track_t *track) 
 	return true;
 }
 
+// Google throttles one long transfer of a media URL to about 32 KB/s -- a
+// three-megabyte track then takes two minutes before a note comes out of the
+// player -- while the same bytes asked for a few hundred kilobytes at a time
+// arrive at the link's own speed. So the download is chunked, and one long
+// transfer is kept as the fallback for a server that ignores Range.
+#define YTMUSIC_CHUNK (256 * 1024)
+
+// Where the playback cache lives: /tmp on the device, because it is scratch and
+// nothing there has to survive a reboot. SONIX_YTMUSIC_CACHE moves it, which is
+// what lets the host suite write it at all -- some Windows machines refuse
+// every create under \tmp, and a suite that cannot make the folder would have
+// to skip the download checks it exists to make.
+static const char *playback_cache_dir(void) {
+	const char *override = getenv("SONIX_YTMUSIC_CACHE");
+	return (override && override[0]) ? override : "/tmp/sonix-ytmusic";
+}
+
+// What the download is doing, for the page's loading card. A percentage rather
+// than a byte count: a 64-bit counter read from another thread on a 32-bit
+// device can tear, and being one step out on a bar is not a problem.
+static volatile int progress_percent = -1;
+static volatile int progress_active;
+static uint64_t progress_expected;
+
+void ytmusic_download_progress(int *percent, bool *running) {
+	if (percent) *percent = progress_percent;
+	if (running) *running = progress_active != 0;
+}
+
+static void progress_note(uint64_t done) {
+	if (progress_expected == 0) return;
+	uint64_t percent = done * 100 / progress_expected;
+	progress_percent = percent > 100 ? 100 : (int)percent;
+}
+
+// Starting the player before the file is whole.
+//
+// growfile.c gives the decoder a file that is still being written -- the same
+// mechanism Qobuz plays through -- and this is the other end of that contract:
+// announce the path, say what has arrived after every chunk, and say once, at
+// the byte the track can be opened from, that playback may begin. NULL means an
+// ordinary download, which is what "keep on card" wants: it has nothing to
+// play while it waits, and a file that is only whole at the end.
+typedef struct {
+	const char *path;   // the file as the player will open it
+	uint64_t ready_at;  // bytes that have to be on disk before it may
+	ytmusic_ready_cb ready;
+	void *user;
+	bool called;
+	bool indexed;       // the moov box has been looked for
+	bool have_moov;     // and found, so the decoder has something to read
+	uint64_t indexed_at;
+} stream_hook_t;
+
+// Is the MP4 index in the part that has arrived?
+//
+// An M4A is no use without its `moov` box: that is where the sample table
+// lives, and the decoder cannot describe the first frame without it. It sits at
+// the front of the streams these instances serve, but "at the front" is a
+// property of the container, not a promise, and handing the player a file whose
+// index has not landed yet is a decode failure a second before it would have
+// worked. So the start waits for it -- scanning once, over the first 64 kB,
+// which is where a faststart file keeps it.
+static bool moov_arrived(const char *path, uint64_t upto) {
+	uint8_t head[64 * 1024];
+	size_t want = upto < sizeof(head) ? (size_t)upto : sizeof(head);
+	if (want < 8) return false;
+	FILE *f = fopen(path, "rb");
+	if (!f) return false;
+	size_t got = fread(head, 1, want, f);
+	fclose(f);
+	for (size_t i = 0; i + 4 <= got; i++) {
+		if (memcmp(head + i, "moov", 4) == 0) return true;
+	}
+	return false;
+}
+
+// How far past the threshold the start will wait for the index before going
+// ahead anyway: a stream that keeps its moov at the end still plays, it just
+// plays when it would have before this existed.
+#define STREAM_MOOV_PATIENCE (512 * 1024)
+
+static void stream_note(stream_hook_t *hook, uint64_t done) {
+	if (!hook) return;
+	growfile_progress(hook->path, (long)done);
+	if (hook->called || done < hook->ready_at) return;
+	if (!hook->indexed) {
+		hook->indexed = true;
+		hook->indexed_at = done;
+		hook->have_moov = moov_arrived(hook->path, done);
+	}
+	if (!hook->have_moov && done < hook->indexed_at + STREAM_MOOV_PATIENCE) return;
+	if (!hook->have_moov) {
+		printf("ytmusic: no moov box in the first part; starting anyway\n");
+	}
+	hook->called = true;
+	printf("ytmusic: %llu bytes are enough to start playing\n", (unsigned long long)done);
+	if (hook->ready) hook->ready(hook->path, hook->user);
+}
+
+// How many bytes before the decoder is given the file. A fraction of the whole
+// when the instance said how big it is -- an eighth, so a long track is not
+// held back for longer than a short one -- with a floor and a ceiling: under
+// the floor the header and the first frames are not there yet, and above the
+// ceiling the wait stops being about latency and starts being the download.
+static uint64_t stream_threshold(uint64_t expected) {
+	uint64_t at = expected ? expected / 8 : 0;
+	if (at < 196608) at = 196608;
+	if (expected && at > expected / 2) at = expected / 2;
+	if (at > 1048576) at = 1048576;
+	return at;
+}
+
+// The file in ranged chunks. False when Range is not honoured (or nothing came
+// back), which is the caller's cue to download it in one piece instead.
+static bool download_ranged(const char *url, const char *part, uint64_t *downloaded, bool *complete,
+							stream_hook_t *hook) {
+	*downloaded = 0;
+	*complete = false;
+	FILE *f = fopen(part, "wb");
+	if (!f) {
+		fprintf(stderr, "ytmusic: the cache file %.64s cannot be written (%s)\n", part,
+				strerror(errno));
+		return false;
+	}
+	bool ok = true;
+	int empty_asks = 0;
+	while (!*complete) {
+		char range[96], *body = NULL;
+		size_t len = 0;
+		int status = 0;
+		// A connection that drops mid-chunk is worth one more ask for the same
+		// bytes: the offset has not moved, so nothing is written twice.
+		bool got = false;
+		for (int attempt = 0; attempt < 2 && !got; attempt++) {
+			snprintf(range, sizeof(range), "Range: bytes=%llu-%llu\r\n",
+					 (unsigned long long)*downloaded,
+					 (unsigned long long)(*downloaded + YTMUSIC_CHUNK - 1));
+			http_req_t req = {.method = "GET",
+							  .extra_headers = range,
+							  .allow_empty_body = true, // a 206 is success, and so is a 204
+							  .want_error_body = true,  // a refusal says why in its body
+							  .no_https_downgrade = true};
+			got = http_request(url, &req, &body, &len, YTMUSIC_CHUNK + 1, YTMUSIC_RELAY_TIMEOUT,
+							   &status);
+			if (!got) {
+				fprintf(stderr, "http: media fetch failed at byte %llu: %s%s\n",
+						(unsigned long long)*downloaded,
+						http_last_error() ? http_last_error() : "no reason given",
+						attempt == 0 ? ", asking again" : "");
+				free(body);
+				body = NULL;
+				len = 0;
+			}
+		}
+		if (!got) {
+			ok = false;
+			break;
+		}
+		if (status >= 400) {
+			// A refused media fetch carries its reason in the body -- Google
+			// says which rule was broken, and that sentence is the whole
+			// diagnosis. It goes to the log, one line, with the newlines out.
+			char why[161];
+			size_t n = body && len < 160 ? len : (body ? 160 : 0);
+			if (n) memcpy(why, body, n);
+			why[n] = '\0';
+			for (size_t k = 0; k < n; k++) {
+				if (why[k] == '\r' || why[k] == '\n' || why[k] == '\t') why[k] = ' ';
+			}
+			fprintf(stderr, "http: media answered %d: %s\n", status, n ? why : "(no body)");
+		}
+		if (status == 200) {
+			// The range was ignored and this is the whole file (or as much of
+			// it as was kept): not a piece of anything.
+			free(body);
+			ok = false;
+			break;
+		}
+		if (status == 416) {
+			// Asked past the end: what is on disk is the whole file.
+			free(body);
+			*complete = *downloaded > 0;
+			break;
+		}
+		if (len == 0) {
+			// A 206 carrying nothing is the instance's own upstream pausing, not
+			// the end of the file -- treating it as an ending is the other way a
+			// track used to finish after a minute. Only a 416 says the file is
+			// over, so ask again for the same offset a few times first.
+			free(body);
+			if (++empty_asks >= 6) {
+				*complete = *downloaded > 0;
+				break;
+			}
+			usleep(300 * 1000);
+			continue;
+		}
+		if (status != 206 || !body || fwrite(body, 1, len, f) != len) {
+			free(body);
+			ok = false;
+			break;
+		}
+		free(body);
+		*downloaded += len;
+		// Flushed before it is announced: a reader that is handed this path
+		// reads the file, not the writer's stdio buffer, so bytes still sitting
+		// in it are bytes the decoder waits for. Only the growing case pays for
+		// this -- an ordinary download has no reader until it is over.
+		if (hook) fflush(f);
+		progress_note(*downloaded);
+		stream_note(hook, *downloaded);
+		empty_asks = 0;
+		// A short chunk is NOT the end of the file. Invidious proxies the bytes
+		// and hands back less than was asked for whenever its own upstream
+		// pauses, and taking that for an ending is what cut a three-minute
+		// track off after a minute, at a file size the player then reported as
+		// a 35 kbps stream. So the next request asks for what follows, and the
+		// server says 416 -- or sends nothing at all -- only when there is
+		// nothing left.
+	}
+	if (fclose(f) != 0) ok = false;
+	return ok && *complete;
+}
+
+// The same file in one transfer, for a server that does not answer Range. This
+// is what the download always did, and the reason for the chunked path above.
+static bool download_streamed(const char *url, const char *part, uint64_t *downloaded, bool *complete,
+							  stream_hook_t *hook) {
+	*downloaded = 0;
+	*complete = false;
+	http_stream_t stream;
+	http_stream_options_t options = {.no_icy = true, .no_https_downgrade = true};
+	if (!http_stream_open_ex(&stream, url, YTMUSIC_RELAY_TIMEOUT, &options)) {
+		return false;
+	}
+	if (stream.content_length64) progress_expected = stream.content_length64;
+	FILE *f = fopen(part, "wb");
+	if (!f) {
+		http_stream_close(&stream);
+		return false;
+	}
+	char *buffer = malloc(32768);
+	bool ok = buffer != NULL;
+	while (ok) {
+		int n = http_stream_read(&stream, buffer, 32768);
+		if (n < 0) {
+			ok = false;
+			break;
+		}
+		if (n == 0) break;
+		if (fwrite(buffer, 1, (size_t)n, f) != (size_t)n) {
+			ok = false;
+			break;
+		}
+		*downloaded += (uint64_t)n;
+		if (hook) fflush(f);
+		progress_note(*downloaded);
+		stream_note(hook, *downloaded);
+	}
+	free(buffer);
+	if (fclose(f) != 0) ok = false;
+	if (stream.content_length64 && *downloaded != stream.content_length64) ok = false;
+	http_stream_close(&stream);
+	*complete = ok;
+	return ok;
+}
+
 static void prune_playback_cache(const char *keep_id) {
-	DIR *dir = opendir("/tmp/sonix-ytmusic");
+	const char *cache = playback_cache_dir();
+	DIR *dir = opendir(cache);
 	if (!dir) return;
 	struct dirent *entry;
 	while ((entry = readdir(dir)) != NULL) {
 		if (entry->d_name[0] == '.') continue;
 		char *dot = strrchr(entry->d_name, '.');
-		if (!dot || (strcmp(dot, ".m4a") != 0 && strcmp(dot, ".tags") != 0 && strcmp(dot, ".part") != 0)) continue;
+		if (!dot || (strcmp(dot, ".m4a") != 0 && strcmp(dot, ".tags") != 0 &&
+					 strcmp(dot, ".part") != 0 && strcmp(dot, ".jpg") != 0)) {
+			continue;
+		}
 		if (strncmp(entry->d_name, keep_id, 11) == 0 && entry->d_name[11] == '.') continue;
 		char path[640];
-		if (snprintf(path, sizeof(path), "/tmp/sonix-ytmusic/%s", entry->d_name) < (int)sizeof(path)) remove(path);
+		if (snprintf(path, sizeof(path), "%s/%s", cache, entry->d_name) >= (int)sizeof(path)) continue;
+		// The song that just stopped is still somebody's: "save to the card"
+		// copies it out on a worker thread, and deleting it here would leave a
+		// truncated track on the card. Anything touched in the last two minutes
+		// is left alone; the sweep catches it on a later play.
+		struct stat st;
+		if (stat(path, &st) == 0 && st.st_mtime > time(NULL) - 120) continue;
+		remove(path);
 	}
 	closedir(dir);
 }
 
-bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
-								   char *error, size_t error_size) {
+// Whether a path is one of this module's own finished downloads -- the file the
+// player was handed when a YouTube Music song started. That is what the
+// now-playing menu's "save to the card" copies out, and nothing else may be
+// treated as such: a file the user put on the card is already theirs.
+bool ytmusic_cache_owns(const char *path) {
+	const char *cache = playback_cache_dir();
+	size_t prefix_len = strlen(cache);
+	if (!path || strncmp(path, cache, prefix_len) != 0 || path[prefix_len] != '/') {
+		return false;
+	}
+	const char *leaf = path + prefix_len + 1;
+	if (!leaf[0] || strchr(leaf, '/')) {
+		return false;
+	}
+	size_t n = strlen(leaf);
+	return n > 4 && strcmp(leaf + n - 4, ".m4a") == 0;
+}
+
+// Playback: every source the player has, in turn, until one hands over the
+// whole track. Resolving is not the same as playing -- a source can name a
+// stream that is then refused, which is what the device's own Google address
+// does (403 on every media fetch in the field log) -- so a source that keeps no
+// bytes is passed over and the next one is asked, each attempt in the log.
+// The sleeve.
+//
+// YouTube's artwork is a URL on the row, not a picture inside the file, and the
+// player reads a track's cover from the file it was handed -- or from an image
+// beside it named after it (albumart's find_cover_file). So the row's picture is
+// fetched and written as <id>.jpg next to <id>.m4a: the cover loader then finds
+// it the same way it finds any folder cover, and now-playing has a sleeve.
+//
+// The URL carries its own sizing directive after the last '=' ("=w120-h120-"),
+// so that is replaced rather than the picture being asked for at thumbnail size.
+#define YTMUSIC_COVER_MAX (512 * 1024)
+#define YTMUSIC_COVER_SIZE 320
+
+static void cover_url_at_size(const char *in, char *out, size_t size) {
+	if (!out || !size) return;
+	out[0] = '\0';
+	if (!in || !in[0]) return;
+	const char *eq = strrchr(in, '=');
+	size_t base = eq ? (size_t)(eq - in) : strlen(in);
+	if (base == 0 || base + 40 >= size) {
+		snprintf(out, size, "%.*s", (int)(size - 1), in);
+		return;
+	}
+	snprintf(out, size, "%.*s=w%d-h%d-l90-rj", (int)base, in, YTMUSIC_COVER_SIZE,
+			 YTMUSIC_COVER_SIZE);
+}
+
+static void save_cover(const char *audio_path, const char *thumb_url) {
+	char url[YTMUSIC_URL_MAX];
+	cover_url_at_size(thumb_url, url, sizeof(url));
+	if (!url[0]) return;
+	char cover[600];
+	snprintf(cover, sizeof(cover), "%s", audio_path);
+	char *dot = strrchr(cover, '.');
+	if (dot) *dot = '\0';
+	if (strlen(cover) + 5 >= sizeof(cover)) return;
+	snprintf(cover + strlen(cover), sizeof(cover) - strlen(cover), ".jpg");
+	char *body = NULL;
+	size_t len = 0;
+	pthread_mutex_lock(&request_lock);
+	bool got = http_get_ex(url, NULL, false, &body, &len, YTMUSIC_COVER_MAX, YTMUSIC_TIMEOUT, NULL);
+	pthread_mutex_unlock(&request_lock);
+	if (!got || !body || len < 1024) {
+		fprintf(stderr, "ytmusic: the cover was not fetched (%.96s)\n", url);
+		free(body);
+		return;
+	}
+	FILE *f = fopen(cover, "wb");
+	bool wrote = f && fwrite(body, 1, len, f) == len;
+	if (f) fclose(f);
+	free(body);
+	if (!wrote) {
+		remove(cover);
+		return;
+	}
+	printf("ytmusic: cover saved, %zu bytes\n", len);
+}
+
+// `hook` non-NULL means the player is waiting: the bytes go straight into the
+// file it will open, the file is announced to growfile so the decoder can read
+// it while it fills, and playback is started as soon as there is enough of it.
+// NULL is the plain download -- a .part beside it, renamed only when whole.
+static bool download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
+								  stream_hook_t *hook, char *error, size_t error_size) {
+	bool streaming = hook != NULL;
 	if (error && error_size) error[0] = '\0';
 	if (!track || !path || !path_size || strlen(track->id) != 11) {
 		set_error(error, error_size, "ytmusic_invalid_track");
 		return false;
 	}
-	char url[YTMUSIC_URL_MAX], final[512], part[520];
-	if (!ytmusic_audio_url(track->id, url, sizeof(url), NULL, NULL, 0, NULL, 0, error, error_size)) return false;
-	if (mkdir("/tmp/sonix-ytmusic", 0700) != 0 && errno != EEXIST) {
+	const char *cache = playback_cache_dir();
+	if (mkdir(cache, 0700) != 0 && errno != EEXIST) {
 		set_error(error, error_size, "ytmusic_cache_unavailable");
 		return false;
 	}
-	if (snprintf(final, sizeof(final), "/tmp/sonix-ytmusic/%s.m4a", track->id) >= (int)sizeof(final) ||
-		snprintf(part, sizeof(part), "%s.part", final) >= (int)sizeof(part) || strlen(final) >= path_size) {
+	char final[512], part[520];
+	if (snprintf(final, sizeof(final), "%s/%s.m4a", cache, track->id) >= (int)sizeof(final) ||
+		snprintf(part, sizeof(part), "%s.part", final) >= (int)sizeof(part) ||
+		strlen(final) >= path_size) {
 		set_error(error, error_size, "ytmusic_path_too_long");
 		return false;
 	}
 	prune_playback_cache(track->id);
-	remove(part);
-	http_stream_t stream;
-	http_stream_options_t options = {.no_icy = true, .no_https_downgrade = true};
-	if (!http_stream_open_ex(&stream, url, YTMUSIC_TIMEOUT, &options)) {
-		set_error(error, error_size, http_last_error() ? http_last_error() : "ytmusic_stream_failed");
-		return false;
+
+	char sources[YTMUSIC_SOURCES_MAX][YTMUSIC_SOURCE_MAX];
+	int count = play_sources(sources, YTMUSIC_SOURCES_MAX);
+	char last[192] = "";
+	bool kept_any = false;
+	for (int i = 0; i < count; i++) {
+		char label[YTMUSIC_SOURCE_MAX], reason[192] = "", url[YTMUSIC_URL_MAX];
+		bool proxied = false;
+		uint64_t expected = 0;
+		source_label(sources[i], label, sizeof(label));
+		printf("ytmusic: %.11s: asking %s\n", track->id, label);
+		if (!resolve_via(sources[i], track->id, url, sizeof(url), NULL, NULL, 0, NULL, 0,
+						 &proxied, &expected, reason, sizeof(reason))) {
+			fprintf(stderr, "ytmusic: %.11s: %s had nothing (%s)\n", track->id, label,
+					reason[0] ? reason : "no reason given");
+			continue;
+		}
+		printf("ytmusic: %.11s: fetching from %s: %s\n", track->id, label, url);
+		// The loading card's bar: the total is what this source said the file
+		// is, and is 0 when it never said.
+		progress_expected = expected;
+		progress_percent = -1;
+		// A download for playback writes the file the player opens; a plain
+		// download keeps its .part until it is whole.
+		const char *target = streaming ? final : part;
+		if (streaming) {
+			hook->path = final;
+			hook->ready_at = stream_threshold(expected);
+			// Announced before the first byte, because the reader registers
+			// itself from the player the moment playback starts, and an
+			// unannounced path is an ordinary -- empty -- file to it.
+			remove(final);
+			growfile_announce(final, (long)expected);
+		} else {
+			remove(part);
+		}
+		uint64_t downloaded = 0;
+		bool complete = false;
+		bool ok = download_ranged(url, target, &downloaded, &complete, hook);
+		if (!ok && !(hook && hook->called)) {
+			// A server that will not answer a Range keeps the old behaviour: one
+			// transfer, started over, with the signature problem to live with.
+			// Not once playback has begun: starting the file over would truncate
+			// it under the decoder that is already reading it.
+			printf("ytmusic: %.11s: %s refused ranged chunks, one transfer instead\n",
+				   track->id, label);
+			remove(target);
+			downloaded = 0;
+			complete = false;
+			if (streaming) {
+				// The file starts over, so the search for the index does too:
+				// what the first attempt read is not on the disk any more.
+				hook->indexed = false;
+				hook->have_moov = false;
+				growfile_announce(final, (long)expected);
+			}
+			ok = download_streamed(url, target, &downloaded, &complete, hook);
+		}
+		memset(url, 0, sizeof(url));
+		// The instance's reply says how many bytes the whole stream is, so a
+		// transfer that stopped early is caught here rather than playing as a
+		// track that ends after a minute.
+		if (ok && complete && expected && downloaded != expected) {
+			printf("ytmusic: %.11s: %s stopped at %llu of %llu bytes\n", track->id, label,
+				   (unsigned long long)downloaded, (unsigned long long)expected);
+			ok = false;
+			complete = false;
+		}
+		bool landed = ok && complete && downloaded >= 1024;
+		if (landed && !streaming) {
+			// A whole file replaces whatever the cache held under that name. The
+			// remove is for Windows’ rename(), which refuses an existing target
+			// where POSIX replaces it; the device never needed it.
+			remove(final);
+			if (rename(part, final) != 0) landed = false;
+		}
+		if (landed) {
+			write_playback_tags(final, track);
+			save_cover(final, track->thumbnail);
+			snprintf(path, path_size, "%s", final);
+			if (streaming) {
+				// A file that is whole is an ordinary file from here on. A track
+				// short enough to have finished before the threshold was reached
+				// starts the player here instead, at its end.
+				if (!hook->called) {
+					hook->called = true;
+					if (hook->ready) hook->ready(final, hook->user);
+				}
+				growfile_finish(final, true);
+			}
+			printf("ytmusic: %.11s: played from %s, %llu bytes\n", track->id, label,
+				   (unsigned long long)downloaded);
+			return true;
+		}
+		if (streaming) {
+			growfile_finish(final, false);
+			if (hook->called) {
+				// Playback is already running on what arrived. The file is left as
+				// it is: removing it would take the decoder's file out from under
+				// the listener, and the next play of this song truncates it anyway.
+				printf("ytmusic: %.11s: %s stopped at %llu bytes after playback began\n",
+					   track->id, label, (unsigned long long)downloaded);
+				return true;
+			}
+			remove(final);
+		} else {
+			remove(part);
+		}
+		printf("ytmusic: %.11s: %s kept %llu bytes (%s, %s)\n", track->id, label,
+			   (unsigned long long)downloaded, ok ? "complete" : "failed",
+			   http_last_error() ? http_last_error() : "no reason given");
+		if (downloaded == 0) {
+			const char *why = http_last_error() ? http_last_error() : "ytmusic_stream_failed";
+			if (strcmp(sources[i], YTMUSIC_VIA_RELAY) == 0) why = "ytmusic_relay_not_serving";
+			snprintf(last, sizeof(last), "%s", why);
+		} else {
+			kept_any = true;
+			snprintf(last, sizeof(last), "%s", "ytmusic_download_incomplete");
+		}
 	}
-	FILE *f = fopen(part, "wb");
-	if (!f) {
-		http_stream_close(&stream);
-		set_error(error, error_size, "ytmusic_cache_unavailable");
-		return false;
-	}
-	char *buffer = malloc(32768);
-	bool ok = buffer != NULL;
-	uint64_t downloaded = 0;
-	while (ok) {
-		int n = http_stream_read(&stream, buffer, 32768);
-		if (n < 0) { ok = false; break; }
-		if (n == 0) break;
-		if (fwrite(buffer, 1, (size_t)n, f) != (size_t)n) { ok = false; break; }
-		downloaded += (uint64_t)n;
-	}
-	free(buffer);
-	if (fclose(f) != 0) ok = false;
-	if (stream.content_length64 && downloaded != stream.content_length64) ok = false;
-	http_stream_close(&stream);
-	memset(url, 0, sizeof(url));
-	if (!ok || downloaded < 1024 || rename(part, final) != 0) {
-		remove(part);
-		set_error(error, error_size, "ytmusic_download_incomplete");
-		return false;
-	}
-	write_playback_tags(final, track);
-	snprintf(path, path_size, "%s", final);
-	return true;
+	set_error(error, error_size,
+			  last[0] ? last : (kept_any ? "ytmusic_download_incomplete" : "ytmusic_no_source"));
+	return false;
+}
+
+// The entry the page calls. The work is download_for_playback above; this marks
+// the span for the loading card, so a bar is shown from the first byte to the
+// last -- a track takes long enough over a public instance that being told
+// something is happening is the difference between waiting and thinking the
+// player has hung.
+bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
+								   char *error, size_t error_size) {
+	progress_expected = 0;
+	progress_percent = -1;
+	progress_active = 1;
+	bool ok = download_for_playback(track, path, path_size, NULL, error, error_size);
+	progress_active = 0;
+	progress_expected = 0;
+	progress_percent = -1;
+	return ok;
+}
+
+// The same download, started for a listener who is waiting to hear it: the
+// loading card's span covers the whole transfer, and `ready` fires part-way
+// through it so the page can hand the growing file to the player.
+bool ytmusic_stream_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
+								 ytmusic_ready_cb ready, void *user,
+								 char *error, size_t error_size) {
+	stream_hook_t hook = {.path = NULL, .ready_at = 0, .ready = ready, .user = user, .called = false};
+	progress_expected = 0;
+	progress_percent = -1;
+	progress_active = 1;
+	bool ok = download_for_playback(track, path, path_size, &hook, error, error_size);
+	progress_active = 0;
+	progress_expected = 0;
+	progress_percent = -1;
+	return ok;
 }

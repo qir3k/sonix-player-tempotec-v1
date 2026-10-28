@@ -11,6 +11,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
+#include "src/gui/library/geniusui.h"
 #include "src/gui/library/medialist.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/popover.h"
@@ -23,6 +24,7 @@
 #include "src/system/library/library.h"
 #include "src/system/library/playlists.h"
 #include "src/system/core/utils.h"
+#include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/qobuzsync.h"
 #include "src/system/streaming/tidalcache.h"
@@ -41,7 +43,6 @@ lv_obj_t *playlistpage_screen;
 
 static gui_config_t *config;
 static lv_obj_t *list;
-static lv_obj_t *empty_label;
 static lv_obj_t *title_label;
 
 // Picker mode: the track waiting for a playlist to be chosen.
@@ -439,6 +440,10 @@ static void open_playlist(const char *name) {
 	}
 
 	medialist_open(name, LIBRARY_LIST_PLAYLIST, LIBRARY_FILTER_NONE, name);
+}
+
+void playlistpage_open_named(const char *name) {
+	open_playlist(name);
 }
 
 static void row_clicked_cb(lv_event_t *e) {
@@ -1373,37 +1378,95 @@ static void new_playlist_cb(lv_event_t *e) {
 // page checks, on the way in, whether anything it drew has moved since.
 static unsigned rows_revision;
 
+// The two rows above the playlists themselves: making one, and asking the card
+// for a Smart Mix. The same row drawn twice on purpose -- a second creation
+// path drawn differently would read as a different kind of thing.
+static lv_obj_t *action_row(const char *label_key, const lv_image_dsc_t *glyph, lv_event_cb_t cb) {
+	lv_obj_t *row = lv_btn_create(list);
+	lv_obj_set_size(row, lv_pct(100), ROW_HEIGHT);
+	lv_obj_add_style(row, &theme_style_card, 0);
+	lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
+	lv_obj_set_style_radius(row, ROW_RADIUS, 0);
+	lv_obj_set_style_border_width(row, 0, 0);
+	lv_obj_set_style_shadow_width(row, 0, 0);
+	lv_obj_set_style_pad_hor(row, 16, 0);
+	lv_obj_set_style_pad_column(row, 14, 0);
+	lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_event_bubble(row, true);
+	lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, NULL);
+
+	lv_obj_t *icon = lv_image_create(row);
+	lv_image_set_src(icon, glyph);
+	lv_obj_add_style(icon, &theme_style_icon, 0);
+	lv_obj_set_style_image_recolor(icon, theme()->accent, 0);
+	lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
+
+	lv_obj_t *label = lv_label_create(row);
+	lv_label_set_text(label, tr(label_key));
+	lv_obj_add_style(label, &theme_style_text, 0);
+	lv_obj_set_style_text_font(label, &font_ui_24, 0);
+	lv_obj_set_style_text_color(label, theme()->accent, 0);
+	return row;
+}
+
+// The track a mix would walk from while a playlist is being chosen: the one
+// being added, or the single track of a selection. A set of several has no
+// single seed and gives back an empty path.
+static const char *mix_seed_pending(void) {
+	if (pending_track[0]) {
+		return pending_track;
+	}
+	if (pending_many_count == 1) {
+		return pending_many[0];
+	}
+	return "";
+}
+
+// Whether a mix could be walked from this file at all: a local track, not an
+// episode and not a streamed cache that empties itself. Whether the graph has a
+// place for the track is the graph's to answer, when the row is used.
+static bool mix_seed_usable(const char *path) {
+	return path && path[0] && !podcastcache_is_episode(path) && qobuzcache_track_id(path) == 0 &&
+		   tidalcache_track_id(path) == 0;
+}
+
+// The walk reached a track in the seed picker: build the saved mix from it.
+static void seed_picked_cb(const char *path, void *user) {
+	(void)user;
+	geniusui_create_playlist(path);
+}
+
+static void smartmix_row_cb(lv_event_t *e) {
+	if (player_sheet_drag_active() || switcher_back_drag_active()) {
+		return; // a swipe across the list, not a tap
+	}
+	(void)e;
+	if (picking) {
+		// A track is already in hand: it is the seed, no walk needed.
+		geniusui_create_playlist(mix_seed_pending());
+		return;
+	}
+	// Browsing the playlists there is no track in hand, so the seed is chosen
+	// on the library's own lists -- the records, down to a track.
+	medialist_open_seed(tr("smartmix_pick_seed"), seed_picked_cb, NULL);
+}
+
 static void rebuild_rows(void) {
 	rows_revision = library_revision(LIBRARY_LIST_PLAYLIST);
 	lv_obj_clean(list);
 
 	// The "new playlist" row comes first in both modes: it is the only way the
 	// first playlist can be made.
-	lv_obj_t *new_row = lv_btn_create(list);
-	lv_obj_set_size(new_row, lv_pct(100), ROW_HEIGHT);
-	lv_obj_add_style(new_row, &theme_style_card, 0);
-	lv_obj_add_style(new_row, &theme_style_card_pressed, LV_STATE_PRESSED);
-	lv_obj_set_style_radius(new_row, ROW_RADIUS, 0);
-	lv_obj_set_style_border_width(new_row, 0, 0);
-	lv_obj_set_style_shadow_width(new_row, 0, 0);
-	lv_obj_set_style_pad_hor(new_row, 16, 0);
-	lv_obj_set_style_pad_column(new_row, 14, 0);
-	lv_obj_set_flex_flow(new_row, LV_FLEX_FLOW_ROW);
-	lv_obj_set_flex_align(new_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-	lv_obj_set_event_bubble(new_row, true);
-	lv_obj_add_event_cb(new_row, new_playlist_cb, LV_EVENT_CLICKED, NULL);
+	action_row("playlist_new_playlist", &icon_plus, new_playlist_cb);
 
-	lv_obj_t *new_icon = lv_image_create(new_row);
-	lv_image_set_src(new_icon, &icon_plus);
-	lv_obj_add_style(new_icon, &theme_style_icon, 0);
-	lv_obj_set_style_image_recolor(new_icon, theme()->accent, 0);
-	lv_obj_set_style_image_recolor_opa(new_icon, LV_OPA_COVER, 0);
-
-	lv_obj_t *new_label = lv_label_create(new_row);
-	lv_label_set_text(new_label, tr("playlist_new_playlist"));
-	lv_obj_add_style(new_label, &theme_style_text, 0);
-	lv_obj_set_style_text_font(new_label, &font_ui_24, 0);
-	lv_obj_set_style_text_color(new_label, theme()->accent, 0);
+	// A mix is the second way a playlist can come about. Adding a track, the
+	// seed is that track and the row is offered only when a mix could walk
+	// from it; browsing with no track in hand, the row is always there and the
+	// seed is chosen on the library's own lists.
+	if (!picking || mix_seed_usable(mix_seed_pending())) {
+		action_row("smartmix_create", &icon_files_playlist, smartmix_row_cb);
+	}
 
 	int count = 0;
 	if (picking && pending_qobuz_id > 0) {
@@ -1439,9 +1502,17 @@ static void rebuild_rows(void) {
 	}
 
 	if (count == 0) {
-		lv_obj_set_hidden(empty_label, false);
-	} else {
-		lv_obj_set_hidden(empty_label, true);
+		// Sits inside the list so it scrolls with the two action rows above
+		// it, instead of being pinned behind them.
+		lv_obj_t *note = lv_label_create(list);
+		lv_label_set_text(note, tr("playlist_empty_note"));
+		lv_obj_add_style(note, &theme_style_text_dim, 0);
+		lv_obj_set_style_text_font(note, &font_ui_24, 0);
+		lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+		lv_obj_set_width(note, lv_pct(100));
+		lv_obj_set_style_pad_hor(note, 8, 0);
+		lv_obj_set_style_pad_top(note, 12, 0);
+		lv_obj_set_clickable(note, false);
 	}
 }
 
@@ -1543,14 +1614,6 @@ void playlistpage_init(gui_config_t *cfg) {
 	lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
 	lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_event_bubble(list, true);
-
-	empty_label = lv_label_create(playlistpage_screen);
-	lv_label_set_text(empty_label, tr("playlist_empty_note"));
-	lv_obj_set_style_text_align(empty_label, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_add_style(empty_label, &theme_style_text_dim, 0);
-	lv_obj_set_style_text_font(empty_label, &font_ui_24, 0);
-	lv_obj_align(empty_label, LV_ALIGN_TOP_MID, 0, content_top + 140);
-	lv_obj_set_hidden(empty_label, true);
 
 	// --- the naming dialog: a full-screen layer with the field at the top and
 	// the shared keyboard at the bottom, matching the search page.

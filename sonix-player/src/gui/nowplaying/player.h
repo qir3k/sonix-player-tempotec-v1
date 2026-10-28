@@ -23,6 +23,10 @@ void player_refresh_now_playing(void);
 // Redraws only the artist line, after "Use track artist" has been switched.
 void player_refresh_artist(void);
 
+// Reads the lyrics of `path` again, once an .lrc has been saved beside it, and
+// brings their page in when it is the file playing.
+void player_lyrics_reload(const char *path);
+
 // The "4/12" under the progress bar: the place in the queue as the screen shows
 // it (the deal's order under shuffle) and the length. False, with both zero,
 // where the screen shows nothing -- one track, a book, DLNA, a stream.
@@ -162,9 +166,10 @@ void player_restore_index(library_index_t *ix, int start_index, const char *cons
 						  int extra_count, const char *filepath, double position);
 
 // The same for a queue saved as a plain list of paths. `custom` restores the
-// queue's own custom flag, which the list of paths on its own cannot carry.
-void player_restore_list(const char *const *list, int count, int start_index, bool custom, const char *filepath,
-						 double position);
+// queue's own custom flag, which the list of paths on its own cannot carry, and
+// `ordered` restores its fixed-sequence (Smart Mix) flag.
+void player_restore_list(const char *const *list, int count, int start_index, bool custom, bool ordered,
+						 const char *filepath, double position);
 
 // The loaded track's artwork, already decoded and scaled by the player: the
 // cover itself, and the blurred copy the controls are drawn on. NULL when the

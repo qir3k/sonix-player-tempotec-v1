@@ -11,6 +11,12 @@
 #define YTMUSIC_URL_MAX 2048
 #define YTMUSIC_BROWSE_ID_MAX 128
 #define YTMUSIC_ITEMS_MAX 24
+// A row's artwork URL: the largest size the page offers, which for the WEB_REMIX
+// client is the short yt3.googleusercontent.com form, a little over 130
+// characters. Rows are held in arrays of a hundred-odd entries, so the buffer is
+// kept to the shape that is actually served rather than the 2 KB a stream URL
+// needs; a URL longer than this leaves the row with its placeholder glyph.
+#define YTMUSIC_ART_URL_MAX 160
 #define YTMUSIC_SECTIONS_MAX 6
 #define YTMUSIC_SECTION_ITEMS_MAX 12
 
@@ -41,6 +47,13 @@ typedef struct {
 	char browse_id[YTMUSIC_BROWSE_ID_MAX];
 	char title[YTMUSIC_TITLE_MAX];
 	char subtitle[YTMUSIC_NAME_MAX];
+	// The album the row named, when the page carried one: a song row's second
+	// column is "artist • album • duration". Empty on pages that do not name
+	// it (an album's own track list), where the list's title stands in for it.
+	char album[YTMUSIC_TITLE_MAX];
+	// The artwork the list draws on the row, and empty when the page carried
+	// none: the row then keeps the glyph it was built with.
+	char thumbnail[YTMUSIC_ART_URL_MAX];
 	int duration;
 } ytmusic_item_t;
 
@@ -115,14 +128,113 @@ int ytmusic_browse_items(const char *browse_id, ytmusic_item_t *items, int limit
 int ytmusic_explore_sections(ytmusic_section_t *sections, int limit,
 							 char *error, size_t error_size);
 
+// One track's address, and what the relay said about it. `relay_proxied`
+// (optional) is set when that address is the relay's own /audio endpoint rather
+// than one the relay merely named; see ytmusic_relay_stream_url().
 bool ytmusic_audio_url(const char *video_id, char *url, size_t url_size,
 					   int *duration, char *title, size_t title_size,
-					   char *artist, size_t artist_size,
+					   char *artist, size_t artist_size, bool *relay_proxied,
 					   char *error, size_t error_size);
 
-// Fetches one AAC/MP4 audio stream to the temporary playback cache. This is a
-// blocking operation; call from a worker, not from the UI or audio thread.
+// Where the bytes of one track are fetched from, given the address the relay
+// answered with: that address when it is the relay's own, and the relay's
+// /audio/<video-id> -- the endpoint tools/ytmusic-relay.py serves -- when it is
+// somebody else's, which the player cannot fetch. `proxied` says which of the
+// two was chosen. False when there is nothing to build from.
+// `itag` is carried into the proxied address, so the relay serves the format
+// this end chose; 0 leaves it out.
+bool ytmusic_relay_stream_url(const char *base, const char *video_id, long itag, const char *reported,
+							  char *out, size_t out_size, bool *proxied);
+
+// ---------------------------------------------------------------------------
+// Where playback comes from
+//
+// Three answers, and the player chooses without being told: the device itself
+// (the player request it makes on its own -- no account, no helper machine), a
+// Piped or Invidious instance, and the LAN relay in [ytmusic] relay_base.
+//
+// "auto" is the default and tries them in that order. The other values pin one
+// first -- "direct", "relay", or an instance's https:// address -- and the
+// rest are still tried after it, because a pinned host being down should not
+// mean silence. The settings page lists exactly what these return.
+#define YTMUSIC_SOURCE_MAX 96
+#define YTMUSIC_SOURCES_MAX 12
+
+typedef struct {
+	// What the settings store keeps, and what ytmusic_source_select() takes:
+	// "auto", "direct", "relay", or the instance's base address.
+	char value[YTMUSIC_SOURCE_MAX];
+	// What the row shows: a translated tag (for the three built-in answers) or
+	// the instance's host name.
+	char label[YTMUSIC_SOURCE_MAX];
+} ytmusic_source_t;
+
+// The choices, the default first. Returns how many were written.
+int ytmusic_sources(ytmusic_source_t *out, int limit);
+// The value in force, "auto" when nothing was ever chosen.
+void ytmusic_source_active(char *out, size_t size);
+// Stores a choice from ytmusic_sources(). False when the value is not one of
+// them -- an address that is not http(s), or one too long to send.
+bool ytmusic_source_select(const char *value);
+// The instance addresses tried, in order: the configured [ytmusic] instances
+// list when there is one, the built-in public list otherwise, and the pinned
+// instance first when one is pinned. Fills `out` with the addresses and
+// returns how many: each is a base like "https://pipedapi.kavin.rocks", with
+// no trailing slash.
+int ytmusic_instance_bases(char out[][YTMUSIC_SOURCE_MAX], int limit);
+
+// Fetches one AAC/MP4 audio stream to the temporary playback cache and returns
+// only when the file is whole. This is a blocking operation; call from a worker,
+// not from the UI or audio thread. Used by the explicit "keep on card"
+// download, which has nothing to play while it runs.
 bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
 								   char *error, size_t error_size);
+
+// The same download, for a song the listener is waiting to hear. `ready` is
+// called once, from this worker thread, as soon as enough of the file is on the
+// disk for the decoder to open it -- `path` being the file to hand to the
+// player. The transfer then carries on behind playback, so a song starts in
+// seconds instead of after the whole thing has arrived, and `growfile` is what
+// lets the decoder wait for the rest of each frame. Blocking; call from a
+// worker. Returns false when nothing could be played at all: a failure after
+// `ready` was called still returns true, because the listener already has
+// audio and the file simply ends where the transfer did.
+typedef void (*ytmusic_ready_cb)(const char *path, void *user);
+bool ytmusic_stream_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
+								 ytmusic_ready_cb ready, void *user,
+								 char *error, size_t error_size);
+
+// Whether `path` is a finished download of that cache -- what the player was
+// handed for a YouTube Music song, and the only kind of file the "save to the
+// card" action copies out of it.
+bool ytmusic_cache_owns(const char *path);
+
+// How far the download in flight has got, for the page's loading card. Percent
+// is -1 until the instance has said how big the file is, and `running` is false
+// when nothing is downloading.
+void ytmusic_download_progress(int *percent, bool *running);
+
+// The country whose store the catalogue answers from, and the language its
+// labels come back in ("PL"/"en"): what the region row on the settings page
+// stores, and what turns Explore into Polish recommendations while the rows stay
+// in English. Both are two letters, and the page offers only real pairs.
+#define YTMUSIC_REGION_MAX 8
+typedef struct {
+	char region[YTMUSIC_REGION_MAX];   // "US", "PL", a country's store
+	char language[YTMUSIC_REGION_MAX]; // "en", "pl", the row language
+	char label[48];                    // "Poland, English rows"
+} ytmusic_region_t;
+
+// The choices, the default first.
+int ytmusic_regions(ytmusic_region_t *out, int limit);
+// The pair in force.
+void ytmusic_region_active(char *region, size_t region_size, char *language, size_t language_size);
+// Stores a pair. False when either code is not two letters.
+bool ytmusic_region_select(const char *region, const char *language);
+
+// The audio quality row: high takes 256 kbit/s AAC where an instance offers it
+// (itag 141) and the 128 kbit/s one everywhere else; standard always takes 128.
+bool ytmusic_quality_high(void);
+void ytmusic_quality_set(bool high);
 
 #endif /* YTMUSIC_H */

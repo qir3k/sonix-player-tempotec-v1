@@ -16,6 +16,7 @@
 #include "src/gui/streaming/tidalpage.h"
 #include "src/gui/streaming/subsonicpage.h"
 #include "src/gui/streaming/ytmusicpage.h"
+#include "src/system/addons/addons.h"
 #include "src/system/streaming/ytmusic.h"
 
 lv_obj_t *streaming_screen;
@@ -30,16 +31,23 @@ typedef struct {
 	const lv_image_dsc_t *icon;
 	theme_semantic_t tone;
 	lv_obj_t **target;
+	// The addon this service belongs to: the one setting that both hides its
+	// tile and keeps its pages from being built (see addons.h).
+	const char *addon;
 } streaming_item_t;
 
 static const streaming_item_t tokyo_items[] = {
-	{"radio", &icon_radio_player, THEME_SEMANTIC_PURPLE, &radiopage_screen},
-	{"podcasts", &icon_podcast_list, THEME_SEMANTIC_CYAN, &podcast_screen},
-	{"tidal", &icon_tidal_mark, THEME_SEMANTIC_CYAN, &tidal_screen},
-	{"qobuz", &icon_qobuz_mark, THEME_SEMANTIC_PURPLE, &qobuz_screen},
-	{"subsonic", &icon_music_note, THEME_SEMANTIC_BLUE, &subsonic_screen},
-	{"YouTube Music", &icon_music_note, THEME_SEMANTIC_RED, &ytmusic_screen},
+	{"radio", &icon_radio_player, THEME_SEMANTIC_PURPLE, &radiopage_screen, "radio"},
+	{"podcasts", &icon_podcast_list, THEME_SEMANTIC_CYAN, &podcast_screen, "podcasts"},
+	{"tidal", &icon_tidal_mark, THEME_SEMANTIC_CYAN, &tidal_screen, "tidal"},
+	{"qobuz", &icon_qobuz_mark, THEME_SEMANTIC_PURPLE, &qobuz_screen, "qobuz"},
+	{"subsonic", &icon_music_note, THEME_SEMANTIC_BLUE, &subsonic_screen, "subsonic"},
+	{"YouTube Music", &icon_music_note, THEME_SEMANTIC_RED, &ytmusic_screen, "ytmusic"},
 };
+
+static bool streaming_shown(int id, bool visible) {
+	return visible && addons_enabled(tokyo_items[id].addon);
+}
 
 #define STREAMING_COUNT ((int)(sizeof(tokyo_items) / sizeof(tokyo_items[0])))
 
@@ -60,6 +68,9 @@ static void streaming_list_build(gui_config_t *cfg) {
 		const streaming_item_t *item = &tokyo_items[i];
 		streaming_rows[i] = settingsrow_add(streaming_list, item->label, NULL, switch_screen_cb, *item->target);
 		settingsrow_add_icon(streaming_rows[i], item->icon, item->tone);
+		if (!addons_enabled(item->addon)) {
+			lv_obj_set_hidden(streaming_rows[i], true);
+		}
 	}
 }
 
@@ -70,20 +81,25 @@ void streaming_refresh_layout(void) {
 	int order[STREAMING_COUNT];
 	bool visible[STREAMING_COUNT];
 	if (menuorder_load(MENUORDER_STREAMING, order, STREAMING_COUNT, visible) != STREAMING_COUNT) {
-		return;
+		// Nothing arranged yet, or an order that no longer fits: the built-in
+		// order with everything shown, still subject to the addon switches.
+		for (int i = 0; i < STREAMING_COUNT; i++) {
+			order[i] = i;
+			visible[i] = true;
+		}
 	}
 	if (streaming_grid) {
 		grid_entry_t entries[STREAMING_COUNT];
 		make_streaming_entries(entries, order, visible);
 		gridpage_replace_entries(streaming_grid, streaming_cfg, entries, STREAMING_COUNT, 2, 3);
 		for (int i = 0; i < STREAMING_COUNT; i++) {
-			lv_obj_set_hidden(lv_obj_get_child(streaming_grid, i), !visible[order[i]]);
+			lv_obj_set_hidden(lv_obj_get_child(streaming_grid, i), !streaming_shown(order[i], visible[order[i]]));
 		}
 	}
 	if (streaming_list) {
 		for (int i = 0; i < STREAMING_COUNT; i++) {
 			lv_obj_t *row = streaming_rows[order[i]];
-			lv_obj_set_hidden(row, !visible[order[i]]);
+			lv_obj_set_hidden(row, !streaming_shown(order[i], visible[order[i]]));
 			lv_obj_move_to_index(row, i);
 		}
 	}
@@ -105,11 +121,15 @@ void streaming_init(gui_config_t *cfg) {
 	// Where an empty page keeps its response body for a pull: the same card
 	// the player's own logs land on.
 	ytmusic_set_card_root(cfg && cfg->sd_root_path ? cfg->sd_root_path : NULL);
-	qobuzpage_init(cfg);
-	tidalpage_init(cfg);
-	podcastpage_init(cfg);
-	subsonicpage_init(cfg);
-	ytmusicpage_init(cfg);
+	// Only the services that are switched on are built: these pages hold the
+	// lists, the rows and the artwork of a whole catalogue, and an unused one is
+	// the largest thing in the heap. The system init above (cookies, keys) stays
+	// unconditional and cheap.
+	if (addons_enabled("qobuz")) qobuzpage_init(cfg);
+	if (addons_enabled("tidal")) tidalpage_init(cfg);
+	if (addons_enabled("podcasts")) podcastpage_init(cfg);
+	if (addons_enabled("subsonic")) subsonicpage_init(cfg);
+	if (addons_enabled("ytmusic")) ytmusicpage_init(cfg);
 
 	grid_entry_t entries[STREAMING_COUNT];
 	int order[STREAMING_COUNT];

@@ -202,6 +202,7 @@ extern const lv_image_dsc_t icon_pencil;
 extern const lv_image_dsc_t icon_calculator;
 extern const lv_image_dsc_t icon_notes;
 extern const lv_image_dsc_t icon_enter;
+extern const lv_image_dsc_t icon_lyrics_search;
 extern const lv_image_dsc_t icon_quality_lossy;
 extern const lv_image_dsc_t icon_quality_cd;
 extern const lv_image_dsc_t icon_quality_hifi;
@@ -250,10 +251,16 @@ extern const lv_image_dsc_t icon_year;
 extern const lv_image_dsc_t icon_most_played;
 extern const lv_image_dsc_t icon_menu_year;
 extern const lv_image_dsc_t icon_menu_most_played;
+extern const lv_image_dsc_t icon_metronome;
+extern const lv_image_dsc_t icon_menu_metronome;
 
 // Names for a bitmap that is already above, so the glyph is stored once.
 #define icon_files_music icon_music2
 #define icon_save_state icon_import
 #define icon_airpods_transparency icon_now_playing
+
+// Hand-rasterised, not from the generated icons.c: see icon_plug.c. The same
+// svg and generator entry exist, so a regeneration can take it over.
+extern const lv_image_dsc_t icon_plug;
 
 #endif // ICONS_H

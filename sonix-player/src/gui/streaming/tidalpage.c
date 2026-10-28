@@ -19,6 +19,7 @@
 #include "src/gui/shell/popover.h"
 #include "src/gui/streaming/qobuzart.h"
 #include "src/gui/shell/settingsrow.h"
+#include "src/system/playback/sleeptimer.h"
 #include "src/gui/shell/spinner.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -4655,6 +4656,8 @@ static void build_home_settings_page(gui_config_t *cfg) {
 
 static lv_obj_t *tsettings_screen;
 static lv_obj_t *quality_pills[4];
+static settingsrow_duration_t tidal_sleep_row;
+static void tidal_sleep_refresh(void);
 
 static void quality_refresh(void) {
 	int current = tidal_get_quality();
@@ -4703,12 +4706,43 @@ static void logout_cb(lv_event_t *e) {
 static void open_settings_cb(lv_event_t *e) {
 	(void)e;
 	quality_refresh();
+	// The timer can have been started or stopped from the control centre
+	// while this page was elsewhere.
+	tidal_sleep_refresh();
 	switch_screen(tsettings_screen);
+}
+
+// The music transport's sleep timer, offered here as well as in the control
+// centre: a Tidal track plays through the same player as a file or a YouTube
+// Music song, so it is the same countdown, the same length and the same switch
+// stopping it. Turning it on here lights the music button in the control
+// centre, and the other way round.
+static void tidal_sleep_refresh(void) {
+	settingsrow_duration_set_minutes(&tidal_sleep_row, sleeptimer_minutes(SLEEPTIMER_MUSIC));
+	settingsrow_duration_expanded(&tidal_sleep_row, sleeptimer_enabled(SLEEPTIMER_MUSIC));
+	settingsrow_duration_repaint(&tidal_sleep_row);
+}
+
+static void tidal_sleep_toggle_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_enabled(SLEEPTIMER_MUSIC,
+						lv_obj_has_state(tidal_sleep_row.toggle, LV_STATE_CHECKED));
+	tidal_sleep_refresh();
+}
+
+static void tidal_sleep_wheel_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_minutes(SLEEPTIMER_MUSIC, settingsrow_duration_minutes(&tidal_sleep_row));
 }
 
 static void build_settings_page(gui_config_t *cfg) {
 	tsettings_screen = lv_obj_create(NULL);
 	lv_obj_t *container = settingsrow_page(tsettings_screen, cfg, "tidal_settings");
+
+	// What this page plays, before what it fetches through.
+	settingsrow_toggle_duration(container, "sleep_timer", tidal_sleep_toggle_cb,
+								tidal_sleep_wheel_cb, &tidal_sleep_row);
+	tidal_sleep_refresh();
 
 	// Quality: the shared pill card, the same one "DSD output" and "Replay
 	// gain" use. The pills were hand-built here before, at the 480-px size

@@ -13,6 +13,8 @@
 
 The firmware builder starts with an official V1 update package, replaces the stock music player and interface with Sonix, then repackages the update as `v1.upt`.
 
+This checkout uses **`personal` for personal firmware releases**. Merging work from `dev` into `personal` starts a build, gives the personal build a new version, and publishes its `v1.upt` and matching checksum as a release in this repository. Pushes to `dev` do not package firmware. The `main` branch is the shareable version: it can produce an Actions artifact, and a release from it is optional. See [the release guide](docs/releases.md).
+
 This is not an official TempoTec or HiBy release. **It has been tested on physical TempoTec Variations V1 hardware and works on the tested device.** It targets the **TempoTec Variations V1 only**; compatibility with the V1-A or other players in the Variations family is not established.
 
 
@@ -192,30 +194,26 @@ The V1 build includes a local library and file browser, streaming services, wire
 
 The boot screen can be set to **Retrospace**, **Space**, **Travelling in space**, the stock light or dark image, or a custom JPEG/PNG in the card's `Bootlogo` folder. Custom images are copied into the player so the selected boot screen remains available without the card. Rounded screen corners are also optional and off by default.
 
+The battery is looked after at both ends. At **5 %** the player says so — a red card, and the panel comes back up for it if it was dark — and at **1 %** it switches itself off the ordinary way, position written and card unmounted, instead of letting the cell drop out from under it; below 10 % it also stays out of standby, because a sleeping player cannot watch its own gauge. A player that was **switched off and is then put on a charger** comes up on a battery screen instead of the library: the level, the percentage and what the charger is doing, going dark after ten seconds, with a **press** of the power button to bring it back and a **hold** to start the player after all.
+
 See [FEATURES.md](FEATURES.md) for a longer feature list. Streaming services also require valid credentials and may depend on third-party service availability.
 
 ## Build a firmware image
 
-The image is built by GitHub Actions: the device binary needs a MIPS toolchain this repository builds from `sonix-player/rockboxdev/`, plus `7z`, `squashfs-tools` and `genisoimage`. A push to `main` starts a firmware build automatically; development pushes to `dev` do not. The main-branch build is uploaded as an Actions artifact that can be downloaded and shared.
+GitHub Actions builds the firmware using the MIPS toolchain in `sonix-player/rockboxdev/`, plus `7z`, `squashfs-tools` and `genisoimage`. A push or merge to `personal` automatically builds and publishes a personal release. Each push normally increments the patch version; commit messages can request a minor or major version bump. The built personal image is stamped to check for updates from this repository and credits the personal fork. Pushes to `dev` do not run the firmware build.
 
-1. **Actions → Build TempoTec V1 firmware → Run workflow.**
-2. Fill it in:
-   - `stock_firmware_url` — an official TempoTec V1 update. Leave the default, or give a link or file of your own.
-   - `acknowledge_community_build` — tick it; the run stops without it.
-   - `build_ref` — a branch, tag or commit to build. Empty builds the ref the dialog was opened on.
-   - `publish_release_tag` — empty unless a release is being cut; it uploads `v1.upt` and `v1_md5.txt` onto that release.
-3. The first run compiles and caches the toolchain and takes 30–90 minutes; later runs are far quicker.
+To create a personal release, merge the finished work into `personal`. The workflow builds the merged commit, creates a version tag and release, and attaches `v1.upt` plus `v1_md5.txt`. Its Actions artifact also includes the build report, validation reports and player binaries. The first run builds and caches the toolchain and can take 30–90 minutes; later runs are usually faster.
 
-The workflow downloads the stock image, checks that its kernel is untouched, builds the player with `make target`, packs the image with `sonix-packer/sonix_firmware_packer.sh`, validates the result, and uploads an artifact named after the commit it built — `sonix-tempotec-v1-<sha>`, kept for 14 days. The artifact contains `v1.upt`, `v1_md5.txt`, a build report with the revision and checksums, validation reports, and the player binaries. A main-branch build is an Actions artifact; publishing it as a GitHub release is a separate, deliberate action.
+For a shareable build from `main`, that branch's workflow run provides an Actions artifact named for its exact commit and kept for 14 days. It does not create a personal release. Publishing a `main` build is optional and deliberate: run the workflow for the exact tagged commit or set `publish_release_tag` for an existing release. The workflow checks that the tag and built commit match before uploading the two firmware files. It does not build a firmware image from `dev`.
 
-The workflow can also be run manually for a chosen ref or release tag. Use the artifact whose build report matches the revision you intend to install; do not choose an artifact just because it is the newest one in the Actions list.
+The workflow can also be run manually for a chosen branch, tag or commit. A manual run requires the stock firmware URL and the community-build acknowledgement. If you publish to a release, use the exact commit named by its tag. Always check `BUILD-REPORT.txt` to confirm which source revision produced an artifact.
 
 ## Install or restore firmware
 
 Only attempt this on a TempoTec Variations V1. Read the warning above before proceeding.
 
 1. Keep the **official V1 `v1.upt` and its matching `v1_md5.txt`** somewhere safe. They are needed if you want to return to stock.
-2. Extract the workflow artifact — its name ends in the commit it was built from, and `BUILD-REPORT.txt` inside repeats it — and copy **both** `v1.upt` and `v1_md5.txt` to the root of a microSD card supported by the device. On a release, the uploaded `v1.upt` is always built from that release's own tag; if `BUILD-REPORT.txt` names another commit, the artifact is not the release's and should not be flashed as it.
+2. For the personal build, download `v1.upt` and `v1_md5.txt` together from the personal release in this repository. For a shareable `main` build, use its Actions artifact or its deliberately published release, and check that its build report names the intended commit. Copy both files to the root of a microSD card supported by the device.
 3. Charge the player adequately, insert the card and start the device's built-in firmware update process. Menu names vary by stock firmware version; follow the device's on-screen instructions and do not interrupt the update.
 4. If you want to restore stock firmware, put the original vendor `v1.upt` and its matching checksum file at the card root and use the same update process.
 
@@ -244,6 +242,8 @@ api_secret =
 api_key =
 api_secret =
 ```
+
+ListenBrainz is the one scrobbler that needs no credentials in the image: its account is a personal user token, requested on listenbrainz.org/settings and pasted into the player's Settings → Music → ListenBrainz. Only the token is kept on the device. Scrobbling to Last.fm and to ListenBrainz are independent and can run side by side.
 
 #### Qobuz without keys of your own
 
@@ -325,6 +325,7 @@ make -C sonix-player/tests ui
 - `sonix-player/tools/sonix-bugreport.sh` — one-file diagnostic bundle, run on the device over ADB.
 - `sonix-player/tests/README.md` — the headless suites, and what each one pins.
 - `.github/workflows/build-tempotec-v1.yml` — the firmware build described above.
+- `docs/releases.md` — how `dev`, `personal` and `main` produce personal and shareable firmware.
 - `FEATURES.md` — detailed feature notes.
 - `PATCHES.md` — device-porting and implementation notes.
 - `LICENSE` — GNU General Public License, version 3. Third-party components retain their own licenses.

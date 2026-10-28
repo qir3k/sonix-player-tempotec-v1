@@ -6,9 +6,10 @@
 #include "lvgl/lvgl.h"
 
 // The control centre: a sheet with the wifi and bluetooth buttons (tap to
-// toggle, long press to open the page), the transport controls and the
-// brightness slider. A swipe back towards the edge carries it out again, and a
-// tap outside puts it away the short way.
+// toggle, long press to open the page), the transport controls and the slider
+// under them -- the panel brightness, or the volume if that is what the user
+// asked it to be (see quickpanel_volume_slider). A swipe back towards the edge
+// carries it out again, and a tap outside puts it away the short way.
 //
 // Which edge is the setting in gestures.h. By default it comes down from the
 // status bar, which is what this fork has always done; with the stock
@@ -19,6 +20,14 @@
 // quickpanel.c.
 void quickpanel_init(gui_config_t *cfg);
 void quickpanel_open(void);
+
+// What the slider under the panel's buttons sets. Off -- the default -- it is
+// the panel brightness, where the stock brightness bar has always been; on, it
+// is the output volume and the row's sun becomes a speaker. The choice is saved
+// as [quickpanel] volume_slider and picked up at the next pull, with no
+// restart; Settings > Screen carries the switch.
+bool quickpanel_volume_slider(void);
+void quickpanel_set_volume_slider(bool on);
 
 // True while something else owns the device (USB DAC mode, Wi-Fi transfer, a
 // Bluetooth receiver) and the sheets must stay shut.
@@ -43,8 +52,8 @@ void quickpanel_drag_end(void);
 //
 // The panel holds up to sixteen, in a grid of sixteen places. A place can also
 // be empty: the panel simply draws one button fewer. The card shows the first
-// eight; past them a handle appears under the brightness slider, and dragging
-// the sheet down stretches the card over the now-playing one to show the rest.
+// eight; past them a handle appears under the slider, and dragging the sheet
+// down stretches the card over the now-playing one to show the rest.
 //
 // Both the grid and the buttons left out of it live in [quickpanel] as lists of
 // names -- `order`, with "-" for an empty place, and `hidden`. Names and not

@@ -15,7 +15,9 @@
 #include "src/gui/settings/kblayoutpage.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/gui/settings/plugins.h"
 #include "src/gui/settings/powersettings.h"
+#include "src/gui/shell/quickpanel.h"
 #include "src/gui/settings/remap.h"
 #include "src/gui/settings/screensaver.h"
 #include "src/gui/shell/icons.h"
@@ -59,6 +61,7 @@ static lv_obj_t *screensettings_screen;
 static lv_obj_t *othersettings_screen;
 static lv_obj_t *brightness_slider;
 static lv_obj_t *brightness_value;
+static lv_obj_t *cc_volume_switch; // what the control centre's slider is for
 static lv_obj_t *screen_off_value;
 static lv_obj_t *screen_off_slider;
 static lv_obj_t *doubletap_switch;
@@ -224,6 +227,14 @@ static void brightness_released_cb(lv_event_t *e) {
 	config_save();
 }
 
+// Which of its two jobs the slider in the control centre does. Nothing here is
+// rebuilt: quickpanel keeps the choice and applies it to the row at once, and
+// the sheet reads it again at every pull in case the row is not built yet.
+static void cc_volume_toggled_cb(lv_event_t *e) {
+	(void)e;
+	quickpanel_set_volume_slider(lv_obj_has_state(cc_volume_switch, LV_STATE_CHECKED));
+}
+
 // The panel's real range is only known after power_init() has run, which is
 // after the GUI is built -- so the slider syncs itself every time the page
 // comes up.
@@ -313,6 +324,21 @@ static void build_screen_page(gui_config_t *cfg) {
 
 	lv_obj_add_event_cb(brightness_slider, brightness_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
 	lv_obj_add_event_cb(brightness_slider, brightness_released_cb, LV_EVENT_RELEASED, NULL);
+
+	// What the slider under the control centre's buttons is for: the brightness
+	// this page sets, or the output volume instead. Off keeps the brightness
+	// bar, which is what the stock firmware puts there and what this player has
+	// always had, so an update moves nobody's hand.
+	settingsrow_toggle(container, "settings_cc_volume", &cc_volume_switch, cc_volume_toggled_cb);
+	if (quickpanel_volume_slider()) {
+		lv_obj_add_state(cc_volume_switch, LV_STATE_CHECKED);
+	}
+	lv_obj_t *cc_volume_note = lv_label_create(container);
+	lv_label_set_long_mode(cc_volume_note, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(cc_volume_note, lv_pct(100));
+	lv_obj_add_style(cc_volume_note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(cc_volume_note, &font_ui_22, 0);
+	lv_label_set_text(cc_volume_note, tr("settings_cc_volume_note"));
 
 	// How long the panel waits before it goes dark. Straight under the
 	// brightness: both are about the panel, and the one that switches it off is
@@ -546,6 +572,11 @@ void settings_init(gui_config_t *cfg) {
 	settingsrow_add_caption(language_row, "settings_language_detail");
 	language_bind_menu_row(language_row);
 
+	// The addon switches, above the rest of the other settings: what the player
+	// carries is a bigger decision than how it behaves.
+	lv_obj_t *plugins_row = settingsrow_add(container, "plugins", NULL, switch_screen_cb, plugins_screen);
+	settingsrow_add_icon(plugins_row, &icon_plug, THEME_SEMANTIC_PURPLE);
+	settingsrow_add_caption(plugins_row, "settings_plugins_detail");
 	lv_obj_t *more_row = settingsrow_add(container, "more", NULL, switch_screen_cb, othersettings_screen);
 	settingsrow_add_icon(more_row, &icon_ellipsis_vertical, THEME_SEMANTIC_GREEN);
 	settingsrow_add_caption(more_row, "settings_more_detail");
