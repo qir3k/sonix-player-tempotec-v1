@@ -184,4 +184,32 @@ int ytmusic_instance_bases(char out[][YTMUSIC_SOURCE_MAX], int limit);
 bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
 								   char *error, size_t error_size);
 
+// Whether `path` is a finished download of that cache -- what the player was
+// handed for a YouTube Music song, and the only kind of file the "save to the
+// card" action copies out of it.
+bool ytmusic_cache_owns(const char *path);
+
+// The country whose store the catalogue answers from, and the language its
+// labels come back in ("PL"/"en"): what the region row on the settings page
+// stores, and what turns Explore into Polish recommendations while the rows stay
+// in English. Both are two letters, and the page offers only real pairs.
+#define YTMUSIC_REGION_MAX 8
+typedef struct {
+	char region[YTMUSIC_REGION_MAX];   // "US", "PL", a country's store
+	char language[YTMUSIC_REGION_MAX]; // "en", "pl", the row language
+	char label[48];                    // "Poland, English rows"
+} ytmusic_region_t;
+
+// The choices, the default first.
+int ytmusic_regions(ytmusic_region_t *out, int limit);
+// The pair in force.
+void ytmusic_region_active(char *region, size_t region_size, char *language, size_t language_size);
+// Stores a pair. False when either code is not two letters.
+bool ytmusic_region_select(const char *region, const char *language);
+
+// The audio quality row: high takes 256 kbit/s AAC where an instance offers it
+// (itag 141) and the 128 kbit/s one everywhere else; standard always takes 128.
+bool ytmusic_quality_high(void);
+void ytmusic_quality_set(bool high);
+
 #endif /* YTMUSIC_H */
