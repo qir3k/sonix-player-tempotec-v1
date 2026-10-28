@@ -1708,6 +1708,7 @@ static const struct {
 	[MUSIC_TILE_PLAYLISTS] = {"playlists", "playlists", &icon_list_music},
 	[MUSIC_TILE_MOST_PLAYED] = {"most_played", "music_most_played", &icon_most_played},
 	[MUSIC_TILE_BROWSE] = {"browse", "music_browse", &icon_folder},
+	[MUSIC_TILE_SCAN] = {"scan", "music_scan_library", &icon_refresh},
 	[MUSIC_TILE_SEARCH] = {"search", "search", &icon_search},
 };
 

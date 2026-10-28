@@ -497,6 +497,9 @@ static void fit_row(lv_obj_t *row) {
 		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
 		lv_obj_set_style_text_line_space(label, 0, 0);
 		lv_obj_set_width(label, LV_MAX(1, avail));
+		// The width is the room beside the switch now; a toggle row's own
+		// keep-clear padding would be subtracted from it a second time.
+		lv_obj_set_style_pad_right(label, 0, 0);
 		lv_obj_set_height(label, lv_font_get_line_height(&font_ui_18));
 		lv_obj_align(label, LV_ALIGN_TOP_LEFT, leading_width, 4);
 
@@ -520,6 +523,10 @@ static void fit_row(lv_obj_t *row) {
 	if (avail > 0) {
 		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
 		lv_obj_set_width(label, avail);
+		// Same reason as above, and the one that bit the Plugins page hardest:
+		// the label was given the room left beside the switch and then had the
+		// 60 px it keeps clear of that switch taken out of it again.
+		lv_obj_set_style_pad_right(label, 0, 0);
 	}
 }
 
@@ -1168,6 +1175,11 @@ void settingsrow_add_caption(lv_obj_t *row, const char *text) {
 	lv_obj_t *caption = settingsrow_caption(row);
 	if (caption) {
 		lv_label_set_text(caption, tr(text));
+		// The row was built a moment ago and has no width until the column
+		// has placed it: fitting now would measure the card's minimum width
+		// and give the name a column of a few pixels, which is a black band
+		// with slivers of letters in it on the Plugins page.
+		lv_obj_update_layout(lv_obj_get_parent(row));
 		fit_row(row);
 		return;
 	}
@@ -1188,6 +1200,8 @@ void settingsrow_add_caption(lv_obj_t *row, const char *text) {
 	captions[caption_count++] = (settingsrow_caption_t){.row = row, .label = caption};
 	lv_obj_add_event_cb(row, settingsrow_caption_row_deleted_cb, LV_EVENT_DELETE, NULL);
 	settingsrow_register_refresh();
+	// Laid out first, then fitted -- see above.
+	lv_obj_update_layout(lv_obj_get_parent(row));
 	fit_row(row);
 }
 
