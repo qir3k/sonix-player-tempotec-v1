@@ -31,6 +31,8 @@
 #include "src/system/playback/device_state.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
+#include "src/gui/settings/plugins.h"
+#include "src/system/addons/addons.h"
 #include "src/gui/shell/morepage.h"
 #include "src/gui/shell/menuorder.h"
 #include "src/gui/shell/theme.h"
@@ -1296,6 +1298,23 @@ int main(int argc, char **argv) {
 	notes_init(&cfg);
 	metronome_init(&cfg);
 	morepage_init(&cfg);
+	// The Plugins page: every module is a row with a switch, and the rows have
+	// to be readable -- a page whose names are drawn under a card looks exactly
+	// like a page with nothing on it.
+	plugins_init(&cfg);
+	lv_screen_load(plugins_screen);
+	lv_obj_update_layout(plugins_screen);
+	for (int i = 0; i < addons_count(); i++) {
+		const addon_t *addon = addons_at(i);
+		lv_obj_t *name = find_label(plugins_screen, tr(addon->label));
+		assert(name);
+		lv_area_t area;
+		lv_obj_get_coords(name, &area);
+		assert(area.x2 > area.x1);
+		assert(lv_obj_get_style_text_opa(name, LV_PART_MAIN) > LV_OPA_50);
+	}
+	dump_snapshot(plugins_screen, "plugins");
+	lv_screen_load(morepage_screen);
 	player_drag_attaches = 0; // counting from here: only the viewers are built below
 	textview_init(&cfg); // the notes shelf shows a long note through it
 	pictureview_init(&cfg);

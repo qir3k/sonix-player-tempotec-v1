@@ -575,7 +575,7 @@ void settings_init(gui_config_t *cfg) {
 	// The addon switches, above the rest of the other settings: what the player
 	// carries is a bigger decision than how it behaves.
 	lv_obj_t *plugins_row = settingsrow_add(container, "plugins", NULL, switch_screen_cb, plugins_screen);
-	settingsrow_add_icon(plugins_row, &icon_ellipsis_vertical, THEME_SEMANTIC_PURPLE);
+	settingsrow_add_icon(plugins_row, &icon_plug, THEME_SEMANTIC_PURPLE);
 	settingsrow_add_caption(plugins_row, "settings_plugins_detail");
 	lv_obj_t *more_row = settingsrow_add(container, "more", NULL, switch_screen_cb, othersettings_screen);
 	settingsrow_add_icon(more_row, &icon_ellipsis_vertical, THEME_SEMANTIC_GREEN);
