@@ -185,6 +185,13 @@ The cache directory is `/tmp/sonix-ytmusic` on the device. The suite points
 host can refuse every create under `\tmp` (the CRT answers EACCES, and an
 earlier version of these checks printed a skip line instead of running them).
 
+The InnerTube key is a build input, never a file in the repository, so the suite
+is built twice: `test_ytmusic` carries a dummy key (`test-key-not-a-credential`,
+another value the fake network never sees), and `test_ytmusic_keyless` is built
+with an empty one and checks the only thing that build can check -- that the
+first search returns `ytmusic_api_key_missing` instead of sending a request the
+endpoint can only refuse. Both are run by `make ytmusic`.
+
 The settings the page stores are pinned too: the quality pill picks itag 141
 (256 kbit/s AAC) when the instance offers it and 140 when the choice is
 *Standard*; the region pair is stored and read back as two letter codes, with a

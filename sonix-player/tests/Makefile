@@ -465,13 +465,19 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 # Google sends today; the checks say which stream is picked and which error
 # stands. Guest search against the live endpoint is checked by hand; the
 # suite cannot reach the network, by design.
+# The InnerTube key is a build input, never a committed one. The suite needs a
+# non-empty value for the requests it checks -- any value, since the network is
+# a fake -- and the keyless build below is the check on what a build without
+# one says.
+YTM_KEY_FLAG = -DYTMUSIC_API_KEY='"test-key-not-a-credential"'
 YTM_SRC = test_ytmusic.c win_compat_host.c $(ROOT)/src/system/streaming/ytmusic.c \
           $(ROOT)/src/system/streaming/streamkeys.c \
           $(ROOT)/src/system/core/json.c $(ROOT)/src/system/core/config.c \
           $(ROOT)/src/system/core/sha1.c $(ROOT)/src/system/decode/growfile.c
 .PHONY: ytmusic
-ytmusic: $(BUILD)/test_ytmusic
+ytmusic: $(BUILD)/test_ytmusic $(BUILD)/test_ytmusic_keyless
 	$(BUILD)/test_ytmusic
+	$(BUILD)/test_ytmusic_keyless
 
 # streamkeys.c reads its key out of a generated header; the tests run with no
 # key, which is exactly what the generated header says.
@@ -484,5 +490,17 @@ $(BUILD)/test_ytmusic: $(YTM_SRC) $(ROOT)/src/system/streaming/ytmusic.h \
                        $(ROOT)/src/system/net/http.h $(ROOT)/src/system/core/config.h \
                        $(BUILD)/build_gen/streamkeys_key.h
 	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(BUILD) -include win_compat_host.h $(YTM_KEY_FLAG) \
+		-o $@ $(YTM_SRC) $(LDFLAGS) $(LDLIBS)
+
+# The same sources built the way a build with no key is built: the one check
+# it runs is that the first request names the missing key instead of sending a
+# request the endpoint can only refuse.
+$(BUILD)/test_ytmusic_keyless: $(YTM_SRC) $(ROOT)/src/system/streaming/ytmusic.h \
+                       $(ROOT)/src/system/streaming/streamkeys.h \
+                       $(ROOT)/src/system/net/http.h $(ROOT)/src/system/core/config.h \
+                       $(BUILD)/build_gen/streamkeys_key.h
+	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(BUILD) -include win_compat_host.h \
+		-DYTMUSIC_API_KEY='""' -DYTMUSIC_TEST_KEYLESS \
 		-o $@ $(YTM_SRC) $(LDFLAGS) $(LDLIBS)

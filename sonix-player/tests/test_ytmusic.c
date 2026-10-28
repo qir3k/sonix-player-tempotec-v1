@@ -985,6 +985,27 @@ static void test_netscape_cookie_file_is_imported(void) {
 	CHECK(!ytmusic_logged_in());
 }
 
+// A build with no InnerTube key cannot ask YouTube anything, and must say that
+// rather than send the request: the endpoint answers a keyless request with the
+// same empty stub an unknown User-Agent gets, which reaches the page as "the
+// search failed" with no hint that the build is what is wrong. This test runs
+// in its own binary, compiled with an empty key (see the Makefile); the rest of
+// the suite needs a non-empty one for the requests it checks.
+#ifdef YTMUSIC_TEST_KEYLESS
+static void test_missing_key_is_named(void) {
+	char error[192] = "";
+	ytmusic_item_t items[4];
+	memset(items, 0, sizeof(items));
+	int found = ytmusic_search_items("never gonna give you up", YTMUSIC_FILTER_SONGS, items, 4,
+									 error, sizeof(error));
+	CHECK(found <= 0);
+	CHECK(strcmp(error, "ytmusic_api_key_missing") == 0);
+	if (strcmp(error, "ytmusic_api_key_missing") != 0) {
+		fprintf(stderr, "  the search said: %s\n", error[0] ? error : "(nothing)");
+	}
+}
+#endif
+
 // A song must not wait for its whole file. The instance serves it in pieces;
 // the player is handed the path as soon as enough of it is on the disk, and the
 // rest keeps arriving while growfile keeps the decoder waiting for it.
@@ -1082,6 +1103,17 @@ int main(void) {
 	mkdir(YTM_CACHE, 0700);
 	streamkeys_init();
 	ytmusic_init();
+
+#ifdef YTMUSIC_TEST_KEYLESS
+	// Nothing else can run without a key: this build is the one check.
+	test_missing_key_is_named();
+	if (failures) {
+		fprintf(stderr, "%d failure%s\n", failures, failures == 1 ? "" : "s");
+		return 1;
+	}
+	printf("test_ytmusic: ok (no key)\n");
+	return 0;
+#endif
 
 	test_nothing_configured_says_what_to_do();
 	test_relay_picks_the_aac_stream();
