@@ -127,6 +127,17 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 // the Location past the fourth kilobyte and close to a kilobyte long.
 #define HTTP_HEADER_BUFFER 8192
 
+// The longest address one request, and one redirect, may carry.
+//
+// A media address is not something people type. An Invidious instance proxies
+// YouTube's bytes and answers /latest_version with two redirects, the last of
+// them the videoplayback address it was handed: signed, 2291 characters long
+// when this was measured. A buffer shorter than the address it is given keeps
+// the head of it and drops the tail, the signature no longer matches, and the
+// server answers 403 -- which the player used to report as "could not reach the
+// stream", from any source, with nothing in the log to say why.
+#define HTTP_URL_MAX 4301
+
 // A stream whose body is read a piece at a time.
 typedef struct {
 	int fd;

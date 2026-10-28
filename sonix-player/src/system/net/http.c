@@ -42,7 +42,7 @@ static __thread char last_error[192];
 
 // URL of the last hop of this thread's last successful request; see
 // http_last_final_url() in http.h.
-static __thread char last_final_url[2600];
+static __thread char last_final_url[HTTP_URL_MAX + 64];
 
 const char *http_last_final_url(void) { return last_final_url; }
 
@@ -67,7 +67,7 @@ const char *http_last_error(void) {
 
 typedef struct {
 	char host[256];
-	char path[2048]; // always starts with '/'
+	char path[HTTP_URL_MAX]; // always starts with '/'
 	int port;
 	bool secure; // https://
 } url_t;
@@ -883,7 +883,7 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 
 	clear_last_error();
 
-	char current[2600];
+	char current[HTTP_URL_MAX + 64];
 	snprintf(current, sizeof(current), "%s", url);
 
 	// The request changes hop by hop: after a redirect that changes the
@@ -902,7 +902,7 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 		}
 
 		int status = 0;
-		char location[2048] = "";
+		char location[HTTP_URL_MAX] = "";
 		char err[192] = "";
 		bool ok = get_once(&u, &hop_req, out, out_len, limit, timeout_secs, &status, location, sizeof(location), err,
 						   sizeof(err));
@@ -917,6 +917,14 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 			return true;
 		}
 		if (status < 300 || status >= 400 || !location[0]) {
+			return false;
+		}
+		// A Location longer than this buffer was cut short. Following it sends
+		// a truncated address -- and with a signed media address that means a
+		// 403 from the server that received it, which reads from outside as a
+		// broken stream rather than as a buffer that was too small.
+		if (strlen(location) >= sizeof(location) - 1) {
+			set_last_error("%s", tr("http_redirect_too_long"));
 			return false;
 		}
 
@@ -1083,16 +1091,20 @@ bool http_stream_open_ex(http_stream_t *st, const char *url, int timeout_secs, c
 	st->fd = -1;
 	clear_last_error();
 
-	char current[2600];
+	char current[HTTP_URL_MAX + 64];
 	snprintf(current, sizeof(current), "%s", url);
 
 	for (int hop = 0; hop <= HTTP_MAX_REDIRECTS; hop++) {
 		int status = 0;
-		char location[2048] = "";
+		char location[HTTP_URL_MAX] = "";
 		if (stream_open_once(st, current, timeout_secs, &status, location, sizeof(location), options)) {
 			return true;
 		}
 		if (status < 300 || status >= 400 || !location[0]) {
+			return false;
+		}
+		if (strlen(location) >= sizeof(location) - 1) {
+			set_last_error("%s", tr("http_redirect_too_long"));
 			return false;
 		}
 

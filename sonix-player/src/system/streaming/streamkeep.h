@@ -6,14 +6,14 @@
 
 // A streaming track kept on the card for good.
 //
-// Tidal and Qobuz are played from a download into their own cache
+// Tidal, Qobuz and YouTube Music are played from a download into a cache
 // (.local/tidal-cache, .local/qobuz-cache), and that cache is transient by
 // design: it is pruned as it fills and emptied on the way out, because a hidden
 // folder carrying a gigabyte of tracks the user never asked for is not theirs to
 // find. This is the other half: a deliberate "keep this one", which copies the
 // finished download into the library proper --
 //
-//     <card>/Music/<Tidal|Qobuz>/<artist>/<album>/<nn> <title>.<ext>
+//     <card>/Music/<Tidal|Qobuz|YouTube Music>/<artist>/<album>/<nn> <title>.<ext>
 //
 // -- with its tags sidecar and its cover beside it, so the next scan finds an
 // ordinary track with an ordinary title, artist and sleeve. From then on it

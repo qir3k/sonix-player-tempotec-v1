@@ -10,6 +10,7 @@
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
+#include "src/gui/shell/popover.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -18,9 +19,12 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/wireless/wifisettings.h"
 #include "src/gui/streaming/qobuzart.h"
+#include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/system.h"
+#include "src/system/playback/sleeptimer.h"
 #include "src/system/net/wifi.h"
+#include "src/system/streaming/streamkeep.h"
 #include "src/system/streaming/ytmusic.h"
 
 #define YTMUSIC_PAGE_RESULTS YTMUSIC_ITEMS_MAX
@@ -84,8 +88,47 @@ static bool login_busy;
 static int login_elapsed;
 static unsigned login_generation;
 
+// The rows of the home page: which of them are there, and in what order. Both
+// are the page's own setting, kept in the config as the numbers below -- the
+// order as one list, the switched-off ones as another -- so somebody who opens
+// Top songs every day does not scroll past Explore to reach it, and somebody
+// who never opens Explore does not see it at all.
+enum {
+	YT_HOME_SEARCH = 0,
+	YT_HOME_EXPLORE,
+	YT_HOME_CHARTS,
+	YT_HOME_FAVOURITES,
+	YT_HOME_PODCASTS,
+	YT_HOME_ROWS,
+};
+static const char *const YT_HOME_SLUGS[YT_HOME_ROWS] = {
+	"ytmusic_search",
+	"ytmusic_explore",
+	"ytmusic_charts",
+	"ytmusic_favourites",
+	"ytmusic_podcasts",
+};
+static int yt_home_order[YT_HOME_ROWS];
+static bool yt_home_hidden[YT_HOME_ROWS];
+
+// The three settings this page keeps for what it plays: how good the stream
+// should be, which country's catalogue it comes from, and when to stop.
+static lv_obj_t *quality_pills[2];
+static settingsrow_duration_t yt_sleep_row;
+#define YT_REGION_MAX 8
+static lv_obj_t *region_screen;
+static lv_obj_t *region_list;
+static lv_obj_t *region_value_label;
+static ytmusic_region_t region_items[YT_REGION_MAX];
+static int region_item_count;
+static lv_obj_t *order_screen;
+static lv_obj_t *order_rows;
+
 static void home_refresh_session_rows(void);
 static void home_build(void);
+// The three dots a row that plays carries instead of a chevron; defined with the
+// playing code below, used where the rows are built.
+static void row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item);
 
 // Whether the network is really there. Every row on this page is a request to
 // YouTube, and with no IP address each one ends in a generic error that does
@@ -669,7 +712,19 @@ static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int coun
 		} else {
 			snprintf(label, sizeof(label), "%s", items[i].title);
 		}
-		lv_obj_t *row = settingsrow_add(list, label, NULL, cb, (void *)(intptr_t)i);
+		// A row that plays, not one that opens something: no chevron. The
+		// chevron means "this goes somewhere", and a song's tap starts it here
+		// instead -- the same as a track on the Tidal page. The cover slot, the
+		// glyph and the wrapping below are the same either way.
+		lv_obj_t *row = items[i].kind == YTMUSIC_ITEM_TRACK
+							? settingsrow_action(list, label, cb, (void *)(intptr_t)i)
+							: settingsrow_add(list, label, NULL, cb, (void *)(intptr_t)i);
+		// A song also gets the menu a Tidal track has: the row's tap plays it,
+		// the dots offer what a tap cannot -- playing it now, or downloading it
+		// to the card whether or not it is the song in the player.
+		if (items[i].kind == YTMUSIC_ITEM_TRACK) {
+			row_kebab_add(row, &items[i]);
+		}
 		// An entry with artwork gets the shared cover slot; one without keeps
 		// the glyph it would have had anyway.
 		if (art && items[i].thumbnail[0]) {
@@ -741,6 +796,9 @@ static void play_item(const ytmusic_item_t *item) {
 	snprintf(result->track.title, sizeof(result->track.title), "%s", item->title);
 	// A row's subtitle is the artist, or the show an episode belongs to.
 	snprintf(result->track.artist, sizeof(result->track.artist), "%s", item->subtitle);
+	// The row's cover goes with the track: the downloader fetches it beside the
+	// audio, which is where the player looks for a file's artwork.
+	snprintf(result->track.thumbnail, sizeof(result->track.thumbnail), "%s", item->thumbnail);
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, playback_worker, result) != 0) {
 		end_busy();
@@ -750,6 +808,113 @@ static void play_item(const ytmusic_item_t *item) {
 	}
 	pthread_detach(thread);
 	gui_notify_popup(tr("downloading"));
+}
+
+// ---------------------------------------------------------------------------
+// the row menu
+//
+// A song's row taps straight into playing it, so there is no page to open and
+// no chevron to open it with. What a tap cannot do lives behind the three dots
+// instead, in a popover anchored to the row: the Tidal page's shape.
+// ---------------------------------------------------------------------------
+
+static void track_from_item(const ytmusic_item_t *item, ytmusic_track_t *track) {
+	memset(track, 0, sizeof(*track));
+	snprintf(track->id, sizeof(track->id), "%s", item->id);
+	snprintf(track->title, sizeof(track->title), "%s", item->title);
+	// A row's subtitle is the artist, or the show an episode belongs to.
+	snprintf(track->artist, sizeof(track->artist), "%s", item->subtitle);
+	// The row's cover goes with the track: the downloader fetches it beside the
+	// audio, which is where the player looks for a file's artwork.
+	snprintf(track->thumbnail, sizeof(track->thumbnail), "%s", item->thumbnail);
+}
+
+// Downloading without playing. The same cache file is made, and then handed to
+// the keep worker instead of to the player, so it ends up in
+// <card>/Music/YouTube Music/ with its tags and sleeve.
+typedef struct {
+	ytmusic_track_t track;
+	char path[512];
+	char error[192];
+	bool ok;
+} save_result_t;
+
+static void save_done(void *data) {
+	save_result_t *result = data;
+	if (!result) return;
+	end_busy();
+	if (!result->ok) toast_error(result->error[0] ? result->error : "ytmusic_playback_failed");
+	free(result);
+}
+
+static void *save_worker(void *arg) {
+	save_result_t *result = arg;
+	result->ok = ytmusic_download_for_playback(&result->track, result->path, sizeof(result->path),
+											   result->error, sizeof(result->error));
+	if (result->ok && !streamkeep_keep(result->path, true)) {
+		// No card, or one the computer is using: the keep worker records why
+		// without a toast of its own, so the reason is read back here.
+		char why[192] = "";
+		result->ok = false;
+		if (streamkeep_last_error(why, sizeof(why)) && why[0]) {
+			snprintf(result->error, sizeof(result->error), "%s", why);
+		}
+	}
+	if (!gui_post(save_done, result)) {
+		end_busy();
+		free(result);
+	}
+	return NULL;
+}
+
+static void row_menu_save(void *user) {
+	const ytmusic_item_t *item = user;
+	if (!item || item->kind != YTMUSIC_ITEM_TRACK || !item->id[0]) return;
+	if (!begin_busy()) return;
+	save_result_t *result = calloc(1, sizeof(*result));
+	if (!result) {
+		end_busy();
+		toast_error("ytmusic_out_of_memory");
+		return;
+	}
+	track_from_item(item, &result->track);
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, save_worker, result) != 0) {
+		end_busy();
+		free(result);
+		toast_error("ytmusic_playback_failed");
+		return;
+	}
+	pthread_detach(thread);
+	gui_notify_popup(tr("downloading"));
+}
+
+static void row_menu_play(void *user) {
+	play_item((const ytmusic_item_t *)user);
+}
+
+static void row_menu_cb(lv_event_t *e) {
+	const ytmusic_item_t *item = lv_event_get_user_data(e);
+	if (!item) return;
+	popover_item_t items[] = {
+		{"ytmusic_play", row_menu_play, (void *)item, false},
+		{"trackmenu_keep_on_card", row_menu_save, (void *)item, false},
+	};
+	popover_show(lv_event_get_target(e), items, 2);
+}
+
+static void row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item) {
+	lv_obj_t *button = lv_btn_create(row);
+	lv_obj_set_size(button, bp_pick(26, 34), bp_pick(28, 34));
+	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(button, 0, 0);
+	lv_obj_set_style_shadow_width(button, 0, 0);
+	lv_obj_set_style_pad_all(button, 0, 0);
+	lv_obj_add_event_cb(button, row_menu_cb, LV_EVENT_CLICKED, (void *)item);
+	lv_obj_t *icon = lv_image_create(button);
+	lv_image_set_src(icon, &icon_ellipsis_vertical);
+	lv_obj_add_style(icon, &theme_style_icon, 0);
+	lv_obj_center(icon);
 }
 
 static bool start_list_request(list_kind_t kind, bool to_tracks, ytmusic_filter_t filter,
@@ -1206,11 +1371,295 @@ static void build_source_page(gui_config_t *cfg) {
 	switcher_attach_back_gesture(source_screen);
 }
 
+// ---------------------------------------------------------------------------
+// the arrangement of the home page
+// ---------------------------------------------------------------------------
+
+// Read again whenever the home page is built: a change made on the arrange page
+// is then what the page shows the next time it is looked at, without a restart.
+static void yt_home_order_load(void) {
+	for (int i = 0; i < YT_HOME_ROWS; i++) {
+		yt_home_order[i] = i;
+		yt_home_hidden[i] = false;
+	}
+	const char *saved = config_get("ytmusic", "home_order", "");
+	if (saved[0]) {
+		bool seen[YT_HOME_ROWS] = {false};
+		int at = 0;
+		const char *p = saved;
+		while (*p && at < YT_HOME_ROWS) {
+			while (*p == ',' || *p == ' ') p++;
+			if (!*p) break;
+			int id = atoi(p);
+			while (*p >= '0' && *p <= '9') p++;
+			if (id >= 0 && id < YT_HOME_ROWS && !seen[id]) {
+				seen[id] = true;
+				yt_home_order[at++] = id;
+			}
+		}
+		// A row added by a later build has no place in the saved order yet.
+		for (int id = 0; id < YT_HOME_ROWS; id++) {
+			if (!seen[id] && at < YT_HOME_ROWS) yt_home_order[at++] = id;
+		}
+	}
+	const char *hidden = config_get("ytmusic", "home_hidden", "");
+	const char *p = hidden;
+	while (*p) {
+		while (*p == ',' || *p == ' ') p++;
+		if (!*p) break;
+		int id = atoi(p);
+		while (*p >= '0' && *p <= '9') p++;
+		if (id >= 0 && id < YT_HOME_ROWS) yt_home_hidden[id] = true;
+	}
+}
+
+static void yt_home_order_save(void) {
+	char order[64] = "", hidden[64] = "";
+	for (int slot = 0; slot < YT_HOME_ROWS; slot++) {
+		size_t used = strlen(order);
+		snprintf(order + used, sizeof(order) - used, "%s%d", used ? "," : "", yt_home_order[slot]);
+	}
+	bool any = false;
+	for (int id = 0; id < YT_HOME_ROWS; id++) {
+		if (!yt_home_hidden[id]) continue;
+		size_t used = strlen(hidden);
+		snprintf(hidden + used, sizeof(hidden) - used, "%s%d", any ? "," : "", id);
+		any = true;
+	}
+	config_set("ytmusic", "home_order", order);
+	config_set("ytmusic", "home_hidden", hidden);
+	config_save();
+}
+
+static void yt_order_move_cb(lv_event_t *e);
+static void yt_order_toggle_cb(lv_event_t *e);
+static void region_pick_cb(lv_event_t *e);
+
+static void yt_order_rebuild(void) {
+	if (!order_rows) return;
+	lv_obj_clean(order_rows);
+	for (int pos = 0; pos < YT_HOME_ROWS; pos++) {
+		int id = yt_home_order[pos];
+		lv_obj_t *row = lv_obj_create(order_rows);
+		lv_obj_set_size(row, lv_pct(100), bp_pick(40, 56));
+		lv_obj_add_style(row, &theme_style_card, 0);
+		lv_obj_set_style_radius(row, bp_tile_radius(), 0);
+		lv_obj_set_style_border_width(row, 0, 0);
+		lv_obj_set_style_shadow_width(row, 0, 0);
+		lv_obj_set_style_pad_hor(row, bp_pick(6, 12), 0);
+		lv_obj_set_style_pad_gap(row, bp_pick(1, 5), 0);
+		lv_obj_set_scrollable(row, false);
+		lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+		lv_obj_t *name = lv_label_create(row);
+		lv_label_set_text(name, tr(YT_HOME_SLUGS[id]));
+		lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+		lv_obj_set_flex_grow(name, 1);
+		lv_obj_add_style(name, &theme_style_text, 0);
+		lv_obj_set_style_text_font(name, bp_is_tempotec_v1() ? &font_ui_16 : &font_ui_22, 0);
+
+		// Up and down, in the list's own order: a row moves one place at a time
+		// and the switch beside it is whether the home page shows it at all.
+		for (int dir = 0; dir < 2; dir++) {
+			lv_obj_t *button = lv_btn_create(row);
+			lv_obj_set_size(button, bp_pick(28, 40), bp_pick(30, 40));
+			lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+			lv_obj_set_style_border_width(button, 0, 0);
+			lv_obj_set_style_shadow_width(button, 0, 0);
+			lv_obj_set_style_pad_all(button, 0, 0);
+			lv_obj_add_event_cb(button, yt_order_move_cb, LV_EVENT_CLICKED,
+								(void *)(intptr_t)((dir ? 0 : 0x100) | pos));
+			lv_obj_t *icon = lv_image_create(button);
+			lv_image_set_src(icon, &icon_chevron_up);
+			lv_image_set_rotation(icon, dir ? 1800 : 0);
+			lv_obj_add_style(icon, &theme_style_icon, 0);
+			lv_obj_center(icon);
+			if ((dir == 0 && pos == 0) || (dir == 1 && pos == YT_HOME_ROWS - 1)) {
+				lv_obj_add_state(button, LV_STATE_DISABLED);
+			}
+		}
+
+		lv_obj_t *toggle = lv_switch_create(row);
+		lv_obj_set_size(toggle, bp_pick(34, 48), bp_pick(20, 28));
+		if (!yt_home_hidden[id]) {
+			lv_obj_add_state(toggle, LV_STATE_CHECKED);
+		}
+		lv_obj_add_event_cb(toggle, yt_order_toggle_cb, LV_EVENT_VALUE_CHANGED,
+							(void *)(intptr_t)id);
+	}
+	lv_obj_update_layout(order_rows);
+}
+
+static void yt_order_move_cb(lv_event_t *e) {
+	int encoded = (int)(intptr_t)lv_event_get_user_data(e);
+	int pos = encoded & 0xff;
+	int target = pos + ((encoded & 0x100) ? -1 : 1);
+	if (pos < 0 || pos >= YT_HOME_ROWS || target < 0 || target >= YT_HOME_ROWS) return;
+	int swap = yt_home_order[pos];
+	yt_home_order[pos] = yt_home_order[target];
+	yt_home_order[target] = swap;
+	yt_home_order_save();
+	yt_order_rebuild();
+	home_build();
+}
+
+static void yt_order_toggle_cb(lv_event_t *e) {
+	int id = (int)(intptr_t)lv_event_get_user_data(e);
+	if (id < 0 || id >= YT_HOME_ROWS) return;
+	yt_home_hidden[id] = !lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+	yt_home_order_save();
+	home_build();
+}
+
+static void order_loaded_cb(lv_event_t *e) {
+	(void)e;
+	yt_home_order_load();
+	yt_order_rebuild();
+}
+
+static void open_order_cb(lv_event_t *e) {
+	(void)e;
+	switch_screen(order_screen);
+}
+
+static void build_order_page(gui_config_t *cfg) {
+	order_screen = lv_obj_create(NULL);
+	lv_obj_add_style(order_screen, &theme_style_screen, 0);
+	order_rows = settingsrow_page(order_screen, cfg, "ytmusic_arrange");
+	player_sheet_attach_drag(order_rows, true);
+	lv_obj_add_event_cb(order_screen, order_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	switcher_attach_back_gesture(order_screen);
+}
+
+// ---------------------------------------------------------------------------
+// the region page
+// ---------------------------------------------------------------------------
+
+static void region_refresh(void) {
+	if (!region_value_label) return;
+	char region[YTMUSIC_REGION_MAX], language[YTMUSIC_REGION_MAX];
+	ytmusic_region_active(region, sizeof(region), language, sizeof(language));
+	for (int i = 0; i < region_item_count; i++) {
+		if (strcmp(region_items[i].region, region) == 0 &&
+			strcmp(region_items[i].language, language) == 0) {
+			lv_label_set_text(region_value_label, tr(region_items[i].label));
+			return;
+		}
+	}
+	// A pair written into the config by hand still says what it is.
+	char both[24];
+	snprintf(both, sizeof(both), "%s · %s", region, language);
+	lv_label_set_text(region_value_label, both);
+}
+
+static void region_row_build(void) {
+	if (!region_list) return;
+	lv_obj_clean(region_list);
+	char region[YTMUSIC_REGION_MAX], language[YTMUSIC_REGION_MAX];
+	ytmusic_region_active(region, sizeof(region), language, sizeof(language));
+	for (int i = 0; i < region_item_count; i++) {
+		lv_obj_t *value = NULL;
+		settingsrow_add(region_list, tr(region_items[i].label), &value, region_pick_cb,
+						(void *)(intptr_t)i);
+		if (value && strcmp(region_items[i].region, region) == 0 &&
+			strcmp(region_items[i].language, language) == 0) {
+			lv_label_set_text(value, tr("on"));
+		}
+	}
+}
+
+static void region_pick_cb(lv_event_t *e) {
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (index < 0 || index >= region_item_count) return;
+	if (!ytmusic_region_select(region_items[index].region, region_items[index].language)) {
+		toast_error("ytmusic_region_invalid");
+		return;
+	}
+	toast_success("ytmusic_region_saved");
+	region_refresh();
+	region_row_build();
+}
+
+static void region_loaded_cb(lv_event_t *e) {
+	(void)e;
+	region_item_count = ytmusic_regions(region_items, YT_REGION_MAX);
+	region_row_build();
+}
+
+static void open_region_cb(lv_event_t *e) {
+	(void)e;
+	switch_screen(region_screen);
+}
+
+static void build_region_page(gui_config_t *cfg) {
+	region_screen = lv_obj_create(NULL);
+	lv_obj_add_style(region_screen, &theme_style_screen, 0);
+	region_list = settingsrow_page(region_screen, cfg, "ytmusic_region");
+	player_sheet_attach_drag(region_list, true);
+	lv_obj_add_event_cb(region_screen, region_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	switcher_attach_back_gesture(region_screen);
+}
+
+// ---------------------------------------------------------------------------
+// quality and the sleep timer
+// ---------------------------------------------------------------------------
+
+static void yt_quality_refresh(void) {
+	if (quality_pills[0]) settingsrow_pill_active(quality_pills[0], ytmusic_quality_high());
+	if (quality_pills[1]) settingsrow_pill_active(quality_pills[1], !ytmusic_quality_high());
+}
+
+static void yt_quality_pick_cb(lv_event_t *e) {
+	ytmusic_quality_set((int)(intptr_t)lv_event_get_user_data(e) != 0);
+	yt_quality_refresh();
+}
+
+static void yt_sleep_refresh(void) {
+	settingsrow_duration_set_minutes(&yt_sleep_row, sleeptimer_minutes(SLEEPTIMER_MUSIC));
+	settingsrow_duration_expanded(&yt_sleep_row, sleeptimer_enabled(SLEEPTIMER_MUSIC));
+	settingsrow_duration_repaint(&yt_sleep_row);
+}
+
+// The music transport's own timer, the one the card and Tidal use: a YouTube
+// Music song plays through the same player, so it is the same stretch counting
+// down and the same switch that stops it.
+static void yt_sleep_toggle_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_enabled(SLEEPTIMER_MUSIC, lv_obj_has_state(yt_sleep_row.toggle, LV_STATE_CHECKED));
+	yt_sleep_refresh();
+}
+
+static void yt_sleep_wheel_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_set_minutes(SLEEPTIMER_MUSIC, settingsrow_duration_minutes(&yt_sleep_row));
+}
+
 static void build_settings_page(gui_config_t *cfg) {
 	build_source_page(cfg);
+	build_region_page(cfg);
+	build_order_page(cfg);
 	settings_screen = lv_obj_create(NULL);
 	lv_obj_add_style(settings_screen, &theme_style_screen, 0);
 	lv_obj_t *container = settingsrow_page(settings_screen, cfg, "ytmusic_settings");
+
+	// What this page plays, before what it fetches through.
+	settingsrow_toggle_duration(container, "sleep_timer", yt_sleep_toggle_cb, yt_sleep_wheel_cb,
+								&yt_sleep_row);
+	yt_sleep_refresh();
+	lv_obj_t *pill_box = NULL;
+	settingsrow_pills(container, "ytmusic_quality", &pill_box);
+	quality_pills[0] = settingsrow_pill(pill_box, "ytmusic_quality_high", 1, yt_quality_pick_cb);
+	quality_pills[1] = settingsrow_pill(pill_box, "ytmusic_quality_standard", 0, yt_quality_pick_cb);
+	yt_quality_refresh();
+	lv_obj_t *region_row =
+		settingsrow_add(container, "ytmusic_region", &region_value_label, open_region_cb, NULL);
+	settingsrow_add_caption(region_row, "ytmusic_region_note");
+	region_item_count = ytmusic_regions(region_items, YT_REGION_MAX);
+	region_refresh();
+	lv_obj_t *order_row = settingsrow_add(container, "ytmusic_arrange", NULL, open_order_cb, NULL);
+	settingsrow_add_caption(order_row, "ytmusic_arrange_note");
+
 	lv_obj_t *source_row =
 		settingsrow_add(container, "ytmusic_source", &source_value_label, open_source_cb, NULL);
 	settingsrow_add_caption(source_row, "ytmusic_source_note");
@@ -1218,6 +1667,10 @@ static void build_settings_page(gui_config_t *cfg) {
 	source_refresh();
 	sign_in_row = settingsrow_action(container, "ytmusic_sign_in", login_begin_done_cb, NULL);
 	settingsrow_add_icon(sign_in_row, &icon_import, THEME_SEMANTIC_CYAN);
+	// Google's device token is refused by the music endpoints -- a signed-in
+	// library page comes back with no rows and no error -- so the row says what
+	// it does not do, and the session import below is what Favourites needs.
+	settingsrow_add_caption(sign_in_row, "ytmusic_sign_in_note");
 	sign_out_row = settingsrow_action(container, "ytmusic_sign_out", logout_cb, NULL);
 	settingsrow_add_icon(sign_out_row, &icon_log_out, THEME_SEMANTIC_RED);
 	lv_obj_t *import_row = settingsrow_action(container, "ytmusic_import_session", import_session_cb, NULL);
@@ -1254,16 +1707,28 @@ static void home_build(void) {
 		return;
 	}
 
-	lv_obj_t *row = settingsrow_add(home_container, "ytmusic_search", NULL, search_cb, NULL);
-	settingsrow_add_icon(row, &icon_search, THEME_SEMANTIC_CYAN);
-	row = settingsrow_add(home_container, "ytmusic_explore", NULL, explore_start_cb, NULL);
-	settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_PURPLE);
-	row = settingsrow_add(home_container, "ytmusic_charts", NULL, charts_cb, NULL);
-	settingsrow_add_icon(row, &icon_music2, THEME_SEMANTIC_RED);
-	row = settingsrow_add(home_container, "ytmusic_favourites", NULL, favourites_cb, NULL);
-	settingsrow_add_icon(row, &icon_music_note, THEME_SEMANTIC_RED);
-	row = settingsrow_add(home_container, "ytmusic_podcasts", NULL, podcasts_cb, NULL);
-	settingsrow_add_icon(row, &icon_podcast_list, THEME_SEMANTIC_CYAN);
+	// The rows in the order the user arranged them, with the switched-off ones
+	// left out -- see the arrange page behind the settings' "Home rows" row.
+	static void (*const handlers[YT_HOME_ROWS])(lv_event_t *) = {
+		search_cb, explore_start_cb, charts_cb, favourites_cb, podcasts_cb,
+	};
+	static const lv_image_dsc_t *const icons[YT_HOME_ROWS] = {
+		&icon_search, &icon_music2, &icon_music2, &icon_music_note, &icon_podcast_list,
+	};
+	static const theme_semantic_t tones[YT_HOME_ROWS] = {
+		THEME_SEMANTIC_CYAN,
+		THEME_SEMANTIC_PURPLE,
+		THEME_SEMANTIC_RED,
+		THEME_SEMANTIC_RED,
+		THEME_SEMANTIC_CYAN,
+	};
+	yt_home_order_load();
+	for (int slot = 0; slot < YT_HOME_ROWS; slot++) {
+		int id = yt_home_order[slot];
+		if (yt_home_hidden[id]) continue;
+		lv_obj_t *row = settingsrow_add(home_container, YT_HOME_SLUGS[id], NULL, handlers[id], NULL);
+		settingsrow_add_icon(row, icons[id], tones[id]);
+	}
 }
 
 static void home_loaded_cb(lv_event_t *e) {

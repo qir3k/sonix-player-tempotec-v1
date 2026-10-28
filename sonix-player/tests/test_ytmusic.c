@@ -68,6 +68,9 @@ typedef struct {
 static fake_reply_t replies[16];
 static int reply_count;
 static int relay_calls;
+// When set, a ranged reply carries at most this many bytes, which is what a
+// proxy that hands back less than was asked for looks like from here.
+static size_t fake_range_cap;
 
 static const fake_reply_t *find_reply(const char *url) {
 	for (int i = 0; i < reply_count; i++) {
@@ -79,6 +82,7 @@ static const fake_reply_t *find_reply(const char *url) {
 static void fake_reset(void) {
 	reply_count = 0;
 	relay_calls = 0;
+	fake_range_cap = 0;
 	memset(replies, 0, sizeof(replies));
 }
 
@@ -136,13 +140,34 @@ bool http_get_ex(const char *url, const char *extra_headers, bool want_error_bod
 	return true;
 }
 
+// A ranged request against a canned body behaves the way a server honouring
+// Range does: the bytes asked for, or 416 once the offset runs past the end.
+// The downloader relies on that -- a short chunk is not an ending, and only
+// "nothing left" is.
 bool http_request(const char *url, const http_req_t *req, char **out, size_t *out_len, size_t limit,
 				  int timeout_secs, int *status_out) {
-	(void)req;
 	(void)limit;
 	(void)timeout_secs;
 	const fake_reply_t *reply = find_reply(url);
 	if (!reply || reply->status == 0) return false;
+	unsigned long long start = 0;
+	if (req && req->extra_headers &&
+		sscanf(req->extra_headers, "Range: bytes=%llu", &start) == 1 &&
+		reply->status == 206) {
+		size_t total = strlen(reply->body);
+		if (start >= total) {
+			if (status_out) *status_out = 416;
+			*out = strdup("");
+			if (out_len) *out_len = 0;
+			return true;
+		}
+		if (status_out) *status_out = 206;
+		*out = strdup(reply->body + start);
+		size_t avail = total - (size_t)start;
+		if (fake_range_cap && avail > fake_range_cap) avail = fake_range_cap;
+		if (out_len) *out_len = avail;
+		return true;
+	}
 	if (status_out) *status_out = reply->status;
 	*out = strdup(reply->body);
 	if (out_len) *out_len = strlen(reply->body);
@@ -213,7 +238,8 @@ static const char INVIDIOUS_FORMATS[] =
 	"\"adaptiveFormats\":["
 	"{\"itag\":251,\"type\":\"audio/webm; codecs=\\\"opus\\\"\",\"bitrate\":160000,\"url\":\"https://inv.test/x\"},"
 	"{\"itag\":139,\"type\":\"audio/mp4; codecs=\\\"mp4a.40.5\\\"\",\"bitrate\":48000,\"url\":\"https://inv.test/y\"},"
-	"{\"itag\":140,\"type\":\"audio/mp4; codecs=\\\"mp4a.40.2\\\"\",\"bitrate\":128000,\"url\":\"https://inv.test/z\"}"
+	"{\"itag\":140,\"type\":\"audio/mp4; codecs=\\\"mp4a.40.2\\\"\",\"bitrate\":128000,"
+	"\"clen\":\"4095\",\"url\":\"https://inv.test/z\"}"
 	"]}";
 
 // A Piped instance that fronts the bytes itself, which is the only kind of
@@ -317,8 +343,11 @@ static void test_instances_are_asked_before_the_device(void) {
 // The downloader walks the same list, which is the part that made a play fail
 // even when a source had resolved: a source can name a stream that is then
 // refused. Here the first instance refuses its bytes and the second one serves
-// them, so the file exists and holds exactly what the second one sent.
+// them -- in pieces, the way a proxy that hands back less than was asked for
+// does. The file must still hold every byte: a short piece is not an ending,
+// and taking it for one is what ended a track after a minute.
 static char AUDIO_BYTES[4096];
+static char COVER_BYTES[4096];
 
 static void test_download_walks_past_a_refused_stream(void) {
 	memset(AUDIO_BYTES, 'A', sizeof(AUDIO_BYTES) - 1);
@@ -328,6 +357,8 @@ static void test_download_walks_past_a_refused_stream(void) {
 	fake_reply("inv.test/latest_version", 403, "<html>403: the download is not available</html>");
 	fake_reply("inv2.test/api/v1/videos/", 200, INVIDIOUS_FORMATS);
 	fake_reply("inv2.test/latest_version", 206, AUDIO_BYTES);
+	// Every ranged reply carries 1000 bytes of the 4095 asked for.
+	fake_range_cap = 1000;
 	// The playback cache is /tmp/sonix-ytmusic, as it is on the device. A
 	// Windows host can be stopped from writing there by its own security
 	// software -- the CRT answers EACCES, this code has nothing to do with it
@@ -348,6 +379,11 @@ static void test_download_walks_past_a_refused_stream(void) {
 	memset(&track, 0, sizeof(track));
 	snprintf(track.id, sizeof(track.id), "%s", VID);
 	snprintf(track.title, sizeof(track.title), "%s", "Never Gonna Give You Up");
+	// The row's sleeve, which the download writes beside the audio.
+	snprintf(track.thumbnail, sizeof(track.thumbnail), "%s",
+			 "https://lh3.test/art=w120-h120-l90-rj");
+	snprintf(COVER_BYTES, sizeof(COVER_BYTES), "%s", AUDIO_BYTES);
+	fake_reply("lh3.test/art", 200, COVER_BYTES);
 	char path[512] = "", error[192] = "";
 	bool ok = ytmusic_download_for_playback(&track, path, sizeof(path), error, sizeof(error));
 	CHECK(ok);
@@ -360,10 +396,25 @@ static void test_download_walks_past_a_refused_stream(void) {
 		CHECK(ftell(f) == (long)sizeof(AUDIO_BYTES) - 1);
 		fclose(f);
 	}
+	// And the sleeve beside it, which is how the player finds a file's artwork.
+	char cover[600];
+	snprintf(cover, sizeof(cover), "%s", path);
+	char *dot = strrchr(cover, '.');
+	if (dot) *dot = '\0';
+	snprintf(cover + strlen(cover), sizeof(cover) - strlen(cover), ".jpg");
+	FILE *art = fopen(cover, "rb");
+	CHECK(art != NULL);
+	if (art) {
+		fseek(art, 0, SEEK_END);
+		CHECK(ftell(art) == (long)sizeof(COVER_BYTES) - 1);
+		fclose(art);
+	}
+
 	char tags[600];
 	snprintf(tags, sizeof(tags), "%s.tags", path);
 	remove(path);
 	remove(tags);
+	remove(cover);
 	config_set("ytmusic", "instances", "");
 }
 
@@ -754,6 +805,103 @@ static void test_library_says_what_is_missing(void) {
 	free(vllm);
 }
 
+// ---------------------------------------------------------------------------
+// the choices the settings page stores
+// ---------------------------------------------------------------------------
+
+// The 256 kbit/s AAC beside the 128 one: what the quality pill is for, and what
+// "Standard" is the way out of when an instance is too slow to carry it.
+static const char INVIDIOUS_HI_FORMATS[] =
+	"{\"title\":\"Never Gonna Give You Up\",\"author\":\"Rick Astley\",\"lengthSeconds\":213,"
+	"\"adaptiveFormats\":["
+	"{\"itag\":140,\"type\":\"audio/mp4; codecs=\\\"mp4a.40.2\\\"\",\"bitrate\":128000,"
+	"\"clen\":\"4095\",\"url\":\"https://inv.test/z\"},"
+	"{\"itag\":141,\"type\":\"audio/mp4; codecs=\\\"mp4a.40.2\\\"\",\"bitrate\":256000,"
+	"\"clen\":\"8191\",\"url\":\"https://inv.test/w\"}"
+	"]}";
+
+static void test_quality_choice_picks_the_stream(void) {
+	fake_reset();
+	fake_reply("inv.test/api/v1/videos/", 200, INVIDIOUS_HI_FORMATS);
+	config_set("ytmusic", "instances", "https://inv.test");
+	set_relay("");
+	CHECK(ytmusic_source_select("auto"));
+	char url[YTMUSIC_URL_MAX] = "", error[192] = "";
+
+	ytmusic_quality_set(true);
+	CHECK(ytmusic_audio_url(VID, url, sizeof(url), NULL, NULL, 0, NULL, 0, NULL, error, sizeof(error)));
+	CHECK(strstr(url, "itag=141") != NULL);
+
+	memset(url, 0, sizeof(url));
+	error[0] = '\0';
+	ytmusic_quality_set(false);
+	CHECK(ytmusic_audio_url(VID, url, sizeof(url), NULL, NULL, 0, NULL, 0, NULL, error, sizeof(error)));
+	CHECK(strstr(url, "itag=140") != NULL);
+
+	ytmusic_quality_set(true);
+	CHECK(ytmusic_quality_high());
+}
+
+static void test_region_choice(void) {
+	char region[YTMUSIC_REGION_MAX], language[YTMUSIC_REGION_MAX];
+	ytmusic_region_active(region, sizeof(region), language, sizeof(language));
+	CHECK(strcmp(region, "US") == 0);
+	CHECK(strcmp(language, "en") == 0);
+
+	// Poland's charts with English row names, which is the pair the settings
+	// page offers first after Worldwide.
+	CHECK(ytmusic_region_select("pl", "en"));
+	ytmusic_region_active(region, sizeof(region), language, sizeof(language));
+	CHECK(strcmp(region, "PL") == 0);
+	CHECK(strcmp(language, "en") == 0);
+
+	CHECK(!ytmusic_region_select("P", "en"));
+	CHECK(!ytmusic_region_select("PL", "english"));
+	CHECK(ytmusic_region_select("US", "en"));
+}
+
+static void test_cache_owns_its_own_downloads(void) {
+	CHECK(ytmusic_cache_owns("/tmp/sonix-ytmusic/dQw4w9WgXcQ.m4a"));
+	CHECK(!ytmusic_cache_owns("/tmp/sonix-ytmusic/dQw4w9WgXcQ.jpg"));
+	CHECK(!ytmusic_cache_owns("/tmp/sonix-ytmusic/sub/dQw4w9WgXcQ.m4a"));
+	CHECK(!ytmusic_cache_owns("/mnt/sd_0/Music/Artist/song.m4a"));
+	CHECK(!ytmusic_cache_owns(NULL));
+}
+
+// A browser's export, which is what "put the session on the card" actually
+// means: the usual Netscape cookies.txt used to be refused as invalid, and a
+// refused import looks exactly like a session Google declined.
+static void test_netscape_cookie_file_is_imported(void) {
+	const char *path = ".build/ytmusic_session.txt";
+	FILE *f = fopen(path, "w");
+	if (!f) {
+		fprintf(stderr, "  skipped: this host cannot write %s\n", path);
+		return;
+	}
+	fprintf(f, "# Netscape HTTP Cookie File\n");
+	fprintf(f, ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tabcdefghijklmnop\n");
+	fprintf(f, ".youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PAPISID\tqrstuvwxyz\n");
+	fprintf(f, ".example.com\tTRUE\t/\tFALSE\t0\tTRACKER\tnope\n");
+	fclose(f);
+
+	char error[192] = "";
+	bool ok = ytmusic_import_session_file(".build", error, sizeof(error));
+	CHECK(ok);
+	if (!ok) fprintf(stderr, "  the import refused the export: %s\n", error);
+	char cookie[4096];
+	ytmusic_session_cookie(cookie, sizeof(cookie));
+	CHECK(strstr(cookie, "SAPISID=abcdefghijklmnop") != NULL);
+	CHECK(strstr(cookie, "__Secure-3PAPISID=qrstuvwxyz") != NULL);
+	CHECK(strstr(cookie, "TRACKER") == NULL);
+	CHECK(ytmusic_logged_in());
+	memset(cookie, 0, sizeof(cookie));
+	FILE *left = fopen(path, "r");
+	CHECK(left == NULL); // the card copy is not left lying there
+	if (left) fclose(left);
+	ytmusic_logout();
+	CHECK(!ytmusic_logged_in());
+}
+
 int main(void) {
 	FILE *seed = fopen(".build/test_ytmusic_config.ini", "w");
 	if (seed) {
@@ -780,6 +928,10 @@ int main(void) {
 	test_relay_without_the_endpoint_names_itself();
 	test_real_device_pages();
 	test_library_says_what_is_missing();
+	test_quality_choice_picks_the_stream();
+	test_region_choice();
+	test_cache_owns_its_own_downloads();
+	test_netscape_cookie_file_is_imported();
 
 	if (failures) {
 		fprintf(stderr, "%d failure%s\n", failures, failures == 1 ? "" : "s");

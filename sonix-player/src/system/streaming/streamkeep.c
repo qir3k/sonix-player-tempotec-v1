@@ -18,6 +18,7 @@
 #include "src/system/streaming/podcastdl.h"
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/tidalcache.h"
+#include "src/system/streaming/ytmusic.h"
 
 #define KEEP_MUSIC_DIR "Music"
 #define KEEP_PART_SUFFIX ".part"
@@ -53,7 +54,10 @@ bool streamkeep_is_stream_track(const char *path) {
 	if (!path || !path[0]) {
 		return false;
 	}
-	return tidalcache_owns(path) || qobuzcache_owns(path);
+	// YouTube Music's download lives in its own temporary cache rather than a
+	// service cache on the card, and is kept the same way: the finished file is
+	// copied into <card>/Music/YouTube Music/... with its tags and sleeve.
+	return tidalcache_owns(path) || qobuzcache_owns(path) || ytmusic_cache_owns(path);
 }
 
 bool streamkeep_busy(void) {
@@ -355,7 +359,8 @@ static void *keep_worker(void *arg) {
 	char service[16];
 	snprintf(path, sizeof(path), "%s", request->path);
 	bool notify_result = request->notify_result;
-	snprintf(service, sizeof(service), "%s", tidalcache_owns(path) ? "Tidal" : "Qobuz");
+	snprintf(service, sizeof(service), "%s", ytmusic_cache_owns(path) ? "YouTube Music"
+														: (tidalcache_owns(path) ? "Tidal" : "Qobuz"));
 	free(request);
 	thread_be_low_priority("stream keep"); // the card is also playing from it
 

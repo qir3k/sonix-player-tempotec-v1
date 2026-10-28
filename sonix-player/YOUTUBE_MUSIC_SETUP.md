@@ -20,13 +20,16 @@ So there are two ways to attach an account, and the page works without either.
 This is the credential the music endpoints actually accept.
 
 1. Sign in to <https://music.youtube.com> in a desktop browser.
-2. Open the developer tools, go to **Network**, reload the page and pick any
-   request to `music.youtube.com`.
-3. Copy the whole `Cookie` request header value, or run `document.cookie` in the
-   console and copy the result.
-4. Paste it into a plain text file holding a single line, and save it as
-   `ytmusic_session.txt` in the root of the microSD card.
-5. On the player open **Streaming → YouTube Music → the cog → Import a session
+2. Export the site's cookies with the browser's own export (a `cookies.txt` in
+   the Netscape format, which is what "Get cookies.txt LOCALLY" and friends
+   produce). Or, by hand: open the developer tools, go to **Network**, reload
+   the page, pick any request to `music.youtube.com` and copy the whole `Cookie`
+   request header value — one line is enough.
+3. Save it as `ytmusic_session.txt` in the root of the microSD card. Both shapes
+   are read: every `youtube.com` / `google.com` line of a Netscape export is
+   collected into a `Cookie` header, and anything else is taken as one header
+   value already.
+4. On the player open **Streaming → YouTube Music → the cog → Import a session
    from the card** and tap it.
 
 The card copy is deleted once the session has been saved. The player keeps it in
@@ -102,6 +105,44 @@ are fetched in 256 KB ranges rather than as one long transfer: an unsigned
 and not throttled at all when it is read in ranges, which is the difference
 between a couple of seconds and a couple of minutes for one track.
 
+A short or empty range reply is **not** the end of the file. Invidious passes the
+bytes on from Google and hands back less than was asked for whenever its own
+upstream pauses; taking that for an ending is what used to finish a three-minute
+track after a minute, at a file size the player then reported as a 35 kbit/s
+stream. The download now asks again from the exact byte it reached, stops only
+on a `416` (or after six empty replies in a row), and checks the total against
+the `clen` the instance named before calling the file whole.
+
+## Settings
+
+All of these are on **YouTube Music → the cog**:
+
+- **Sleep timer** — the music transport's own timer, the one the card and Tidal
+  share, so a stretch set here stops a song at the same point it stops an album.
+  A YouTube Music track plays through the same player, so it is the same countdown.
+- **Audio quality** — *High* takes the 256 kbit/s AAC stream (itag 141) where the
+  instance offers one and the 128 kbit/s one elsewhere; *Standard* pins 128, which
+  is half the bytes and the way back when a public instance is too slow to carry
+  the better one.
+- **Recommendations for** — the country whose store answers, and the language the
+  row names come back in: *Worldwide (US)*, *Poland*, *Poland, English rows*,
+  *Czechia*, *Germany*, *United Kingdom*. Both parts go into the InnerTube
+  `gl` / `hl` of every search, browse and player request, so choosing Poland
+  while reading English gives Polish charts with English titles.
+- **Home rows** — a page of its own: up and down move a row, and the switch
+  beside it decides whether the home page shows it at all. Hiding Explore is the
+  point; the order is kept in the config and read again whenever the home page is
+  built.
+
+## Saving a song to the card
+
+Once a track has played, open the now-playing menu (the track's own menu, the
+same place Tidal and Qobuz offer it) and choose **Keep on card**: the file is
+copied out of the temporary cache into
+`<card>/Music/YouTube Music/<artist>/<album>/<title>.m4a`, with its `.tags`
+sidecar and its sleeve beside it, so the next library scan lists it as an
+ordinary track and it plays with no network at all.
+
 ## Playback: the device, an instance, or a relay
 
 Google demands a browser-grade attestation — a PO token its JavaScript computes —
@@ -135,6 +176,20 @@ in the log — `asking …`, `fetching from …`, `… kept 0 bytes (failed, …
 `played from …` — and the media status is followed by the body of the refusal,
 so a failed play names the host that refused instead of saying "could not reach
 the stream".
+
+The download is finished when the server has nothing left to send, not when a
+reply is short: a proxy handing back less than was asked for is normal, and
+taking that for the end of the file is what once cut a three-minute track off
+after a minute — at a file size the player then reported as a 35 kbps stream.
+So the next range is asked for from where the last one stopped, a dropped
+connection gets one more try at the same offset, and the result is checked
+against the byte count the instance's own reply gives (`clen`), which the log
+names along with the format it chose: `offers itag 140 at 128 kbps`.
+
+The sleeve comes from the row: its thumbnail is fetched at 320 px and written
+beside the cached track as `<id>.jpg`, which is where the player looks for a
+file's artwork — so now-playing shows the cover the list showed, and not the
+placeholder glyph.
 
 **Playback source** in the settings page (Streaming → YouTube Music → the cog)
 shows what is in force and opens the list: *Automatic* (the default, the order
@@ -174,6 +229,17 @@ Piped instance only helps when its answer already points at itself. An Invidious
 instance is asked for its formats reply, and the bytes are then fetched through
 its own `/latest_version?id=…&itag=…&local=true`, which makes the instance fetch
 the audio and pass it on: that is the shape that works from another machine.
+
+That last step is a redirect chain, not a file: `/latest_version` answers `302`
+to a `companion/…` address on a second host of the same instance, and that one
+answers `302` to the `videoplayback` address it proxies — 2256 characters when
+this was measured, `expire` and signature included. The player follows both hops
+and keeps the `Range` header across them. It also no longer follows a truncated
+one: a `Location` longer than the address buffer is refused with
+`http_redirect_too_long`, because cutting that signed address at 2047 characters
+— what the old 2048-byte buffer did — makes the host answer `500`, and that used
+to reach the screen as "could not reach the stream" from every instance, however
+healthy.
 
 Nothing here logs in to an instance: the player never sends a Google password
 anywhere, and the only account it knows is the imported browser session above.

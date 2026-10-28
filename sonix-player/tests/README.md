@@ -147,7 +147,8 @@ Instances are pinned the same way. A pinned Invidious host's formats reply
 `/latest_version?id=...&itag=140&local=true` -- the endpoint that fetches the
 audio and passes it on, which is the only instance shape that works from a
 different machine; a Piped host is used only when its answer already points at
-itself; and one that merely names a `googlevideo` address is passed overrather than handed to the downloader. The settings list is checked too: the default,
+itself; and one that merely names a `googlevideo` address is passed over rather
+than handed to the downloader. The settings list is checked too: the default,
 the device on its own, the relay only once one is configured, and the built-in
 instances, so the page offers something on a player that was never set up.
 
@@ -155,10 +156,25 @@ The order is pinned as well, because the order is what fixes a 403: an instance
 is asked before the device in "auto", and the device's own playable reply is
 still used when no instance can answer. And the downloader walks the same list --
 the first instance refusing its bytes is passed over, the second one's file is
-written and holds exactly what it sent. That is the failure the field log showed:
-a source that resolved an address, and a media fetch Google answered 403. The
-check needs a writable `/tmp/sonix-ytmusic`, so a Windows host whose security
-software blocks that path prints a skip line instead of failing.
+written and holds every byte it sent. That reply comes back in 1000-byte pieces
+while 4095 were asked for, which is the proxy behaviour that once ended a track
+after a minute: a short reply is not an ending, and neither is a `206` that carries
+nothing -- that is the instance's upstream pausing, and the download asks again
+from the byte it reached. The file is finished on a `416`, or after six empty
+replies in a row, and is then checked against the `clen` the instance named. The row's sleeve is fetched too
+and written beside the audio as `<id>.jpg`, so the check covers the artwork the
+player looks for. That run needs a writable `/tmp/sonix-ytmusic`, so a Windows
+host whose security software blocks that path prints a skip line instead of
+failing.
+
+The settings the page stores are pinned too: the quality pill picks itag 141
+(256 kbit/s AAC) when the instance offers it and 140 when the choice is
+*Standard*; the region pair is stored and read back as two letter codes, with a
+malformed pair refused; and the playback cache owns only its own `.m4a` files,
+which is what decides whether the now-playing and row menus offer *Download*.
+A browser's `cookies.txt` export is imported as well as a single `Cookie` line:
+the Netscape lines for `youtube.com` and `google.com` become the session header,
+another domain's line is left out, and the card copy is removed afterwards.
 
 ## The YouTube Music relay
 
