@@ -433,6 +433,13 @@ static void fit_row(lv_obj_t *row) {
 	}
 
 	int32_t content = lv_obj_get_content_width(row);
+	if (content <= 0) {
+		// The row has not been laid out yet. Every measurement below would be
+		// taken from a card with no width, and the name would be given one it
+		// never grows out of -- a name is fitted again when the row resizes,
+		// which is the moment the real answer exists.
+		return;
+	}
 	int32_t avail = content;
 
 	// The right side holds either the chevron or the value, and neither space
@@ -806,6 +813,15 @@ lv_obj_t *settingsrow_toggle(lv_obj_t *parent, const char *name, lv_obj_t **swit
 	if (switch_out) {
 		*switch_out = toggle;
 	}
+	// The same pair settingsrow_add() attaches, and for the same reason: the
+	// row has no width while it is being built, and a caller that adds a
+	// caption asks for the name to be fitted right away. Without these, a
+	// toggle row with a caption keeps whatever that first pass worked out --
+	// which is how the Plugins page came to draw its names in an eight-pixel
+	// column. Settingsrow_add_caption() is the only caller that does this, and
+	// it started with a caption row that was a button row.
+	lv_obj_add_event_cb(card, row_resized_cb, LV_EVENT_SIZE_CHANGED, NULL);
+	lv_obj_add_event_cb(card, row_resized_cb, LV_EVENT_STYLE_CHANGED, NULL);
 	return card;
 }
 
