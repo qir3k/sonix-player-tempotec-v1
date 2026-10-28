@@ -147,10 +147,18 @@ Instances are pinned the same way. A pinned Invidious host's formats reply
 `/latest_version?id=...&itag=140&local=true` -- the endpoint that fetches the
 audio and passes it on, which is the only instance shape that works from a
 different machine; a Piped host is used only when its answer already points at
-itself; and one that merely names a `googlevideo` address is passed over rather
-than handed to the downloader. The settings list is checked too: the default,
+itself; and one that merely names a `googlevideo` address is passed overrather than handed to the downloader. The settings list is checked too: the default,
 the device on its own, the relay only once one is configured, and the built-in
 instances, so the page offers something on a player that was never set up.
+
+The order is pinned as well, because the order is what fixes a 403: an instance
+is asked before the device in "auto", and the device's own playable reply is
+still used when no instance can answer. And the downloader walks the same list --
+the first instance refusing its bytes is passed over, the second one's file is
+written and holds exactly what it sent. That is the failure the field log showed:
+a source that resolved an address, and a media fetch Google answered 403. The
+check needs a writable `/tmp/sonix-ytmusic`, so a Windows host whose security
+software blocks that path prints a skip line instead of failing.
 
 ## The YouTube Music relay
 
