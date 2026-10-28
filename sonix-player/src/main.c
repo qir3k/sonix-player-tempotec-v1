@@ -26,10 +26,12 @@
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/gui.h"
+#include "src/gui/shell/chargescreen.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/settings/powersettings.h"
 #include "src/gui/settings/settings.h"
 #include "src/system/device/adb.h"
+#include "src/system/device/chargemode.h"
 #include "src/system/audio/alsa-controls.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/audio/usbaudio.h"
@@ -60,6 +62,7 @@
 #include "src/system/streaming/tidalcache.h"
 #include "src/system/streaming/streamkeys.h"
 #include "src/system/lastfm/lastfm.h"
+#include "src/system/listenbrainz/listenbrainz.h"
 #include "src/system/library/library.h"
 #include "src/system/core/logging.h"
 #include "src/system/playback/playlist.h"
@@ -74,6 +77,7 @@
 #include "src/system/core/utils.h"
 #include "src/system/net/webcgi.h"
 #include "src/system/net/wifi.h"
+#include "src/system/library/geniusdb.h"
 
 
 static volatile sig_atomic_t running = 1;
@@ -137,9 +141,11 @@ static bool restore_saved_track(void) {
 	char **queue = NULL;
 	int queue_index = 0;
 	bool queue_custom = false;
-	int queue_count = had_query ? 0 : library_queue_load(&queue, &queue_index, &queue_custom);
+	bool queue_ordered = false;
+	int queue_count = had_query ? 0 : library_queue_load(&queue, &queue_index, &queue_custom, &queue_ordered);
 	if (queue_count > 0) {
-		player_restore_list((const char *const *)queue, queue_count, queue_index, queue_custom, saved_track, saved_pos);
+		player_restore_list((const char *const *)queue, queue_count, queue_index, queue_custom, queue_ordered,
+							saved_track, saved_pos);
 		library_queue_free(queue, queue_count);
 		return true;
 	}
@@ -2075,6 +2081,9 @@ int main(int argc, char **argv) {
 	qobuz_init();
 	tidal_init();
 	lastfm_init();
+	// ListenBrainz needs no application keys: its account is a user token
+	// pasted in its settings page, and the module starts with or without it.
+	listenbrainz_init();
 
 	lv_init();
 
@@ -2159,6 +2168,31 @@ int main(int argc, char **argv) {
 		.battery_status_file = NULL,
 	};
 #endif
+
+	// --- The charger, with the player off -----------------------------------
+	//
+	// A player that was switched off and is then put on a charger comes up on
+	// the battery screen, not on the library: the cable is the only reason the
+	// board is running at all, and what the user plugged in for is the charge.
+	// Press power to bring the screen back after it has gone dark, hold power
+	// to start the player after all.
+	//
+	// Here, and not later, for two reasons: the screen reads the gauge itself
+	// (battery_read_now), so it needs nothing the services would start, and the
+	// input threads those services start must not be running while it owns the
+	// power key -- otherwise a hold would open the power menu of a player that
+	// has not been built yet.
+	//
+	// chargemode.h is where the boot is told apart from an ordinary one. The
+	// display, the fonts and the language are already up; everything below this
+	// point is what the hold releases.
+	if (chargemode_wanted()) {
+		chargescreen_run(disp, &battery_cfg);
+	}
+	// Whatever came of that -- a hold on the power key, or a boot with no
+	// charger in it -- the player is what is running from here. The marker the
+	// last power-off left behind has done its work either way.
+	chargemode_player_started();
 
 	system_config_t system_cfg = {
 		.battery_cfg = &battery_cfg,
@@ -2272,6 +2306,9 @@ int main(int argc, char **argv) {
 		// The audiobook index lives beside it, in its own file.
 		snprintf(db_path, sizeof(db_path), "%s/.local/audiobooks.db", db_root);
 		audiobookdb_open(db_path);
+		// The Smart Mix similarity graph, in its own file beside the index.
+		snprintf(db_path, sizeof(db_path), "%s/.local/genius.db", db_root);
+		geniusdb_open(db_path);
 
 		// And the radio's own: the starred stations and the last few played.
 		radio_store_open(db_root);

@@ -79,6 +79,16 @@ void medialist_sort_prefs(unsigned *desc_mask, unsigned *added_mask, bool *artis
 // for the name kinds both filter arguments are ignored.
 void medialist_open(const char *title, library_list_t kind, library_filter_t filter, const char *filter_value);
 
+// Choosing one track for a Smart Mix to be walked from, rather than one to
+// listen to. The walk starts at the records and drills down as usual -- an
+// album's tracks, an artist's records -- and the mode rides along with it, so
+// the whole library stays reachable. Tapping a track hands its path to `cb`
+// instead of playing it; the corner keeps no buttons, and a long press does
+// not start selection mode.
+typedef void (*medialist_seed_cb_t)(const char *path, void *user);
+
+void medialist_open_seed(const char *title, medialist_seed_cb_t cb, void *user);
+
 // Opens one artist the way their disc button was last left: the records, or
 // the tracks strung out. What the search opens an artist with.
 void medialist_open_artist(const char *name);

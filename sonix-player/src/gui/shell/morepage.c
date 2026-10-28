@@ -12,6 +12,7 @@
 #include "src/gui/gearboy/gearboypage.h"
 #include "src/gui/library/audiobooks.h"
 #include "src/gui/library/filespage.h"
+#include "src/gui/metronome/metronome.h"
 #include "src/gui/notes/notes.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/gridpage.h"
@@ -68,6 +69,9 @@ static bool more_tokyo_icon(const char *label, const lv_image_dsc_t **icon, them
 	} else if (strcmp(label, "notes") == 0) {
 		*icon = &icon_notes;
 		*tone = THEME_SEMANTIC_PURPLE;
+	} else if (strcmp(label, "metronome") == 0) {
+		*icon = &icon_metronome;
+		*tone = THEME_SEMANTIC_GREEN;
 	} else {
 		return false;
 	}
@@ -136,6 +140,10 @@ static const grid_entry_t MORE_ENTRIES[] = {
 	// it was left holding, and the notes shelf reads the card.
 	{"calculator", &icon_menu_calculator, NULL, calculator_open},
 	{"notes", &icon_menu_notes, NULL, notes_open},
+	// An action for the calculator's reason: the tempo and the bar come back
+	// from the settings as they were left, and the page repaints them on the
+	// way in.
+	{"metronome", &icon_menu_metronome, NULL, metronome_open},
 };
 
 #define MORE_ENTRIES_MAX 12
@@ -159,6 +167,7 @@ static const char *more_addon_of(const char *slug) {
 	if (strcmp(slug, "flappy_bird") == 0) return "flappy";
 	if (strcmp(slug, "calculator") == 0) return "calculator";
 	if (strcmp(slug, "notes") == 0) return "notes";
+	if (strcmp(slug, "metronome") == 0) return "metronome";
 	// The shelf is the ebook module; Audiobooks is the library's own page and
 	// stays whatever the books shelf is set to.
 	if (strcmp(slug, "books") == 0) return "ebook";

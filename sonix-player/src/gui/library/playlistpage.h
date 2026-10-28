@@ -17,6 +17,10 @@ void playlistpage_init(gui_config_t *cfg);
 // Browse: the playlists themselves.
 void playlistpage_open(void);
 
+// Browse straight to one playlist, the same rows as tapping its name. Used
+// after a Smart Mix playlist has been written, so its contents come up.
+void playlistpage_open_named(const char *name);
+
 // Pick: choose (or create) the playlist `track_path` is added to.
 void playlistpage_add_track(const char *track_path);
 

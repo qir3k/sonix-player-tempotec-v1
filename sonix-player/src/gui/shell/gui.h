@@ -48,6 +48,15 @@ void gui_post_service(void);
 
 void gui_notify_popup(const char *text);
 
+// The warning the battery guard gives at five percent (batteryguard.h): the red
+// card, held longer than a toast because it is the last thing the player says
+// before it switches itself off at one. The caller wakes the panel first --
+// over a dark screen it would not be seen at all.
+//
+// Interface thread only: power.c calls it from its own timer, which is the
+// interface thread.
+void gui_notify_battery_low(void);
+
 // Whether the card is there and ours. False while it is exported to a computer
 // and false when there is none in the slot.
 bool gui_card_available(void);

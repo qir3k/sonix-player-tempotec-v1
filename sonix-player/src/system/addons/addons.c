@@ -23,6 +23,7 @@ static const addon_t ADDONS[] = {
 	{"notes", "notes", "addon_notes_note"},
 	{"flappy", "flappy_bird", "addon_flappy_note"},
 	{"gearboy", "gearboy", "addon_gearboy_note"},
+	{"metronome", "metronome", "addon_metronome_note"},
 	{"ebook", "books", "addon_ebook_note"},
 };
 

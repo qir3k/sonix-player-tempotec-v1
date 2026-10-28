@@ -36,6 +36,7 @@
 #include "src/system/net/wifi.h"
 #include "src/system/net/wifitransfer.h"
 #include "src/system/lastfm/lastfm.h"
+#include "src/system/listenbrainz/listenbrainz.h"
 #include "src/system/bluetooth/bluetooth.h"
 #include "src/system/bluetooth/btreceiver.h"
 #include "src/system/core/config.h"
@@ -46,6 +47,8 @@
 #include "src/system/device/led.h"
 #include "src/system/device/sysinfo.h"
 #include "src/system/device/axpcharge.h"
+#include "src/system/device/batteryguard.h"
+#include "src/system/device/chargemode.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/topbar.h"
 
@@ -206,6 +209,7 @@ static bool g_panel_blanked;
 static uint32_t g_mem_active_ms;   // last activity tick, for standby purposes
 static bool g_usb_present_last;    // cable state on the previous tick, to spot a change
 static bool g_usb_present_known;   // false until the cable has been read at least once
+static bool g_usb_now;             // this tick's reading, shared by the tick's rules
 
 
 static long g_hw_brightness = -1;	   // last brightness value actually written to sysfs
@@ -218,6 +222,10 @@ static bool g_bt_powered_down;			// the boot-time stack has already been put dow
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool g_power_button_pending = false;
 static uint32_t g_last_button_activity_ms; // last physical-button/explicit activity
+
+// The battery's level as the status bar's poll left it (see battery_guard_tick,
+// which is where the guard itself lives); needed by suspend_if_idle above it.
+static int battery_percent_cached(void);
 
 // --- Small sysfs helpers ---
 static long read_long_from_file(const char *path) {
@@ -762,7 +770,7 @@ static bool wifi_in_use(void) {
 		   wifitransfer_get_enabled() || qobuzcache_downloading_id() > 0 ||
 		   qobuzcache_network_wanted() || tidalcache_downloading_id() > 0 || tidalcache_network_wanted() ||
 		   podcastcache_downloading_id() > 0 || podcastcache_network_wanted() || podcastdl_busy() ||
-		   lastfm_network_wanted() || ota_busy();
+		   lastfm_network_wanted() || listenbrainz_network_wanted() || ota_busy();
 }
 
 // Pushes the next suspend attempt out by the anti-hammer delay. A radio that has
@@ -1162,6 +1170,13 @@ static void rtc_alarm_arm_for_auto_off(void) {
 }
 
 void power_shutdown(void) {
+	// First of all, while the settings partition is still writable and
+	// mounted: the marker that says this power-off was deliberate. It is what
+	// makes the next boot with a cable in a charger boot -- the charging
+	// screen, rather than a player switched on into nobody's hands. See
+	// chargemode.h.
+	chargemode_player_stopping();
+
 	// Where the music had got to, before anything else stops. The player's own
 	// poll writes this only every ten seconds while playing and on a change of
 	// state, so without this flush a power-off loses up to ten seconds -- and a
@@ -1420,6 +1435,23 @@ static void suspend_if_idle(uint32_t now, bool playing) {
 	}
 	if (playing) {
 		mem_skip("music is playing");
+		return;
+	}
+	// The last few percent of the battery. A suspended player cannot watch its
+	// own gauge, so the sleep that saves a few percent of a full battery is
+	// exactly what would cost the clean shutdown at one percent: the cell would
+	// simply run out with the databases open. Below BATTERYGUARD_AWAKE_PERCENT
+	// the device therefore stays awake, the screen dark as it was, until either
+	// the cable goes in or the guard takes it down.
+	if (batteryguard_holds_awake(battery_percent_cached(), g_usb_now)) {
+		mem_skip("the battery is low: it could not switch itself off from a suspend");
+		return;
+	}
+	// The panel may be dark while the scan worker owns the card, including
+	// Smart Mix ranking and publication. Keep its I/O awake as well as
+	// preventing the automatic shutdown; neither needs the backlight on.
+	if (library_scan_running()) {
+		mem_skip("the library job is active");
 		return;
 	}
 	// Pause counts as a stopped state: the PCM is already released after five
@@ -1909,6 +1941,97 @@ void power_bluetooth_off(void) {
 	bluetooth_power_down_stack();
 }
 
+// ---------------------------------------------------------------------------
+// The battery's two ends
+//
+// Five percent warns, one percent switches the player off, and both are driven
+// from this tick -- which runs whether the screen is on, dark, or playing
+// something. That is the whole reason the guard lives here and not on the
+// status bar's poll: the status bar is not there in standby.
+//
+// The reading is the one the status bar's poll already refreshed (the gauge is
+// read every second while the screen is up and every two while it is dark), so
+// this costs no sysfs traffic of its own. The cable is read directly, because
+// the question is whether the player is being run by the charger -- not whether
+// a charge is going in, which a battery held at the configured limit answers
+// with a no while the cable is still carrying the player.
+// ---------------------------------------------------------------------------
+static batteryguard_t g_battery_guard;
+
+// A warning that had to wake the panel is a warning on borrowed time: the
+// screen goes back to dark once the card has been read, and not only when the
+// screen-off setting happens to be on. The user touching anything cancels it.
+#define LOW_BATTERY_WAKE_MS 10000
+static uint32_t g_low_battery_woke_at;
+
+static int battery_percent_cached(void) {
+	const char *text = read_battery_percent();
+	if (!text || text[0] < '0' || text[0] > '9') {
+		return -1; // "!!", or whatever the gauge is not saying
+	}
+	int value = atoi(text);
+	if (value < 0) {
+		return 0;
+	}
+	return value > 100 ? 100 : value;
+}
+
+static void battery_guard_tick(void) {
+	int percent = battery_percent_cached();
+	batteryguard_action_t action = batteryguard_step(&g_battery_guard, percent, g_usb_now);
+
+	if (action == BATTERYGUARD_WARN) {
+		printf("power: battery at %d%% -- warning\n", percent);
+		if (!g_screen_on) {
+			// A warning nobody can see is not one. The wake is the ordinary
+			// one, screensaver and all, and the card goes over it. It is put
+			// down again below once it has been read -- a warning that leaves
+			// the panel lit for the rest of the discharge costs more than the
+			// percent it is about.
+			power_screen_on();
+			g_low_battery_woke_at = lv_tick_get();
+		}
+		gui_notify_battery_low();
+		return;
+	}
+
+	if (action == BATTERYGUARD_SHUTDOWN) {
+		// The ordinary way down, the same as the menu's Power off: position
+		// written, databases closed, card unmounted. Which is the whole point
+		// of doing this at one percent rather than at none.
+		char why[64];
+		snprintf(why, sizeof(why), "the battery is at %d%%", percent);
+#ifdef HOST_BUILD
+		// Nothing to protect on a PC, and `poweroff` there would stop the
+		// developer's own machine: say what the device would do and carry on.
+		printf("power: %s -- the player would switch itself off here\n", why);
+		fflush(stdout);
+#else
+		power_auto_off_now(why);
+#endif
+	}
+}
+
+// The panel the warning woke, put back down. A press or a touch is the user
+// taking over: the warning has been read, and what happens next is theirs.
+static void low_battery_wake_expire(uint32_t now, uint32_t input_idle) {
+	if (!g_low_battery_woke_at) {
+		return;
+	}
+	if (input_idle < 1000) {
+		g_low_battery_woke_at = 0;
+		return;
+	}
+	if ((int32_t)(now - (g_low_battery_woke_at + LOW_BATTERY_WAKE_MS)) < 0) {
+		return;
+	}
+	g_low_battery_woke_at = 0;
+	if (g_screen_on) {
+		printf("power: the low battery warning is over -- screen off again\n");
+		power_screen_off();
+	}
+}
+
 static void power_timer_cb(lv_timer_t *timer) {
 	(void)timer;
 	uint32_t now = lv_tick_get();
@@ -1954,6 +2077,7 @@ static void power_timer_cb(lv_timer_t *timer) {
 	// between two tracks is far too brief to reach the timeout, so a suspend
 	// cannot fall in the middle of a track change.
 	bool usb_now = usb_vbus_present();
+	g_usb_now = usb_now; // read once: the guard and the sleep rule below reuse it
 	bool usb_changed = g_usb_present_known && usb_now != g_usb_present_last;
 	if (playing || input_idle < POWER_TICK_MS * 2 || usb_changed) {
 		g_mem_active_ms = now;
@@ -1985,6 +2109,9 @@ static void power_timer_cb(lv_timer_t *timer) {
 		power_screen_off();
 	}
 
+	// 4a-ter-pre. the panel a warning woke, once it has been read
+	low_battery_wake_expire(now, input_idle);
+
 	// 4a-bis. the shutdown timer, once it has run out.
 	//
 	//     Before the suspend, not after it: on a tick where both are ready,
@@ -1997,6 +2124,9 @@ static void power_timer_cb(lv_timer_t *timer) {
 		power_auto_off_now(why);
 	}
 
+	// 4a-ter. the battery's last few percent. Before the radios and before the
+	//         sleep: at one percent this does not return.
+	battery_guard_tick();
 	// 4a-bis-1. the radios a wake owed back, once the wake has settled
 	restore_radios_if_due();
 
@@ -2203,6 +2333,11 @@ void power_init(const power_config_t *cfg, lv_display_t *disp) {
 		park_secs = 15; // any lower and a pocket checked twice re-associates for nothing
 	}
 	g_radio_park_after_ms = (uint32_t)park_secs * 1000u;
+
+	// A fresh discharge to guard: whatever was warned or ordered before this
+	// process started belonged to the session that ended.
+	g_battery_guard = (batteryguard_t){0};
+	g_low_battery_woke_at = 0;
 
 	g_power_timer = lv_timer_create(power_timer_cb, POWER_TICK_MS, NULL);
 

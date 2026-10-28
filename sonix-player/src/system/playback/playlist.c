@@ -687,6 +687,10 @@ bool playlist_insert_at(const char *path, int slot) {
 
 bool playlist_is_custom(void) { return custom_queue; }
 
+// An ordered answer (a Smart Mix) keeps its fixed sequence, so the saved mode
+// is reported as normal play-through while it is on the queue.
+bool playlist_is_ordered(void) { return ordered_queue; }
+
 void playlist_set_custom(bool custom) { custom_queue = custom; }
 
 unsigned playlist_revision(void) { return revision; }
@@ -1308,9 +1312,14 @@ void playlist_set_mode(playback_mode_t new_mode) {
 	mode_save();
 }
 
-playback_mode_t playlist_get_mode(void) { return mode; }
+playback_mode_t playlist_get_mode(void) { return ordered_queue ? PLAYBACK_MODE_NORMAL : mode; }
 
 playback_mode_t playlist_cycle_mode(void) {
+	// An ordered queue is played in its own sequence: a mode change would
+	// reshuffle or repeat it, so cycling stays on normal play-through.
+	if (ordered_queue) {
+		return PLAYBACK_MODE_NORMAL;
+	}
 	playback_mode_t old = mode;
 	switch (mode) {
 	case PLAYBACK_MODE_NORMAL:

@@ -7,6 +7,7 @@
 #include "src/system/core/config.h"
 #include "src/system/library/audiobookdb.h"
 #include "src/system/device/clock.h"
+#include "src/system/library/geniusdb.h"
 #include "src/system/library/library.h"
 #include "src/system/core/logging.h"
 #include "src/system/bluetooth/btlog.h"
@@ -167,6 +168,7 @@ void factoryreset_run(void) {
 	audio_stop();
 	library_close();
 	audiobookdb_close();
+	geniusdb_close();
 	logging_suspend_for_usb();
 	btlog_card_release();
 
@@ -248,6 +250,7 @@ static const char *const KEEP[] = {
 	"tidal_session.ini",
 	"ytmusic_session.ini",
 	"lastfm.session",
+	"listenbrainz.token",
 };
 
 static bool kept(const char *name) {

@@ -44,6 +44,19 @@ typedef void (*system_notification_cb_t)(const char *message, void *user_data);
 void sync_battery_from_sysfs(void);
 char *read_battery_percent();
 
+// One reading of the power supplies, with nothing cached and nothing logged.
+//
+// For the code that runs before system_start_services(): the charging screen is
+// drawn on a boot with the player switched off, and there is no poll running
+// yet for it to read. `cfg` is the same structure the services are given -- on
+// the device it carries no paths and the supplies are enumerated, on the host
+// the two override files stand in for a battery and a charger.
+//
+// `percent` comes back -1 when no gauge answered, `charging` true when a charge
+// is going in or a charger is online. The return value says whether there is a
+// level at all, so -1 can be told apart from a genuine zero.
+bool battery_read_now(const battery_config_t *cfg, int *percent, bool *charging);
+
 // True while the charger is plugged in (sysfs status "Charging" or "Full").
 bool read_battery_charging(void);
 

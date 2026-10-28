@@ -367,9 +367,14 @@ ICONS = [
     ("pencil.svg", "pencil", 36),
     ("calculator.svg", "calculator", 32),
     ("notes.svg", "notes", 32),
+    # The metronome, beside them in the More list: the page header's glyph, at
+    # the same 32 px.
+    ("metronome.svg", "metronome", 32),
     ("enter.svg", "enter", 34),
     ("year.svg", "year", 32),
     ("most-played.svg", "most_played", 32),
+    # The corner button on the lyrics sheet that looks up words on LRCLIB.
+    ("lyrics-search.svg", "lyrics_search", 32),
 ]
 
 # Main menu and section tiles, which keep their own colours and are therefore
@@ -434,6 +439,7 @@ COLOR_ICONS = [
     ("file-explorer.png", "menu_file_explorer", SECTION_ICON_SIZE),
     ("calculator.png", "menu_calculator", SECTION_ICON_SIZE),
     ("notes.png", "menu_notes", SECTION_ICON_SIZE),
+    ("metronome.png", "menu_metronome", SECTION_ICON_SIZE),
 
     # The service badges in the player's top right corner, where the radio puts
     # its LIVE mark. They sit over the cover art, so these are the outlined

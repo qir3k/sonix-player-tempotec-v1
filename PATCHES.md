@@ -1496,23 +1496,33 @@ accepted -- the directory serves many icons over https, and those stations never
 got artwork at all. The icon is now one file per address in
 `<card>/.local/radio-art`, written aside and renamed, with `/tmp` left as the
 fallback for a card that will not take it.
-## Eight languages
 
-The image carries eight language files instead of eleven: English, Italiano,
-Deutsch, Español, Français, Nederlands, Polski and Português BR. `Chinese.ini`,
-`Japanese.ini` and `Russian.ini` are out of
-`sonix-packer/assets/V1/usr/resource/sonix/language/` (4131 lines of text), and
-nothing anywhere kept a second list of them.
+## Eleven languages
+
+The image carries eleven language files: English, Italiano, Deutsch, Español,
+Français, Nederlands, Polski, Português BR, Русский, Українська and 日本語.
+`Chinese.ini` is the one that is out of
+`sonix-packer/assets/V1/usr/resource/sonix/language/`, and nothing anywhere
+keeps a second list of them; Russian came back, then Ukrainian and Japanese
+followed it, each as nothing but a file in that folder.
+
+Japanese was dropped once with Chinese and has come back. The translation is the
+original one, restored from the tree it left in, with the two tags the
+interface has gained since (`appearance_stock_gestures` and its note) added to
+it. What never left is what that removal deliberately kept -- the sort
+collation for kana and CJK titles, the metadata reader's Chinese code pages,
+the `ru`/`ja`/`zh` regional tags a podcast feed may declare, and the ebook
+reader's Rodin faces.
 
 That is the whole of what the picker needed. It has always been the folder:
 `lang_list()` scans it for `*.ini` and reads each file's own `[Language: …]`
 header for the name it shows, so a language that is not there is not offered,
-and a ninth dropped in beside them would be. The first-boot panel sizes itself
-from the same call.
+and a twelfth dropped in beside them would be. The first-boot panel sizes
+itself from the same call.
 
 What did need changing is the other end of a choice. A device updated from a
-build that had one of the three selected keeps that name in `[ui] language`,
-with no file behind it. `lang_init()` used to fall back to Italiano on any
+build that had Chinese selected keeps that name in `[ui] language`, with no
+file behind it. `lang_init()` used to fall back to Italiano on any
 unreadable file; it now tries English -- the first-boot language -- and then
 Italiano, and writes the name it settled on back to the settings, so the
 choice is corrected once instead of on every boot and the settings page stops
@@ -1520,32 +1530,29 @@ offering a row that cannot be honoured. The fallback to tags is kept for what
 it was for: a folder with no language files at all is a broken install, not a
 dropped language, and bare tags are the honest sign of it.
 
-The Japanese faces follow. `japanese.otf` was chained in front of the main
-face only while the interface was in Japanese, gated on
-`lang_current() == "Japanese"`; with no Japanese file that chain could never be
-built, so the face, the CJK letter test it turned on and the glyph callbacks
-around it are gone from `src/gui/fonts/fonts.c`, and MiSans answers kana and
-kanji again as it does for every other language. The two files stay in the
-image for one reason: the ebook reader sets a book whose `dc:language` is `ja`
-in them, because Bookerly has no kana or kanji at all and the reader's faces
-carry no fallback chain. Removing them is a 5.4 MB saving and a Japanese book
-set in MiSans -- a change to make deliberately, not as a side effect of this
-one.
+The Japanese UI face goes with the language. `japanese.otf` -- FOT-Rodin -- is
+chained in front of the main face while the interface is in Japanese, gated on
+`lang_current() == "Japanese"`: kana, kanji and the CJK punctuation and
+full-width forms draw from Rodin rather than MiSans, whose kanji are the
+Chinese shapes, and a MiSans tail behind Rodin covers the kanji Rodin does not
+have. The gate, the CJK letter test and the glyph callbacks around it live in
+`src/gui/fonts/fonts.c`, and `fonts_set_language()` runs ahead of `lang_set()`
+in the language page so the relabelled pages are measured with the right
+faces. In any other language the chain is silent. The two files ship either
+way: the ebook reader sets a book whose `dc:language` is `ja` in them,
+because Bookerly has no kana or kanji at all and the reader's faces carry no
+fallback chain.
 
-The rest is the collateral that was keyed off the three names:
+What stayed gone from the original eleven-language build:
 
 * the Ko-fi/Boosty choice in the easter egg, which read
   `lang_current() == "Russian"`. One code now, and
   `usr/resource/sonix/gui/boosty-qr-code.png` (85 KB) is gone with it;
-* the ten greetings the first-boot panel cycles through, trimmed to the eight
-  that are still languages here;
-* the interface-language to ISO-code table the podcast directory is asked in,
-  which had `ja`, `ru` and `zh` rows nothing can reach;
-* `fonts_set_language()`, whose only job was rebuilding the chain when the
-  interface became Japanese, and its two calls in the language page.
+* the `ru` and `zh` rows of the interface-language to ISO-code table the
+  podcast directory is asked in -- the `ja` row came back with the language;
+* the Russian and Chinese greetings, and their language files.
 
-The three UI tests that walk the language folder asserted eleven files, which
-was a tripwire rather than an accident: they now assert eight, and a ninth
+The UI tests that walk the language folder count ten, and an eleventh
 language is meant to fail them until its texts are checked the same way.
 
 Left alone on purpose: the Russian keyboard layout (a way to type Cyrillic in
@@ -1752,3 +1759,311 @@ music's, the audiobook's and the podcast's -- the timer core already had a
 radio kind of its own, it simply had no way in from the control centre. Its
 hold opens Radio settings on the timer, like the other three.
 
+
+away with it. The reader and the two games hide it behind a full-screen picture
+instead, and they keep their own presses.
+
+## The control centre's slider, as brightness or as volume
+
+The bar under the control centre's round buttons has always set the panel
+brightness, which is the stock firmware's brightness bar in the place it has
+always had. Some people reach for the volume far more often than for the
+backlight, and the volume keys are on the side of the device rather than on the
+screen they are already touching. **Settings → Screen → Volume in control
+centre** gives them the same bar for the output volume, off by default.
+
+It is one row and one slider, not two that take turns: the setting changes what
+the slider does rather than which of two is on screen, so nothing is rebuilt and
+nothing moves. `quickpanel_volume_slider()` and `quickpanel_set_volume_slider()`
+are the whole of the switch, over `[quickpanel] volume_slider`; the sheet reads
+it again at every pull, so a change is in effect at the next one, and the
+settings row also applies it at once in case the sheet is already built.
+
+As the volume bar the row keeps the three glyphs and the warning colour of the
+volume pill over the player — silent below 1%, quiet below 55%, loud above it,
+the fill turning red past the same 55% — so the bar says the same thing in the
+control centre as it does over the player. The slider reads and writes
+`get_volume_percent()`/`set_volume_percent()`, the pair the keys, the pill and
+Bluetooth remotes already share: it therefore follows the output profile in use,
+respects the per-socket volume limit and holds still on line out, where the level
+is fixed. The poll that repaints the panel keeps the knob in step with a level
+moved from outside while the sheet is up, and never moves it under a finger. The
+number in the status bar above it is refreshed on every step, since it is the
+same level and would otherwise lag the sound by up to a second.
+
+## The control centre's card as a way into the player
+
+The now-playing card under the control centre's buttons showed what was playing
+and carried its transport, but the one thing a card shaped like that invites --
+a tap on the track to open it -- did nothing. The title and the artist are now
+that way in, the way they are on a lock-screen widget: a tap on either brings
+Now Playing up, and the panel goes away as it does when a long press opens a
+page from a circle.
+
+Two details make it work with the sheet it sits on. The order is the one
+`open_page()` already uses for the pages -- the control centre goes down first
+and the player comes up behind it -- because the player is a sheet on the top
+layer: opened under a control centre still on screen, it would be drawn beneath
+the panel's veil rather than over the page. When the player is already there,
+because the panel was pulled down over it, closing the panel is the whole job
+and the sheet is revealed rather than reopened.
+
+And the taps belong to the labels, not to the card. LVGL labels are not
+clickable, and one line of text is a thin target on a 240 x 320 panel, so each
+label is made clickable with its hit area grown past the line on every side --
+the transport row is built after them, and LVGL offers a press to the last of
+the overlapping children first, so the buttons keep their own. The press still
+bubbles to the sheet, so a drag that starts on the title moves the panel like a
+drag anywhere else, and the guard the circles use (`circle_guard_cb`) keeps the
+release that ends such a drag from also opening the player.
+
+## A metronome, and the eighth tile
+
+The More menu gained a metronome: 30 to 250 BPM, a bar of one to seven beats,
+and a tap tempo. It is a page of two cards, the way the settings pages are
+built -- the tempo with its readout, its slider and its two buttons, then the
+bar as a row of seven -- laid out from `bp_pick()` so it stays inside a 240 x
+320 panel, and painted by hand where its colours follow the state: the chosen
+beat, the button that is running, the dot that is lit.
+
+The click is not a file. There is no tone generator anywhere else in the
+player, and shipping a sample would mean shipping a decoder path for one
+sound, so `metronomeclick.c` synthesises two short bursts -- a bright one on
+the downbeat, a lower one between -- and writes them into the external PCM the
+way the emulator's sound does: 44.1 kHz, stereo, 16-bit, in ten-millisecond
+blocks, on a thread of its own, with `audio_stop()` and `radio_stop()` before
+the output is taken, because one PCM has one writer.
+
+Two decisions are what keep it a metronome rather than a ticking noise. The
+tempo is kept in frames, not in sleeps: each pass writes a block and the write
+blocks until the DAC has room, so the stream itself is the clock, and the beat's
+position is carried as a fraction so it is not truncated once per block. And
+the onset of a click is placed on its own sample inside the block rather than
+on a block boundary, so a tempo change moves the click by at most one block
+(ten milliseconds) and never by a whole beat.
+
+The page does not time anything. It asks the audio thread how many beats it has
+written and which of the bar the last one was, and lights the dot for that beat
+-- which is why the flash cannot drift from the ear, and why a bar of three
+follows a bar of seven without the page guessing where it is.
+
+The tempo and the bar go into the config file, written when the drag ends, when
+the bar changes, when the click starts and when the page is left, but only if
+the value is not what is already there: a tap tempo that saved on every tap
+would rewrite the card four times a second at the top of the scale. Leaving the
+page stops the click, because the page is the only place it can be stopped
+from.
+
+### The eighth tile, and a rule that did not know about three columns
+
+The More page drew eight entries in a 3 x 3 grid badly: the tile rule that
+widens the last entry to fill its row -- written for five entries in a 2 x 3
+page, where the last one would otherwise leave a card-sized hole -- also fired
+at eight entries, where the last tile is not alone on its row at all. The wide
+tile took a fourth row of its own, past the foot of a page that cannot be
+scrolled, and the metronome was the entry nobody could reach.
+
+The rule now asks whether the last entry really would be alone: it widens only
+when the count leaves one place on the last row, which is the case it was
+written for. Behaviour at five of six and at seven of nine is unchanged; at 2 x
+3 with four entries the third row stays deliberately empty, in all three copies
+of the layout code (`gridpage_set_layout`, `gridpage_build`,
+`gridpage_replace_entries`), which now share the one predicate instead of
+repeating it.
+
+## The charger, with the player off
+
+The stock player comes up on a battery screen when the device was switched off
+and a cable is plugged in: the charger powers the board, and the thing the user
+plugged in for is the charge, not the library. Replacing the stock binary means
+that boot lands in this player instead, so the same boot has to be recognised
+and answered the same way.
+
+### What the hardware does, and does not, say
+
+Nothing in the kernel reports whether the board was powered by the key or by
+VBUS. The AXP2101 knows, in the power-on-source field of its status register,
+but that register is not exposed on this firmware, and the kernel offers no boot
+reason either. What *can* be known is what the device was doing before it
+started, and that is the question actually being asked: a boot with a cable in
+is a charger boot only if the player was off when the cable went in.
+
+So the player writes a marker beside the settings, on `/usr/data` -- the one
+partition that is writable and always there:
+
+```
+/usr/data/.sonix_player_running
+```
+
+It goes down as the player's own startup begins and `power_shutdown()` takes it
+off, first, before the databases are closed and the card is unmounted. A boot
+with a cable in and **no** marker is therefore a device that was off and has
+just been put on a charger:
+
+| how the device started | marker | what comes up |
+|---|---|---|
+| Power off (menu, auto-off, flat battery), then the cable goes in | absent | the charging screen |
+| Power off, then the power key | absent, no cable | the player |
+| Reboot from the menu, a crash, a firmware update | present | the player |
+| Power cut, cell pulled -- no clean shutdown | present | the player |
+| Factory reset (recovery wipes `/usr/data` on the next boot) | absent | the charging screen, if the cable is in |
+
+The marker says "this device was running the player", not "the player was
+switched off purposefully", because that is the answer that keeps a battery
+screen off a reboot: a crash leaves the marker, and the device comes back to the
+player the user was using. The cost is the fourth row -- a player whose power
+was cut with the cable in boots the player rather than the battery screen -- and
+the fifth, which is the recovery script's wipe of `/usr/data` and the one thing
+here that no code in the player can observe. Both are rare, and both are
+answered by holding power for a moment, which is what the screen would have
+asked for anyway.
+
+### The screen
+
+`chargescreen.c` runs before the services start, on purpose: it reads the gauge
+through `battery_read_now()`, the cable through `usb_vbus_present()`, and the
+power key off its own evdev node, so no input thread is running to answer a key
+it is using. A hold would otherwise open the power menu of a player that has not
+been built yet.
+
+It draws a battery whose fill is the level, the percentage, and one of three
+states -- charging, charger connected with nothing going in (full, or held at
+the charge limit), or no cable -- then darkens itself after ten seconds. **Press
+power** to bring it back; **hold power** for the same 1.2 s the power menu's
+long press waits for, and the player starts. With the cable taken out while the
+screen is dark it switches the player off instead: a device that was off, was
+woken by a cable and no longer has one has nowhere to be.
+
+The panel is blanked and woken the way `power.c` does it, which on this board is
+not optional: the SLCD leaves its memory white on reset and loses a frame pushed
+before it is listening, so the backlight is held at zero across the unblank and
+the settle, and brought up over a frame that is already in the framebuffer. The
+code is short and repeats `power_screen_on()`'s order deliberately; the long note
+on that function is the reason for each step.
+
+Every line on the screen is given the panel's width and told to wrap. The three
+states are short in English and not in every language -- the Ukrainian for
+"charger connected" is wider than the glass at 22 px -- and a label that sized
+itself to its text would simply leave the panel. That is not theory: the
+headless test below found it on the first run, in the state line.
+
+`[power] charge_screen = 0` in `device_config.ini` turns the screen off, and
+`[power] charge_screen_seconds` moves its timeout (ten, floor five). On the
+simulator `SONIX_CHARGE_SCREEN=1 ./sonix_player_host` brings it up, with P as
+the power key.
+
+What this cannot add is the boot itself: a board whose PMIC does not power it up
+when VBUS arrives stays off, and no amount of software will see the cable.
+
+`make -C sonix-player/tests ui` builds and runs `test_chargescreen`, which draws
+the screen on the real renderer at both panel sizes: every object inside the
+glass, the fill within a pixel of the reading it was given and never past the
+box at 100%, `--` and an empty bar for a gauge that answered nothing (never
+`0%`), and the three state lines in each of the ten languages -- stepped through
+one reading at a time, because the screen only repaints a line that has
+changed.
+
+## The last five percent
+
+A player that runs until the cell is empty does not switch itself off. The
+regulator drops out from under it with the card's databases open and the position
+unwritten, which is how a card acquires a database it has to repair on the next
+boot -- if it does.
+
+`batteryguard.c` is the rule, and it is its own module with no LVGL, no sysfs and
+no clock, so it can be driven by a test (`make -C sonix-player/tests
+batteryguard`) rather than only on a device with a battery on its way flat:
+
+* **5%** warns, once per discharge. The warning is the red notice card, held for
+  eight seconds instead of the usual three, and the panel is brought back up
+  first if it was dark -- in standby, which is exactly when a warning is needed,
+  there is nothing on screen to warn with. The wake is not a loan: ten seconds
+  after the card goes up the panel goes dark again, because a warning that
+  leaves the panel lit for the rest of the discharge costs more than the percent
+  it is about. A press or a touch in the meantime hands the screen back to the
+  user, and it stays on as long as the ordinary screen-off timeout says.
+* **1%** goes down through `power_shutdown()`: the same way as the menu's Power
+  off, which is the point of doing it at one instead of at none.
+* Neither happens on the charger. The question is the cable, not "a charge is
+  going in": a battery held at the 80% charge limit reports exactly that, and the
+  cable is still carrying the player.
+* An unreadable gauge (`"!!"`, or any non-numeric answer) is not a flat battery,
+  and does nothing at all. The thresholds are on the reading the status bar's
+  own poll already refreshes, so the guard costs no sysfs traffic of its own.
+
+### Standby, and the one state it cannot see
+
+The tick that carries the guard runs with the screen on, off, or while something
+is playing, which is what "also during standby" comes down to on the device. The
+exception is suspend-to-RAM: nothing runs there at all, so a player that went to
+sleep at 12% could reach 1% with nobody watching.
+
+Below 10% and off the cable, `suspend_if_idle()` therefore refuses to sleep, with
+the reason in the log. The screen stays dark as it was -- the brightness of a
+dark screen is not the cost the sleep saves -- and the player waits, awake, for
+either the cable or the guard's shutdown at 1%. Above 10% the ordinary standby
+applies: a full battery is allowed its sleep, and a device left for weeks on a
+shelf is still going to die the way any device left for weeks on a shelf does.
+
+
+## Russian comes back
+
+`Russian.ini` is back in `sonix-packer/assets/V1/usr/resource/sonix/language/`,
+beside the ten that stayed, so the picker offers Русский again in Settings
+and on the first-boot panel. Only Chinese is still out. As before, the picker
+needed nothing told to it: `lang_list()` scans the folder for `*.ini` and
+reads each file's `[Language: …]` header for the name it shows.
+
+The text is the recovered file, brought up to date rather than retranslated:
+strings added while Russian was gone -- the stock-gestures row and its note,
+the control-centre volume row, ListenBrainz, Smart Mix, the metronome and the
+battery guard -- are translated too, and its lines are back in the order the
+other files share, so all eleven line up. Nothing else needed a font or a
+layout: Cyrillic was already drawn for Ukrainian and for tags, and the Russian
+keyboard layout never left.
+
+The collateral keyed off the name comes back with it: the first-boot greeting
+("Добро пожаловать" -- still the wide one the welcome page is sized around),
+the `ru` row in the podcast directory's language table, and the Ko-fi/Boosty
+choice in the easter egg, with
+`usr/resource/sonix/gui/boosty-qr-code.png` beside the Ko-fi code. Ko-fi takes
+no cards issued in Russia, so the Russian interface gets Boosty again and
+every other language gets Ko-fi.
+
+The `lang_init()` fallback written for the removal stays, for the one name
+that is still gone: a device whose settings say Chinese starts in English and
+has the name written back once. A device that kept Russian in its settings and
+skipped the builds without it simply loads Russian again; one that ran those
+builds was already corrected to English, and picks Русский from the list like
+any other change.
+
+The UI tests that walk the language folder asserted ten files; they now
+assert eleven, and a twelfth language is meant to fail them until its texts
+are checked the same way. The main-menu test switches into Russian as it does
+into Ukrainian, and checks the name the file declares for itself.
+
+## Tidal port from qir3k's fork
+
+The Tidal work from `qir3k/sonix-player-tempotec-v1` is replayed here as
+22 path-filtered cherry-picks. Each keeps its original author, message and a
+`(cherry picked from commit …)` trailer, but carries only the Tidal modules and
+their two new helpers (`listcache` and `streamkeep`): `dfa8a97`, `e8cbce0`,
+`870cbb8`, `1e1e101`, `54b9f46`, `1fa0648`, `50a838d`, `9f305ed`, `ac35cf9`,
+`c0f8ea5`, `05d8710`, `c6e7d53`, `c20256c`, `b1baa7c`, `0865ab5`, `6a65666`,
+`d135561`, `e314702`, `c9becf9`, `e8b4c21`, `339b433` and `b008638`. Unrelated
+fork work — YouTube Music, radio and podcast redesigns, Bluetooth, themes and
+release machinery — is deliberately not part of the port.
+
+Together those commits bring the 240 px Tidal layout, a search page with its
+last eight queries, favourite artists, playlist-track removal, configurable
+home rows, card-backed list caches, bulk row selection, serialized API and sync
+workers, queued/cancellable downloads, a Downloaded browser, "Keep on card"
+saving with tags and artwork, storage-failure reporting, and an SD-card-backed
+playback cache for hi-res DASH streams.
+
+The integration commit adds the shared hooks the filtered commits need on this
+newer upstream: a writable `device_state` prepare callback (and matching Qobuz,
+podcast and Subsonic signatures), the track-menu actions, path-backed media-list
+subtitles, dynamic-title realignment, the shared row-duration formatter, cache
+cleanup at startup and card removal, and the new translation keys in every
+language file. It also adds the `lang.h` include `streamkeep.c` needs for `tr()`.
