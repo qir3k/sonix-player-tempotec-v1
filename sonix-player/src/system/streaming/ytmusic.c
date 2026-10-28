@@ -44,18 +44,29 @@ static const char *playback_cache_dir(void);
 // urn:ietf:...:device_code grant issues a token the music endpoints refuse.
 #define YTMUSIC_OAUTH_DEVICE_GRANT "http://oauth.net/grant_type/device/1.0"
 
-// The web client's public InnerTube key. It is not an account credential: it
-// is the key music.youtube.com hands every visitor, and every open-source
-// YouTube Music client carries it. It is used directly rather than scraped
-// from the page, because the page now answers a client whose User-Agent it
-// does not recognise -- and this player is not a browser -- with a "your
-// browser is deprecated" stub that contains no key at all. That stub is what
-// ytmusic_context_unreadable was.
+// The web client's InnerTube key, supplied by the build.
 //
+// It is not an account credential and not a secret of anybody's: it is the key
+// the music.youtube.com page hands every visitor, and it is used directly
+// rather than scraped from the page because that page answers a client whose
+// User-Agent it does not recognise -- and this player is not a browser -- with
+// a "your browser is deprecated" stub that contains no key at all. That stub is
+// what ytmusic_context_unreadable was.
+//
+// It is still not committed: it belongs to Google rather than to this
+// repository, secret scanners flag the AIza... form wherever it appears (GitHub
+// did, on the commit that first carried it), and a key baked into a public
+// image is one Google can rotate out from under every build of it. So the
+// value arrives from the build -- `make YTMUSIC_API_KEY=...`, the environment,
+// or a .ytmusic-key file the Makefile reads -- and a build that was given none
+// says so at the first request rather than sending one that cannot work.
+#ifndef YTMUSIC_API_KEY
+#define YTMUSIC_API_KEY ""
+#endif
+
 // The client version is the page's build stamp, in the same "1.YYYYMMDD.01.00"
 // form the public clients use, derived from today's date so it never goes
 // stale in a shipped image.
-#define YTMUSIC_API_KEY "***REMOVED***"
 #define YTMUSIC_CLIENT_VERSION_FALLBACK "1.20250101.01.00"
 
 static pthread_mutex_t session_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -515,6 +526,21 @@ ytmusic_login_state_t ytmusic_login_device_poll(ytmusic_device_login_t *login,
 // Fixed at the first request and never refetched: neither changes while the
 // player runs, and the version is today's date at boot.
 static bool ensure_context(char *error, size_t error_size) {
+	// A build with no key can make no InnerTube request at all: the endpoint
+	// answers a request without one with the same stub an unknown User-Agent
+	// gets, which used to be reported as "no rows" and left the page looking
+	// empty. Say which piece is missing, once, and name it.
+	if (!YTMUSIC_API_KEY[0]) {
+		static bool told;
+		if (!told) {
+			told = true;
+			fprintf(stderr, "ytmusic: this build carries no InnerTube key; rebuild with "
+							"YTMUSIC_API_KEY set (see YOUTUBE_MUSIC_SETUP.md)\n");
+		}
+		set_error(error, error_size, "ytmusic_api_key_missing");
+		return false;
+	}
+
 	pthread_mutex_lock(&api_lock);
 	if (api_key[0] && client_version[0]) {
 		pthread_mutex_unlock(&api_lock);

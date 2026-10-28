@@ -15,6 +15,35 @@ Two things about it shape this page:
 
 So there are two ways to attach an account, and the page works without either.
 
+## Building with the InnerTube key
+
+Every request to that interface carries a key. It is the one the
+`music.youtube.com` page hands every visitor — not an account credential and not
+anybody's secret — but it is Google's, and a key baked into a public image is one
+Google can rotate out from under every build of it. It is therefore not in the
+repository: the build supplies it.
+
+```sh
+# once, on a machine that builds images repeatedly
+printf '%s' 'AIza...' > sonix-player/.ytmusic-key      # gitignored
+
+# or per build, from the environment
+YTMUSIC_API_KEY='AIza...' make -C sonix-player target
+
+# or on the command line
+make -C sonix-player target YTMUSIC_API_KEY='AIza...'
+```
+
+In CI, put it in a repository secret and pass it to the build step as
+`YTMUSIC_API_KEY`, which is what `.github/workflows/build-tempotec-v1.yml` does
+whenever a `YTMUSIC_API_KEY` secret exists.
+
+A build with none of those still compiles and every other feature works; YouTube
+Music then answers `ytmusic_api_key_missing` at its first request — a toast that
+says the build has no key, and one line on stderr naming this section — instead
+of sending a request the endpoint can only refuse, which used to arrive at the
+page as a search that simply found nothing.
+
 ## Option 1: import a session from the browser (recommended)
 
 This is the credential the music endpoints actually accept.
