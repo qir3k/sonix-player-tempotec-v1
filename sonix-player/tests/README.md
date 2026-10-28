@@ -167,9 +167,23 @@ nothing -- that is the instance's upstream pausing, and the download asks again
 from the byte it reached. The file is finished on a `416`, or after six empty
 replies in a row, and is then checked against the `clen` the instance named. The
 row's sleeve is fetched too and written beside the audio as `<id>.jpg`, so the
-check covers the artwork the player looks for. That run needs a writable `/tmp/sonix-ytmusic`, so a Windows
-host whose security software blocks that path prints a skip line instead of
-failing.
+check covers the artwork the player looks for.
+
+Playback starts before the download ends, and that is pinned as well: with the
+same 1000-byte pieces, `ytmusic_stream_for_playback` calls its `ready` callback
+once, at 3000 of the 4095 bytes, with the file still announced to `growfile` --
+so the page may hand it to the player -- and by the time the call returns the
+file is whole and no longer growing. That is what lets a song begin in seconds
+instead of after the whole transfer, and the callback firing on a *partial*
+file is the part that cannot be assumed. The fixture body starts with an `ftyp`
+and a `moov` box for a reason: an M4A has no sample table until the index
+arrives, so the early start waits for it, and a body without one would prove the
+start happens but not that the decoder could open what it was handed.
+
+The cache directory is `/tmp/sonix-ytmusic` on the device. The suite points
+`SONIX_YTMUSIC_CACHE` at its own `.build/ytmusic-cache` first, because a Windows
+host can refuse every create under `\tmp` (the CRT answers EACCES, and an
+earlier version of these checks printed a skip line instead of running them).
 
 The settings the page stores are pinned too: the quality pill picks itag 141
 (256 kbit/s AAC) when the instance offers it and 140 when the choice is

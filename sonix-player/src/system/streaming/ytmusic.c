@@ -4,6 +4,11 @@
 #include "src/system/core/config.h"
 #include "src/system/core/json.h"
 #include "src/system/core/sha1.h"
+#include "src/system/decode/growfile.h"
+
+// Declared here because the tag writer near the top of the file also needs to
+// know where a file it is describing sits; defined beside the downloader.
+static const char *playback_cache_dir(void);
 #include "src/system/net/http.h"
 #include "src/system/streaming/streamkeys.h"
 
@@ -1856,8 +1861,8 @@ static void ytmusic_log_empty_body(const char *what, const char *body) {
 		mkdir(folder, 0755);
 		snprintf(path, sizeof(path), "%s/empty-%s.json", folder, what);
 	} else {
-		mkdir("/tmp/sonix-ytmusic", 0700);
-		snprintf(folder, sizeof(folder), "%s", "/tmp/sonix-ytmusic");
+		mkdir(playback_cache_dir(), 0700);
+		snprintf(folder, sizeof(folder), "%s", playback_cache_dir());
 		snprintf(path, sizeof(path), "%s/empty-%s.json", folder, what);
 	}
 	FILE *f = fopen(path, "wb");
@@ -2458,6 +2463,16 @@ static bool write_playback_tags(const char *path, const ytmusic_track_t *track) 
 // transfer is kept as the fallback for a server that ignores Range.
 #define YTMUSIC_CHUNK (256 * 1024)
 
+// Where the playback cache lives: /tmp on the device, because it is scratch and
+// nothing there has to survive a reboot. SONIX_YTMUSIC_CACHE moves it, which is
+// what lets the host suite write it at all -- some Windows machines refuse
+// every create under \tmp, and a suite that cannot make the folder would have
+// to skip the download checks it exists to make.
+static const char *playback_cache_dir(void) {
+	const char *override = getenv("SONIX_YTMUSIC_CACHE");
+	return (override && override[0]) ? override : "/tmp/sonix-ytmusic";
+}
+
 // What the download is doing, for the page's loading card. A percentage rather
 // than a byte count: a 64-bit counter read from another thread on a 32-bit
 // device can tear, and being one step out on a bar is not a problem.
@@ -2476,9 +2491,88 @@ static void progress_note(uint64_t done) {
 	progress_percent = percent > 100 ? 100 : (int)percent;
 }
 
+// Starting the player before the file is whole.
+//
+// growfile.c gives the decoder a file that is still being written -- the same
+// mechanism Qobuz plays through -- and this is the other end of that contract:
+// announce the path, say what has arrived after every chunk, and say once, at
+// the byte the track can be opened from, that playback may begin. NULL means an
+// ordinary download, which is what "keep on card" wants: it has nothing to
+// play while it waits, and a file that is only whole at the end.
+typedef struct {
+	const char *path;   // the file as the player will open it
+	uint64_t ready_at;  // bytes that have to be on disk before it may
+	ytmusic_ready_cb ready;
+	void *user;
+	bool called;
+	bool indexed;       // the moov box has been looked for
+	bool have_moov;     // and found, so the decoder has something to read
+	uint64_t indexed_at;
+} stream_hook_t;
+
+// Is the MP4 index in the part that has arrived?
+//
+// An M4A is no use without its `moov` box: that is where the sample table
+// lives, and the decoder cannot describe the first frame without it. It sits at
+// the front of the streams these instances serve, but "at the front" is a
+// property of the container, not a promise, and handing the player a file whose
+// index has not landed yet is a decode failure a second before it would have
+// worked. So the start waits for it -- scanning once, over the first 64 kB,
+// which is where a faststart file keeps it.
+static bool moov_arrived(const char *path, uint64_t upto) {
+	uint8_t head[64 * 1024];
+	size_t want = upto < sizeof(head) ? (size_t)upto : sizeof(head);
+	if (want < 8) return false;
+	FILE *f = fopen(path, "rb");
+	if (!f) return false;
+	size_t got = fread(head, 1, want, f);
+	fclose(f);
+	for (size_t i = 0; i + 4 <= got; i++) {
+		if (memcmp(head + i, "moov", 4) == 0) return true;
+	}
+	return false;
+}
+
+// How far past the threshold the start will wait for the index before going
+// ahead anyway: a stream that keeps its moov at the end still plays, it just
+// plays when it would have before this existed.
+#define STREAM_MOOV_PATIENCE (512 * 1024)
+
+static void stream_note(stream_hook_t *hook, uint64_t done) {
+	if (!hook) return;
+	growfile_progress(hook->path, (long)done);
+	if (hook->called || done < hook->ready_at) return;
+	if (!hook->indexed) {
+		hook->indexed = true;
+		hook->indexed_at = done;
+		hook->have_moov = moov_arrived(hook->path, done);
+	}
+	if (!hook->have_moov && done < hook->indexed_at + STREAM_MOOV_PATIENCE) return;
+	if (!hook->have_moov) {
+		printf("ytmusic: no moov box in the first part; starting anyway\n");
+	}
+	hook->called = true;
+	printf("ytmusic: %llu bytes are enough to start playing\n", (unsigned long long)done);
+	if (hook->ready) hook->ready(hook->path, hook->user);
+}
+
+// How many bytes before the decoder is given the file. A fraction of the whole
+// when the instance said how big it is -- an eighth, so a long track is not
+// held back for longer than a short one -- with a floor and a ceiling: under
+// the floor the header and the first frames are not there yet, and above the
+// ceiling the wait stops being about latency and starts being the download.
+static uint64_t stream_threshold(uint64_t expected) {
+	uint64_t at = expected ? expected / 8 : 0;
+	if (at < 196608) at = 196608;
+	if (expected && at > expected / 2) at = expected / 2;
+	if (at > 1048576) at = 1048576;
+	return at;
+}
+
 // The file in ranged chunks. False when Range is not honoured (or nothing came
 // back), which is the caller's cue to download it in one piece instead.
-static bool download_ranged(const char *url, const char *part, uint64_t *downloaded, bool *complete) {
+static bool download_ranged(const char *url, const char *part, uint64_t *downloaded, bool *complete,
+							stream_hook_t *hook) {
 	*downloaded = 0;
 	*complete = false;
 	FILE *f = fopen(part, "wb");
@@ -2567,7 +2661,13 @@ static bool download_ranged(const char *url, const char *part, uint64_t *downloa
 		}
 		free(body);
 		*downloaded += len;
+		// Flushed before it is announced: a reader that is handed this path
+		// reads the file, not the writer's stdio buffer, so bytes still sitting
+		// in it are bytes the decoder waits for. Only the growing case pays for
+		// this -- an ordinary download has no reader until it is over.
+		if (hook) fflush(f);
 		progress_note(*downloaded);
+		stream_note(hook, *downloaded);
 		empty_asks = 0;
 		// A short chunk is NOT the end of the file. Invidious proxies the bytes
 		// and hands back less than was asked for whenever its own upstream
@@ -2583,7 +2683,8 @@ static bool download_ranged(const char *url, const char *part, uint64_t *downloa
 
 // The same file in one transfer, for a server that does not answer Range. This
 // is what the download always did, and the reason for the chunked path above.
-static bool download_streamed(const char *url, const char *part, uint64_t *downloaded, bool *complete) {
+static bool download_streamed(const char *url, const char *part, uint64_t *downloaded, bool *complete,
+							  stream_hook_t *hook) {
 	*downloaded = 0;
 	*complete = false;
 	http_stream_t stream;
@@ -2611,7 +2712,9 @@ static bool download_streamed(const char *url, const char *part, uint64_t *downl
 			break;
 		}
 		*downloaded += (uint64_t)n;
+		if (hook) fflush(f);
 		progress_note(*downloaded);
+		stream_note(hook, *downloaded);
 	}
 	free(buffer);
 	if (fclose(f) != 0) ok = false;
@@ -2622,7 +2725,8 @@ static bool download_streamed(const char *url, const char *part, uint64_t *downl
 }
 
 static void prune_playback_cache(const char *keep_id) {
-	DIR *dir = opendir("/tmp/sonix-ytmusic");
+	const char *cache = playback_cache_dir();
+	DIR *dir = opendir(cache);
 	if (!dir) return;
 	struct dirent *entry;
 	while ((entry = readdir(dir)) != NULL) {
@@ -2634,7 +2738,7 @@ static void prune_playback_cache(const char *keep_id) {
 		}
 		if (strncmp(entry->d_name, keep_id, 11) == 0 && entry->d_name[11] == '.') continue;
 		char path[640];
-		if (snprintf(path, sizeof(path), "/tmp/sonix-ytmusic/%s", entry->d_name) >= (int)sizeof(path)) continue;
+		if (snprintf(path, sizeof(path), "%s/%s", cache, entry->d_name) >= (int)sizeof(path)) continue;
 		// The song that just stopped is still somebody's: "save to the card"
 		// copies it out on a worker thread, and deleting it here would leave a
 		// truncated track on the card. Anything touched in the last two minutes
@@ -2651,11 +2755,12 @@ static void prune_playback_cache(const char *keep_id) {
 // now-playing menu's "save to the card" copies out, and nothing else may be
 // treated as such: a file the user put on the card is already theirs.
 bool ytmusic_cache_owns(const char *path) {
-	static const char prefix[] = "/tmp/sonix-ytmusic/";
-	if (!path || strncmp(path, prefix, sizeof(prefix) - 1) != 0) {
+	const char *cache = playback_cache_dir();
+	size_t prefix_len = strlen(cache);
+	if (!path || strncmp(path, cache, prefix_len) != 0 || path[prefix_len] != '/') {
 		return false;
 	}
-	const char *leaf = path + sizeof(prefix) - 1;
+	const char *leaf = path + prefix_len + 1;
 	if (!leaf[0] || strchr(leaf, '/')) {
 		return false;
 	}
@@ -2726,19 +2831,25 @@ static void save_cover(const char *audio_path, const char *thumb_url) {
 	printf("ytmusic: cover saved, %zu bytes\n", len);
 }
 
+// `hook` non-NULL means the player is waiting: the bytes go straight into the
+// file it will open, the file is announced to growfile so the decoder can read
+// it while it fills, and playback is started as soon as there is enough of it.
+// NULL is the plain download -- a .part beside it, renamed only when whole.
 static bool download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
-								  char *error, size_t error_size) {
+								  stream_hook_t *hook, char *error, size_t error_size) {
+	bool streaming = hook != NULL;
 	if (error && error_size) error[0] = '\0';
 	if (!track || !path || !path_size || strlen(track->id) != 11) {
 		set_error(error, error_size, "ytmusic_invalid_track");
 		return false;
 	}
-	if (mkdir("/tmp/sonix-ytmusic", 0700) != 0 && errno != EEXIST) {
+	const char *cache = playback_cache_dir();
+	if (mkdir(cache, 0700) != 0 && errno != EEXIST) {
 		set_error(error, error_size, "ytmusic_cache_unavailable");
 		return false;
 	}
 	char final[512], part[520];
-	if (snprintf(final, sizeof(final), "/tmp/sonix-ytmusic/%s.m4a", track->id) >= (int)sizeof(final) ||
+	if (snprintf(final, sizeof(final), "%s/%s.m4a", cache, track->id) >= (int)sizeof(final) ||
 		snprintf(part, sizeof(part), "%s.part", final) >= (int)sizeof(part) ||
 		strlen(final) >= path_size) {
 		set_error(error, error_size, "ytmusic_path_too_long");
@@ -2767,19 +2878,41 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 		// is, and is 0 when it never said.
 		progress_expected = expected;
 		progress_percent = -1;
-		remove(part);
+		// A download for playback writes the file the player opens; a plain
+		// download keeps its .part until it is whole.
+		const char *target = streaming ? final : part;
+		if (streaming) {
+			hook->path = final;
+			hook->ready_at = stream_threshold(expected);
+			// Announced before the first byte, because the reader registers
+			// itself from the player the moment playback starts, and an
+			// unannounced path is an ordinary -- empty -- file to it.
+			remove(final);
+			growfile_announce(final, (long)expected);
+		} else {
+			remove(part);
+		}
 		uint64_t downloaded = 0;
 		bool complete = false;
-		bool ok = download_ranged(url, part, &downloaded, &complete);
-		if (!ok) {
+		bool ok = download_ranged(url, target, &downloaded, &complete, hook);
+		if (!ok && !(hook && hook->called)) {
 			// A server that will not answer a Range keeps the old behaviour: one
 			// transfer, started over, with the signature problem to live with.
+			// Not once playback has begun: starting the file over would truncate
+			// it under the decoder that is already reading it.
 			printf("ytmusic: %.11s: %s refused ranged chunks, one transfer instead\n",
 				   track->id, label);
-			remove(part);
+			remove(target);
 			downloaded = 0;
 			complete = false;
-			ok = download_streamed(url, part, &downloaded, &complete);
+			if (streaming) {
+				// The file starts over, so the search for the index does too:
+				// what the first attempt read is not on the disk any more.
+				hook->indexed = false;
+				hook->have_moov = false;
+				growfile_announce(final, (long)expected);
+			}
+			ok = download_streamed(url, target, &downloaded, &complete, hook);
 		}
 		memset(url, 0, sizeof(url));
 		// The instance's reply says how many bytes the whole stream is, so a
@@ -2791,15 +2924,46 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 			ok = false;
 			complete = false;
 		}
-		if (ok && complete && downloaded >= 1024 && rename(part, final) == 0) {
+		bool landed = ok && complete && downloaded >= 1024;
+		if (landed && !streaming) {
+			// A whole file replaces whatever the cache held under that name. The
+			// remove is for Windows’ rename(), which refuses an existing target
+			// where POSIX replaces it; the device never needed it.
+			remove(final);
+			if (rename(part, final) != 0) landed = false;
+		}
+		if (landed) {
 			write_playback_tags(final, track);
 			save_cover(final, track->thumbnail);
 			snprintf(path, path_size, "%s", final);
+			if (streaming) {
+				// A file that is whole is an ordinary file from here on. A track
+				// short enough to have finished before the threshold was reached
+				// starts the player here instead, at its end.
+				if (!hook->called) {
+					hook->called = true;
+					if (hook->ready) hook->ready(final, hook->user);
+				}
+				growfile_finish(final, true);
+			}
 			printf("ytmusic: %.11s: played from %s, %llu bytes\n", track->id, label,
 				   (unsigned long long)downloaded);
 			return true;
 		}
-		remove(part);
+		if (streaming) {
+			growfile_finish(final, false);
+			if (hook->called) {
+				// Playback is already running on what arrived. The file is left as
+				// it is: removing it would take the decoder's file out from under
+				// the listener, and the next play of this song truncates it anyway.
+				printf("ytmusic: %.11s: %s stopped at %llu bytes after playback began\n",
+					   track->id, label, (unsigned long long)downloaded);
+				return true;
+			}
+			remove(final);
+		} else {
+			remove(part);
+		}
 		printf("ytmusic: %.11s: %s kept %llu bytes (%s, %s)\n", track->id, label,
 			   (unsigned long long)downloaded, ok ? "complete" : "failed",
 			   http_last_error() ? http_last_error() : "no reason given");
@@ -2827,7 +2991,24 @@ bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, siz
 	progress_expected = 0;
 	progress_percent = -1;
 	progress_active = 1;
-	bool ok = download_for_playback(track, path, path_size, error, error_size);
+	bool ok = download_for_playback(track, path, path_size, NULL, error, error_size);
+	progress_active = 0;
+	progress_expected = 0;
+	progress_percent = -1;
+	return ok;
+}
+
+// The same download, started for a listener who is waiting to hear it: the
+// loading card's span covers the whole transfer, and `ready` fires part-way
+// through it so the page can hand the growing file to the player.
+bool ytmusic_stream_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
+								 ytmusic_ready_cb ready, void *user,
+								 char *error, size_t error_size) {
+	stream_hook_t hook = {.path = NULL, .ready_at = 0, .ready = ready, .user = user, .called = false};
+	progress_expected = 0;
+	progress_percent = -1;
+	progress_active = 1;
+	bool ok = download_for_playback(track, path, path_size, &hook, error, error_size);
 	progress_active = 0;
 	progress_expected = 0;
 	progress_percent = -1;

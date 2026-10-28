@@ -136,14 +136,22 @@ All of these are on **YouTube Music → the cog**:
 
 ## While a song is loading
 
-A track is downloaded whole before the player is handed it, which over a public
-instance is tens of seconds. The page shows a card with a spinner, the progress
-in percent and a bar, driven by the downloader's own byte counter -- so a slow
-start is visibly working rather than indistinguishable from a tap that did
-nothing. The card takes the taps while it is up, so a second press cannot start a
-second download behind the first. The percent appears as soon as the source says
-how large the file is, and the card goes the moment the player starts or the
-download fails.
+A song starts as soon as enough of it has arrived, and the rest keeps downloading
+behind the player. "Enough" is an eighth of the file -- between 192 kB and 1 MB,
+whichever the instance's own size allows -- and never before the container's
+`moov` index is in that part, because a decoder cannot read a track whose sample
+table has not arrived. So a song begins in seconds rather than after the whole
+transfer, and a slow instance costs a pause at the start instead of a minute of
+nothing.
+
+The page shows a card with a spinner, the progress in percent and a bar while
+that happens, driven by the downloader's own byte counter -- so a slow start is
+visibly working rather than indistinguishable from a tap that did nothing. The
+card takes the taps while it is up, so a second press cannot start a second
+transfer behind the first. The percent appears as soon as the source says how
+large the file is, and the card goes the moment the player starts or the transfer
+fails. A transfer that dies after playback began stops the song where the bytes
+did and says so, rather than looking like a short track.
 
 The album in the folder path comes from the row YouTube sent (its second column
 is `artist • album • duration`) and, where a page does not name it -- an album's

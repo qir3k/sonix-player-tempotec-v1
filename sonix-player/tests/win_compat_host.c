@@ -4,8 +4,10 @@
 
 #include "win_compat_host.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <windows.h>
 #include <errno.h>
 #include <windows.h>
 
@@ -56,6 +58,12 @@ char *win_mkdtemp(char *tmpl) {
 		if (_mkdir(tmpl) == 0) return tmpl;
 	}
 	return NULL;
+}
+
+int win_rename(const char *from, const char *to) {
+	if (MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING)) return 0;
+	errno = EACCES;
+	return -1;
 }
 
 char *win_strcasestr(const char *haystack, const char *needle) {

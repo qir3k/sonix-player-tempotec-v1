@@ -196,6 +196,10 @@ typedef struct {
 	char path[512];
 	char error[192];
 	bool ok;
+	// Set on the download thread the moment there is enough of the file to
+	// open it: from then on the page is playing, and the completion post must
+	// not play the song a second time.
+	bool started;
 } play_result_t;
 
 typedef struct {
@@ -234,11 +238,12 @@ static void end_busy(void) {
 // ---------------------------------------------------------------------------
 // the loading card
 //
-// A track is downloaded whole before it plays, which over a public instance is
-// tens of seconds -- long enough that a page which says nothing looks like a
-// page that did not notice the tap. The card says what is happening and how far
-// along it is, and it swallows taps so a second press cannot start a second
-// download.
+// A song starts as soon as enough of it has arrived, but "enough" still takes a
+// few seconds over a public instance -- long enough that a page which says
+// nothing looks like a page that did not notice the tap. The card says what is
+// happening and how far along it is, and it swallows taps so a second press
+// cannot start a second transfer. It comes down when the player takes over,
+// which is the moment there is something to hear.
 // ---------------------------------------------------------------------------
 
 static lv_obj_t *loading_veil;
@@ -854,25 +859,58 @@ static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int coun
 // playing a row
 // ---------------------------------------------------------------------------
 
-static void playback_done(void *data) {
+// The song is on its way: the file has enough of it for the decoder to open,
+// and the rest keeps arriving behind the player. Runs on the GUI thread.
+static void playback_begin(void *data) {
 	play_result_t *result = data;
 	if (!result) return;
 	loading_hide();
 	end_busy();
-	if (result->ok) {
-		player_play_file(result->path);
-		player_refresh_now_playing();
-		player_sheet_open(true);
-	} else {
-		toast_error(result->error[0] ? result->error : "ytmusic_playback_failed");
+	player_play_file(result->path);
+	player_refresh_now_playing();
+	player_sheet_open(true);
+}
+
+// Called from the download thread, once, at the byte the track can start from.
+// It only queues the work: LVGL is not touched from here.
+static void playback_ready(const char *path, void *user) {
+	play_result_t *result = user;
+	if (!result || !path) return;
+	snprintf(result->path, sizeof(result->path), "%s", path);
+	result->started = true;
+	if (!gui_post(playback_begin, result)) {
+		// Nothing to tell the interface with: fall back to the completion path,
+		// which plays the song once the file is whole.
+		result->started = false;
+	}
+}
+
+static void playback_done(void *data) {
+	play_result_t *result = data;
+	if (!result) return;
+	if (!result->started) {
+		loading_hide();
+		end_busy();
+		if (result->ok) {
+			player_play_file(result->path);
+			player_refresh_now_playing();
+			player_sheet_open(true);
+		} else {
+			toast_error(result->error[0] ? result->error : "ytmusic_playback_failed");
+		}
+	} else if (!result->ok) {
+		// Playback began and the transfer then died: the song stops where the
+		// bytes did. Saying so is better than letting it look like a short track.
+		toast_error(result->error[0] ? result->error : "ytmusic_download_incomplete");
 	}
 	free(result);
 }
 
 static void *playback_worker(void *arg) {
 	play_result_t *result = arg;
-	result->ok = ytmusic_download_for_playback(&result->track, result->path, sizeof(result->path),
-											   result->error, sizeof(result->error));
+	result->ok = ytmusic_stream_for_playback(&result->track, result->path, sizeof(result->path),
+											 playback_ready, result,
+											 result->error, sizeof(result->error));
 	if (!gui_post(playback_done, result)) {
 		end_busy();
 		free(result);
