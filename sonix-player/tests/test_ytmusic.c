@@ -1,14 +1,17 @@
 // test_ytmusic.c -- the YouTube Music playback resolver, with a fake network.
 //
-// Three answers to "where are the bytes", tried in this order: the device's
-// own player request (no account, no helper machine), a Piped or Invidious
-// instance, and a relay of the user's own -- and the settings can pin any of
+// The answers to "where are the bytes", tried in this order: the imported
+// browser session, the Invidious/Piped instances, the device's own player
+// request, and a relay of the user's own -- and the settings can pin any of
 // them first. This suite links the real ytmusic.c against a fake http layer
 // (real http.c needs the POSIX socket API the tests' Linux host has; the
 // fakes keep the suite portable) and checks the resolver end to end:
 //
-//   - the phone-app player is asked first in "auto", and its refusal does not
-//     end the search: a real reply from it plays with no relay at all;
+//   - the instances are asked before the device in "auto": an instance that
+//     can pass the bytes on plays, and the device's own reply is still used
+//     when no instance can;
+//   - a source that names a stream which is then refused does not end the
+//     attempt: the download walks to the next source and plays from there;
 //   - only audio/mp4 streams are picked, never audio/webm (the player reads
 //     AAC in MP4; its Opus decoder reads Ogg, not the WebM YouTube wraps Opus
 //     in) and never anything carrying video;
@@ -270,19 +273,98 @@ static void test_relay_picks_the_aac_stream(void) {
 	CHECK(strcmp(artist, "Rick Astley") == 0);
 }
 
-static void test_phone_player_is_asked_first(void) {
-	// Both transports reply; the resolver must try the zero-config one before
-	// the relay, and still land on the relay's stream.
+// The instance comes before the device in "auto". The device's own player
+// request answers with an address Google then refuses to serve -- 403 on every
+// media fetch, which is what the field log showed -- so an instance that can
+// pass the bytes on is the answer that actually plays. The device is still in
+// the walk, and the relay is still last.
+static void test_instances_are_asked_before_the_device(void) {
+	char *player = load_fixture("fixtures/player-android-dQw4w9WgXcQ.json");
+	if (!player) {
+		CHECK(0 && "the phone-app player fixture is missing");
+		return;
+	}
 	fake_reset();
-	fake_reply("youtube.com/youtubei/v1/player", 200,
-			   "{\"playabilityStatus\":{\"status\":\"UNPLAYABLE\",\"reason\":\"The page needs to be reloaded.\"}}");
+	fake_reply("inv.test/api/v1/videos/", 200, INVIDIOUS_FORMATS);
+	fake_reply("youtubei/v1/player", 200, player); // the device would answer as well
 	fake_reply("relay.test/streams/", 200, RELAY_GOOD);
 	set_relay("http://relay.test");
+	// A list of one instance, so the built-in hosts -- which this fake network
+	// does not answer -- are not part of the question.
+	config_set("ytmusic", "instances", "https://inv.test");
+	CHECK(ytmusic_source_select("auto"));
 
-	char url[YTMUSIC_URL_MAX] = "", error[128] = "";
-	bool ok = ytmusic_audio_url(VID, url, sizeof(url), NULL, NULL, 0, NULL, 0, NULL, error, sizeof(error));
+	char url[YTMUSIC_URL_MAX] = "", error[192] = "";
+	bool ok = ytmusic_audio_url(VID, url, sizeof(url), NULL, NULL, 0, NULL, 0, NULL, error,
+								sizeof(error));
 	CHECK(ok);
-	CHECK(strcmp(url, "http://relay.test/audio/" VID "?f=141") == 0);
+	if (!ok) fprintf(stderr, "  nothing played: %s\n", error);
+	CHECK(strcmp(url, "https://inv.test/latest_version?id=" VID "&itag=140&local=true") == 0);
+
+	// With the instance answering nothing, the device's own reply is what plays.
+	fake_reset();
+	fake_reply("youtubei/v1/player", 200, player);
+	ok = ytmusic_audio_url(VID, url, sizeof(url), NULL, NULL, 0, NULL, 0, NULL, error,
+							sizeof(error));
+	CHECK(ok);
+	CHECK(strstr(url, "googlevideo.com") != NULL);
+
+	config_set("ytmusic", "instances", "");
+	set_relay("");
+	free(player);
+}
+
+// The downloader walks the same list, which is the part that made a play fail
+// even when a source had resolved: a source can name a stream that is then
+// refused. Here the first instance refuses its bytes and the second one serves
+// them, so the file exists and holds exactly what the second one sent.
+static char AUDIO_BYTES[4096];
+
+static void test_download_walks_past_a_refused_stream(void) {
+	memset(AUDIO_BYTES, 'A', sizeof(AUDIO_BYTES) - 1);
+	AUDIO_BYTES[sizeof(AUDIO_BYTES) - 1] = '\0';
+	fake_reset();
+	fake_reply("inv.test/api/v1/videos/", 200, INVIDIOUS_FORMATS);
+	fake_reply("inv.test/latest_version", 403, "<html>403: the download is not available</html>");
+	fake_reply("inv2.test/api/v1/videos/", 200, INVIDIOUS_FORMATS);
+	fake_reply("inv2.test/latest_version", 206, AUDIO_BYTES);
+	// The playback cache is /tmp/sonix-ytmusic, as it is on the device. A
+	// Windows host can be stopped from writing there by its own security
+	// software -- the CRT answers EACCES, this code has nothing to do with it
+	// -- and the walk cannot be checked where a file cannot be written.
+	FILE *writable = fopen("/tmp/sonix-ytmusic/probe.txt", "wb");
+	if (!writable) {
+		fprintf(stderr, "  skipped: this host cannot write /tmp/sonix-ytmusic (%s)\n",
+				strerror(errno));
+		return;
+	}
+	fclose(writable);
+	remove("/tmp/sonix-ytmusic/probe.txt");
+	config_set("ytmusic", "instances", "https://inv.test,https://inv2.test");
+	set_relay("");
+	CHECK(ytmusic_source_select("auto"));
+
+	ytmusic_track_t track;
+	memset(&track, 0, sizeof(track));
+	snprintf(track.id, sizeof(track.id), "%s", VID);
+	snprintf(track.title, sizeof(track.title), "%s", "Never Gonna Give You Up");
+	char path[512] = "", error[192] = "";
+	bool ok = ytmusic_download_for_playback(&track, path, sizeof(path), error, sizeof(error));
+	CHECK(ok);
+	if (!ok) fprintf(stderr, "  the download gave up: %s\n", error);
+	CHECK(strstr(path, VID) != NULL);
+	FILE *f = ok ? fopen(path, "rb") : NULL;
+	CHECK(f != NULL);
+	if (f) {
+		fseek(f, 0, SEEK_END);
+		CHECK(ftell(f) == (long)sizeof(AUDIO_BYTES) - 1);
+		fclose(f);
+	}
+	char tags[600];
+	snprintf(tags, sizeof(tags), "%s.tags", path);
+	remove(path);
+	remove(tags);
+	config_set("ytmusic", "instances", "");
 }
 
 // The phone-app player's reply, byte for byte as YouTube sent it to this
@@ -683,8 +765,9 @@ int main(void) {
 
 	test_nothing_configured_says_what_to_do();
 	test_relay_picks_the_aac_stream();
-	test_phone_player_is_asked_first();
+	test_instances_are_asked_before_the_device();
 	test_phone_player_reply_plays_on_its_own();
+	test_download_walks_past_a_refused_stream();
 	test_relay_pin_asks_only_the_relay();
 	test_pinned_invidious_instance_plays();
 	test_pinned_piped_instance_plays();

@@ -105,17 +105,36 @@ between a couple of seconds and a couple of minutes for one track.
 ## Playback: the device, an instance, or a relay
 
 Google demands a browser-grade attestation — a PO token its JavaScript computes —
-before it hands out media, and this device has no JavaScript engine. What it
-does have is the phone-app player request, which still answers with plain
-`https` audio addresses the device can fetch itself. That is the default: a
-track plays with nothing else on the network, no account, no helper machine.
+before it hands out media, and this device has no JavaScript engine. The
+phone-app player request still answers with plain `https` audio addresses, but
+when this device fetched one Google refused every media request with 403 —
+ranged or whole, and whatever the address. Those refusals are in the player's
+own log as `http: media answered 403: …`, with Google's reason in the body. So
+the device's own request is no longer the first answer, and a track does not
+depend on it.
 
-When Google refuses that request, the player falls back, in this order:
+The order a track is played in, and all of it is done by the player itself: no
+PC, no laptop, no phone.
 
-1. **An instance** — a Piped or Invidious server. The settings page lists the
-   built-in public hosts and anything in `[ytmusic] instances`, and one can be
-   pinned so it is asked first.
-2. **The relay** — `tools/ytmusic-relay.py` on a machine of your own.
+1. **The imported browser session**, when there is one: the web music player
+   knows the account's region and, with Premium, its own stream.
+2. **An instance** — a Piped or Invidious server. An Invidious instance fetches
+   the audio from Google and passes the bytes on through
+   `/latest_version?id=…&itag=…&local=true`, so the player only ever talks to
+   the instance. This is the path that plays today: measured against a real
+   track, `yt.chocolatemoo53.com` answered the formats reply and then served the
+   audio in ranges (206 with the matching `Content-Range`, a 3.4 MB track).
+3. **The device itself**, through the phone-app player — kept for the day Google
+   stops refusing what it hands out.
+4. **The relay** — `tools/ytmusic-relay.py` on a machine of your own. Last,
+   because it needs another machine.
+
+A source that resolves an address the download is then refused does not end the
+attempt: the downloader moves to the next source in the list. Every attempt is
+in the log — `asking …`, `fetching from …`, `… kept 0 bytes (failed, …)`,
+`played from …` — and the media status is followed by the body of the refusal,
+so a failed play names the host that refused instead of saying "could not reach
+the stream".
 
 **Playback source** in the settings page (Streaming → YouTube Music → the cog)
 shows what is in force and opens the list: *Automatic* (the default, the order
@@ -127,13 +146,26 @@ host being down should not mean silence.
 
 ```ini
 [ytmusic]
-source = https://invidious.example     # pin one; "auto" is the default
-instances = inv.example, piped.example  # replace the built-in list
+source = https://invidious.example      # pin one; "auto" is the default
+instances = inv.example, piped.example   # replace the built-in list
 ```
 
-in `/usr/data/device_config.ini` — the same file the player writes its own
-settings to. The settings page writes both keys, so neither has to be edited by
-hand; a bare host name is accepted and read as `https://`.
+in `/usr/data/device_config.ini` (not `streaming-keys.ini`, which holds the
+Tidal and Qobuz keys) — the same file the player writes its own settings to.
+`instances` takes a comma or space separated list, replaces the built-in hosts
+instead of adding to them, and accepts a bare host name, read as `https://`.
+
+Both keys can be set from the player instead: Streaming → YouTube Music → the
+cog → **Playback source**, which lists *Automatic*, *This device only*, *Relay on
+my network* and every instance. Tapping one stores it and marks it *On*.
+
+Measured when the built-in list was last checked, against a real track: every
+Piped host on the published list (including `pipedapi.kavin.rocks`) answered
+502, 403 or nothing at all, and of the Invidious hosts, `inv.nadeko.net` and
+`invidious.tiekoetter.com` answered 403, `invidious.nerdvpn.de` answered 401 —
+only `yt.chocolatemoo53.com` answered the API *and* served audio. That is why it
+is first in the built-in list, and why a host of your own, pinned in the
+settings, is the reliable version of this: instances come and go in weeks.
 
 What an instance can contribute depends on what it does with the bytes. A Piped
 instance answers `/streams/<id>` with addresses on Google's own hosts, which
@@ -143,11 +175,11 @@ instance is asked for its formats reply, and the bytes are then fetched through
 its own `/latest_version?id=…&itag=…&local=true`, which makes the instance fetch
 the audio and pass it on: that is the shape that works from another machine.
 
-Most public instances are refused by YouTube on any given day (403 to every
-request), which is why this is a fallback and why a self-hosted instance is the
-reliable version of it. Nothing here logs in to an instance: the player never
-sends a Google password anywhere, and the only account it knows is the imported
-browser session above.
+Nothing here logs in to an instance: the player never sends a Google password
+anywhere, and the only account it knows is the imported browser session above.
+An instance that answers 401 or 403 is simply passed over, and the next source
+is asked. Self-hosting Invidious is what makes this permanent, and its address
+then goes in `instances` or in **Playback source**.
 
 ### The relay
 
