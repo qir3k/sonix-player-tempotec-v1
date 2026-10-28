@@ -15,6 +15,7 @@
 #include "src/gui/settings/kblayoutpage.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/gui/settings/plugins.h"
 #include "src/gui/settings/powersettings.h"
 #include "src/gui/settings/remap.h"
 #include "src/gui/settings/screensaver.h"
@@ -546,6 +547,11 @@ void settings_init(gui_config_t *cfg) {
 	settingsrow_add_caption(language_row, "settings_language_detail");
 	language_bind_menu_row(language_row);
 
+	// The addon switches, above the rest of the other settings: what the player
+	// carries is a bigger decision than how it behaves.
+	lv_obj_t *plugins_row = settingsrow_add(container, "plugins", NULL, switch_screen_cb, plugins_screen);
+	settingsrow_add_icon(plugins_row, &icon_ellipsis_vertical, THEME_SEMANTIC_PURPLE);
+	settingsrow_add_caption(plugins_row, "settings_plugins_detail");
 	lv_obj_t *more_row = settingsrow_add(container, "more", NULL, switch_screen_cb, othersettings_screen);
 	settingsrow_add_icon(more_row, &icon_ellipsis_vertical, THEME_SEMANTIC_GREEN);
 	settingsrow_add_caption(more_row, "settings_more_detail");
