@@ -567,6 +567,47 @@ static int parse_terms(const char *json, radio_browse_t kind, radio_term_t *out,
 	return count;
 }
 
+// A name as it should read.
+//
+// The directory's names are whatever their submitters typed, and one of the
+// shapes that turns up is "Radio_Polska_24". An underscore there is a space
+// somebody could not be bothered to type, so it becomes one -- and the doubled
+// spaces a name full of them leaves collapse. What identifies the station is
+// its uuid; this only changes what is shown, and it is done once, where the
+// name enters the player, so the list and now-playing cannot disagree.
+static void tidy_name(char *name) {
+	if (!name) {
+		return;
+	}
+	char *out = name;
+	bool space = false;
+	for (const char *p = name; *p; p++) {
+		char c = *p == '_' ? ' ' : *p;
+		if (c == ' ') {
+			if (space) {
+				continue; // one space between two words, however many were typed
+			}
+			space = true;
+		} else {
+			space = false;
+		}
+		*out++ = c;
+	}
+	// An underscore at either end becomes a space there, and a name with one
+	// at the front would read as indented.
+	while (out > name && out[-1] == ' ') {
+		out--;
+	}
+	*out = '\0';
+	char *lead = name;
+	while (*lead == ' ') {
+		lead++;
+	}
+	if (lead != name) {
+		memmove(name, lead, strlen(lead) + 1);
+	}
+}
+
 // `raw_out`, when given, receives how many objects were in the response,
 // including the ones dropped.
 static int parse_stations(const char *json, radio_station_t *out, int max, int *raw_out) {
@@ -612,10 +653,12 @@ static int parse_stations(const char *json, radio_station_t *out, int max, int *
 			continue;
 		}
 
-		// Trim the trailing whitespace the directory is full of.
+		// Trim the trailing whitespace the directory is full of, then the
+		// underscores (see tidy_name).
 		for (int i = (int)strlen(s->name) - 1; i >= 0 && (s->name[i] == ' ' || s->name[i] == '\t'); i--) {
 			s->name[i] = '\0';
 		}
+		tidy_name(s->name);
 
 		count++;
 	}
@@ -2184,37 +2227,40 @@ static bool radio_art_dir_make(const char *path) {
 	return true;
 }
 
-// Pulls the station's icon down so the player has something to show. Best
-// effort in every sense: no icon, an icon that is not an image, a server that
-// does not answer -- all of them just mean the radio placeholder stays up.
-static void fetch_favicon(const char *url) {
+// Downloads an icon into the cache. Best effort in every sense: no icon, an
+// icon that is not an image, a server that does not answer -- all of them just
+// mean the radio placeholder stays up. `out` receives the file's path.
+//
+// Separate from fetch_favicon() below because a list can want the picture
+// before anything has been played: the built-in Flylo stations have never been
+// "the station playing", and with the download only on that path their rows
+// showed the placeholder however long the page was open.
+static bool cache_icon(const char *url, char *out, size_t out_size) {
+	if (out && out_size) out[0] = '\0';
 	// https as well as http: the directory's icons are served from both, and
 	// refusing the secure half of them left those stations with no artwork at
 	// all rather than with a cache miss.
-	if (!url || (strncasecmp(url, "http://", 7) != 0 && strncasecmp(url, "https://", 8) != 0)) {
-		return;
+	if (!url || !out || (strncasecmp(url, "http://", 7) != 0 && strncasecmp(url, "https://", 8) != 0)) {
+		return false;
 	}
 	const char *dot = strrchr(url, '.');
 	if (dot && strcasecmp(dot, ".gif") == 0) {
-		return; // nothing here decodes GIF covers
+		return false; // nothing here decodes GIF covers
 	}
 
 	// The card's copy first: a station keeps its icon for as long as it exists,
 	// so this is one download per station rather than one per listening.
 	char cached[512];
 	if (radio_art_find(url, cached, sizeof(cached))) {
-		pthread_mutex_lock(&now_lock);
-		snprintf(now_state.cover_path, sizeof(now_state.cover_path), "%s", cached);
-		now_touch();
-		pthread_mutex_unlock(&now_lock);
-		return;
+		snprintf(out, out_size, "%s", cached);
+		return true;
 	}
 
 	char *body = NULL;
 	size_t len = 0;
 	if (!http_get(url, &body, &len, 2 * 1024 * 1024, 8) || len < 64) {
 		free(body);
-		return;
+		return false;
 	}
 
 	// Trust the bytes, not the file name: half the favicons in the directory
@@ -2227,7 +2273,7 @@ static void fetch_favicon(const char *url) {
 		ext = ".jpg";
 	} else {
 		free(body);
-		return; // not something the cover decoder can read
+		return false; // not something the cover decoder can read
 	}
 
 	char base[512];
@@ -2266,13 +2312,96 @@ static void fetch_favicon(const char *url) {
 	}
 	free(body);
 	if (!ok) {
+		return false;
+	}
+	snprintf(out, out_size, "%s", path);
+	return true;
+}
+
+// The same, for the station that is playing: the picture also becomes the
+// now-playing sleeve, which is what the player and the screensaver draw.
+static void fetch_favicon(const char *url) {
+	char cached[512];
+	if (!cache_icon(url, cached, sizeof(cached))) {
+		return;
+	}
+	pthread_mutex_lock(&now_lock);
+	snprintf(now_state.cover_path, sizeof(now_state.cover_path), "%s", cached);
+	now_touch();
+	pthread_mutex_unlock(&now_lock);
+}
+
+// ---------------------------------------------------------------------------
+// Icons for a list that has not played anything yet
+//
+// One worker at a time, and only the pictures that are missing: a list page is
+// opened far more often than a station's icon changes, and the second call
+// while one is running has nothing to do. The download is the same one the
+// playing station gets, so the cache is shared and the page finds the file with
+// radio_station_art_path() once it lands.
+// ---------------------------------------------------------------------------
+#define RADIO_ART_PREFETCH_MAX 8
+
+typedef struct {
+	int count;
+	char urls[RADIO_ART_PREFETCH_MAX][RADIO_URL_MAX];
+} art_prefetch_t;
+
+static pthread_mutex_t art_prefetch_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool art_prefetch_running;
+
+static void *art_prefetch_worker(void *arg) {
+	art_prefetch_t *job = arg;
+	thread_be_low_priority("radio art"); // the list is what wants it, not the audio
+	for (int i = 0; i < job->count; i++) {
+		char path[512];
+		cache_icon(job->urls[i], path, sizeof(path));
+	}
+	free(job);
+	pthread_mutex_lock(&art_prefetch_lock);
+	art_prefetch_running = false;
+	pthread_mutex_unlock(&art_prefetch_lock);
+	return NULL;
+}
+
+void radio_art_prefetch(const char *const *urls, int count) {
+	if (!urls || count <= 0) {
+		return;
+	}
+	pthread_mutex_lock(&art_prefetch_lock);
+	bool busy = art_prefetch_running;
+	if (!busy) {
+		art_prefetch_running = true;
+	}
+	pthread_mutex_unlock(&art_prefetch_lock);
+	if (busy) {
 		return;
 	}
 
-	pthread_mutex_lock(&now_lock);
-	snprintf(now_state.cover_path, sizeof(now_state.cover_path), "%s", path);
-	now_touch();
-	pthread_mutex_unlock(&now_lock);
+	art_prefetch_t *job = calloc(1, sizeof(*job));
+	if (!job) {
+		pthread_mutex_lock(&art_prefetch_lock);
+		art_prefetch_running = false;
+		pthread_mutex_unlock(&art_prefetch_lock);
+		return;
+	}
+	for (int i = 0; i < count && job->count < RADIO_ART_PREFETCH_MAX; i++) {
+		if (!urls[i] || !urls[i][0]) {
+			continue;
+		}
+		snprintf(job->urls[job->count], sizeof(job->urls[0]), "%s", urls[i]);
+		job->count++;
+	}
+
+	pthread_t thread;
+	if (job->count == 0 || pthread_create(&thread, NULL, art_prefetch_worker, job) != 0) {
+		free(job);
+		pthread_mutex_lock(&art_prefetch_lock);
+		art_prefetch_running = false;
+		pthread_mutex_unlock(&art_prefetch_lock);
+		return;
+	}
+	pthread_detach(thread);
 }
 
 // How much undecoded data must be sitting in the buffer before a frame is

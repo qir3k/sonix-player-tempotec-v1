@@ -18,6 +18,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/board_profile.h"
 #include "src/gui/shell/confirm.h"
+#include "src/gui/shell/favmark.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/popover.h"
@@ -32,6 +33,7 @@
 #include "src/gui/shell/topbar.h"
 #include "src/gui/streaming/podcastpage.h"
 #include "src/gui/streaming/podcastsaved.h"
+#include "src/system/addons/addons.h"
 #include "src/system/device/power.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/gearboy/gearboy.h"
@@ -58,6 +60,7 @@
 #include "src/system/streaming/qobuzsync.h"
 #include "src/system/streaming/tidalcache.h"
 #include "src/system/streaming/tidalsync.h"
+#include "src/system/streaming/ytmusic.h"
 #include "src/system/core/utils.h"
 #include "src/system/audio/waveform.h"
 #include "src/system/net/wifi.h"
@@ -2220,7 +2223,9 @@ static void lyrics_find_sync(bool full) {
 	if (!lyrics_find_btn) {
 		return;
 	}
-	bool show = full && lyrics_now;
+	// Searching LRCLIB is a plugin of its own. Off, the mark over the words is
+	// not drawn: it is the door to a page that was never built.
+	bool show = full && lyrics_now && addons_enabled("lyrics");
 	if (!show) {
 		lv_obj_set_hidden(lyrics_find_btn, true);
 		lyrics_find_make_room(NULL);
@@ -2623,6 +2628,9 @@ static bool lyrics_offer_wifi(void) {
 // The file playing looked up on LRCLIB, on a thread of its own; what is found
 // is listed to pick from.
 static void lyrics_search_start(void) {
+	if (!addons_enabled("lyrics")) {
+		return; // the search page was never built; see addons.c
+	}
 	if (!lyrics_fetching && lyrics_offer_wifi()) {
 		return;
 	}
@@ -5363,7 +5371,7 @@ static void update_fav_button(void) {
 	// transport to share the row with, and the mark that says "this one is
 	// mine" is the one thing in it that is about the record rather than about
 	// playing it.
-	lv_image_set_src(fav_btn_icon, starred ? &icon_heart_filled : &icon_heart_outline);
+	lv_image_set_src(fav_btn_icon, starred ? favmark_filled() : favmark_outline());
 	// The heart fills more of its 32 px canvas than the star did, and
 	// Poster's deck is a row of type rather than a picture to stand over:
 	// there the heart is drawn a step under the usual size, so it marks the
@@ -5556,11 +5564,21 @@ static void update_format_label(const device_state_t *state) {
 		// screen until the download finished and it settled.
 		int kbps = audio_get_stream_bitrate_kbps();
 
+		// A YouTube Music song arrives in chunks while it plays, so its file
+		// is a fraction of itself for the first minute: size over length read
+		// as "3 kbps AAC" on screen. What the instance said the stream is is
+		// the only honest figure there, so it stands in -- and the average is
+		// left out of it altogether.
+		if (kbps <= 0 && ytmusic_cache_owns(state->current_file)) {
+			kbps = ytmusic_last_bitrate_kbps();
+		}
+
 		// When the file does not declare one (a variable-bitrate MP3, a silent
 		// AAC) the real average stands in -- but only once the download has
 		// finished, for the reason just given.
 		struct stat st;
 		if (kbps <= 0 && !qobuzcache_owns(state->current_file) && !tidalcache_owns(state->current_file) &&
+			!ytmusic_cache_owns(state->current_file) &&
 			state->progress_total_secs > 0.5 && stat(state->current_file, &st) == 0 && st.st_size > 0) {
 			kbps = (int)((double)st.st_size * 8.0 / state->progress_total_secs / 1000.0 + 0.5);
 		}

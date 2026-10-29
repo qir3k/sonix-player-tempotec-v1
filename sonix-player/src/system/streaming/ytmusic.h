@@ -217,6 +217,12 @@ bool ytmusic_cache_owns(const char *path);
 // when nothing is downloading.
 void ytmusic_download_progress(int *percent, bool *running);
 
+// The bitrate of the stream the last resolution chose, in kbit/s, or 0 when the
+// source never said. A cache file that is still being written has no honest
+// average to compute -- its size over its length read as "3 kbps" on screen --
+// so the now-playing page shows what the instance said instead.
+int ytmusic_last_bitrate_kbps(void);
+
 // The country whose store the catalogue answers from, and the language its
 // labels come back in ("PL"/"en"): what the region row on the settings page
 // stores, and what turns Explore into Polish recommendations while the rows stay

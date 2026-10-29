@@ -1205,6 +1205,51 @@ void settingsrow_add_caption(lv_obj_t *row, const char *text) {
 	fit_row(row);
 }
 
+// A heading between groups of rows. See settingsrow.h.
+lv_obj_t *settingsrow_heading(lv_obj_t *parent, const char *text) {
+	if (!parent || !text) {
+		return NULL;
+	}
+	lv_obj_t *label = lv_label_create(parent);
+	lv_label_set_text(label, tr(text));
+	lv_obj_add_style(label, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(label, &font_ui_14, 0);
+	lv_obj_set_width(label, lv_pct(100));
+	lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+	// The column's gap already separates it from the row above; this is the
+	// extra air that makes it belong to the rows under it instead.
+	lv_obj_set_style_pad_top(label, bp_pick(8, 12), 0);
+	lv_obj_set_style_pad_left(label, bp_pick(4, 6), 0);
+	lv_obj_set_clickable(label, false);
+	lv_obj_set_scrollable(label, false);
+	return label;
+}
+
+// A line of explanation under a heading. See settingsrow.h.
+lv_obj_t *settingsrow_add_note(lv_obj_t *parent, const char *text) {
+	if (!parent || !text) {
+		return NULL;
+	}
+	lv_obj_t *note = lv_label_create(parent);
+	lv_label_set_text(note, tr(text));
+	lv_obj_add_style(note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(note, &font_ui_14, 0);
+	// Wrapped rather than dotted: a group's explanation is a sentence or two,
+	// and an ellipsis in the middle of one explains nothing. The column already
+	// gives it the full width, so its height follows the lines it needs.
+	lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(note, lv_pct(100));
+	lv_obj_set_height(note, LV_SIZE_CONTENT);
+	lv_obj_set_style_pad_left(note, bp_pick(4, 6), 0);
+	lv_obj_set_style_pad_right(note, bp_pick(4, 6), 0);
+	// No air above it: it belongs to the heading it follows, and the column's
+	// own gap is what separates the two from the rows below.
+	lv_obj_set_style_pad_top(note, 0, 0);
+	lv_obj_set_clickable(note, false);
+	lv_obj_set_scrollable(note, false);
+	return note;
+}
+
 // The name label is the first thing settingsrow_add() puts in a row, and the
 // only child a caller could want back.
 lv_obj_t *settingsrow_name_label(lv_obj_t *row) { return row ? lv_obj_get_child(row, 0) : NULL; }

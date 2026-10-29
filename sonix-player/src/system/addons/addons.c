@@ -11,21 +11,27 @@
 // player, and the two questions -- "may I build?" -- at the places that build.
 //
 // Order is the Plugins page's: the services first, because they are the ones
-// people actually turn off, then the tools.
+// people actually turn off, then what belongs beside the music, then the tools.
+// The section tag is on every row so the page never has to know which id is
+// what -- a module added here lands under the right heading by itself.
 static const addon_t ADDONS[] = {
-	{"tidal", "tidal", "addon_tidal_note"},
-	{"qobuz", "qobuz", "addon_qobuz_note"},
-	{"ytmusic", "YouTube Music", "addon_ytmusic_note"},
-	{"podcasts", "podcasts", "addon_podcasts_note"},
-	{"audiobooks", "audiobooks", "addon_audiobooks_note"},
-	{"subsonic", "subsonic", "addon_subsonic_note"},
-	{"radio", "radio", "addon_radio_note"},
-	{"calculator", "calculator", "addon_calculator_note"},
-	{"notes", "notes", "addon_notes_note"},
-	{"flappy", "flappy_bird", "addon_flappy_note"},
-	{"gearboy", "gearboy", "addon_gearboy_note"},
-	{"metronome", "metronome", "addon_metronome_note"},
-	{"ebook", "books", "addon_ebook_note"},
+	{"tidal", "tidal", "addon_tidal_note", "plugins_section_services"},
+	{"qobuz", "qobuz", "addon_qobuz_note", "plugins_section_services"},
+	{"ytmusic", "YouTube Music", "addon_ytmusic_note", "plugins_section_services"},
+	{"podcasts", "podcasts", "addon_podcasts_note", "plugins_section_services"},
+	{"radio", "radio", "addon_radio_note", "plugins_section_services"},
+	{"subsonic", "subsonic", "addon_subsonic_note", "plugins_section_services"},
+	{"audiobooks", "audiobooks", "addon_audiobooks_note", "plugins_section_music"},
+	{"ebook", "books", "addon_ebook_note", "plugins_section_music"},
+	{"lyrics", "lyrics_search", "addon_lyrics_note", "plugins_section_music"},
+	{"autoeq", "autoeq", "addon_autoeq_note", "plugins_section_music"},
+	{"lastfm", "last_fm", "addon_lastfm_note", "plugins_section_music"},
+	{"listenbrainz", "listenbrainz", "addon_listenbrainz_note", "plugins_section_music"},
+	{"calculator", "calculator", "addon_calculator_note", "plugins_section_tools"},
+	{"notes", "notes", "addon_notes_note", "plugins_section_tools"},
+	{"flappy", "flappy_bird", "addon_flappy_note", "plugins_section_tools"},
+	{"gearboy", "gearboy", "addon_gearboy_note", "plugins_section_tools"},
+	{"metronome", "metronome", "addon_metronome_note", "plugins_section_tools"},
 };
 
 int addons_count(void) { return (int)(sizeof(ADDONS) / sizeof(ADDONS[0])); }

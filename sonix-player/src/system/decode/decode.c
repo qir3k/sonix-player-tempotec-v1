@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define DR_MP3_IMPLEMENTATION
 #include "dr_mp3.h"
@@ -714,14 +715,17 @@ static bool aac_fill(decoder_t *dec) {
 			// More than once: the next fragment can be further along than one
 			// slice of the file, and giving up on the first answer stopped a
 			// song at the start of the very gap this waits for.
+			// A minute of patience, so a fragment that is slow to arrive is
+			// waited for: what the track does in that time is buffer, not end.
 			bool more = false;
-			for (int tries = 0; tries < 600 && !more; tries++) {
+			time_t deadline = time(NULL) + 60;
+			while (!more && time(NULL) < deadline) {
 				uint32_t now = mp4_audio_frames_available(s->mp4);
 				if (now > s->frame_total) {
 					s->frame_total = now;
 					more = true;
 				} else if (!mp4_file_is_growing(s->mp4)) {
-					break;
+					break; // the download is over: there is no more to come
 				}
 			}
 			if (!more) {

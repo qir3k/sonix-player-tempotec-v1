@@ -19,6 +19,7 @@
 #include "src/gui/shell/main_menu_icons.h"
 #include "src/gui/shell/menuorder.h"
 #include "src/gui/shell/morepage.h"
+#include "src/gui/settings/homeslot.h"
 #include "src/gui/settings/settings.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -144,11 +145,60 @@ bool main_menu_books(void) {
 }
 bool main_menu_browse(void) { return config_get_bool("ui", "home_browse", false); }
 
-// Whether the home screen offers the library slot at all: Audiobooks, or the
-// shelf when it holds that slot. With the audiobooks module off in Plugins its
-// pages were never built, so the tile would lead to an empty screen -- and
-// with the shelf off as well there is nothing to offer in its place.
-static bool home_library_shown(void) { return main_menu_books() || addons_enabled("audiobooks"); }
+// What the home screen's library tile is right now, or false when there is no
+// tile at all.
+//
+// Three answers, in this order. The shelf, when Appearance handed the tile over
+// and the books module is on. Audiobooks, the tile's own section, which is what
+// the grid has always drawn. And with Audiobooks switched off in Plugins -- its
+// pages were never built, so the tile would open an empty screen -- whichever
+// destination Plugins -> Home tile was given for the slot, which may be the
+// hole itself, and the grid then simply closes up around it.
+//
+// The chosen destination is only consulted while Audiobooks is off: the setting
+// is kept, so switching the module back on returns the tile to the library
+// without losing what was picked for next time.
+static void open_home_library(void);
+
+typedef struct {
+	const char *label;
+	const lv_image_dsc_t *icon;
+	lv_obj_t **screen;
+	void (*action)(void);
+} home_tile_t;
+
+static bool home_library_tile(home_tile_t *tile) {
+	if (main_menu_books()) {
+		tile->label = "books";
+		tile->icon = &icon_menu_books;
+		tile->screen = NULL;
+		tile->action = open_home_library;
+		return true;
+	}
+	if (addons_enabled("audiobooks")) {
+		tile->label = "audiobooks";
+		tile->icon = &icon_menu_audiobooks;
+		tile->screen = NULL;
+		tile->action = open_home_library;
+		return true;
+	}
+	homeslot_target_t target;
+	if (!homeslot_resolve(homeslot_choice(), &target)) {
+		return false;
+	}
+	tile->label = target.label;
+	tile->icon = target.icon;
+	tile->screen = target.screen;
+	tile->action = target.action;
+	return true;
+}
+
+// The tile is one of the six the menu has always drawn while it is the library
+// or the shelf: that is the case the pre-rasterized menu art and the Tokyo
+// glyph tones belong to. A destination handed the slot keeps its own glyph.
+static bool home_tile_is_builtin(const home_tile_t *tile) {
+	return tile->action == open_home_library;
+}
 
 static void set_home_books(bool enabled) {
 	if (main_menu_books() == enabled) {
@@ -203,8 +253,10 @@ static void main_menu_refresh_tiles(void) {
 	bool compact = bp_is_tempotec_v1();
 	bool tokyo = theme_uses_function_glyphs();
 	bool icons_only = main_menu_icons_only();
-	bool books = main_menu_books();
 	bool browse = main_menu_browse();
+	home_tile_t library_tile;
+	bool library = home_library_tile(&library_tile);
+	bool library_builtin = library && home_tile_is_builtin(&library_tile);
 	int item_count = menuorder_count(MENUORDER_HOME);
 	int order[16];
 	bool visible[16];
@@ -217,7 +269,7 @@ static void main_menu_refresh_tiles(void) {
 		if (!visible[id]) {
 			continue;
 		}
-		if (id == MENU_HOME_AUDIOBOOKS && !home_library_shown()) {
+		if (id == MENU_HOME_AUDIOBOOKS && !library) {
 			continue;
 		}
 		ids[count] = id;
@@ -233,8 +285,10 @@ static void main_menu_refresh_tiles(void) {
 			entries[count++] = (grid_entry_t){"wireless", &icon_menu_wireless, &wireless_screen, NULL};
 			break;
 		case 3:
-			entries[count++] = (grid_entry_t){books ? "books" : "audiobooks",
-											  books ? &icon_menu_books : &icon_menu_audiobooks, NULL, open_home_library};
+			// The library slot: the shelf, Audiobooks, or whatever Plugins ->
+			// Home tile handed it while Audiobooks is off.
+			entries[count++] = (grid_entry_t){library_tile.label, library_tile.icon,
+											  library_tile.screen, library_tile.action};
 			break;
 		case 4:
 			entries[count++] = (grid_entry_t){"more", &icon_menu_more, &morepage_screen, NULL};
@@ -280,8 +334,16 @@ static void main_menu_refresh_tiles(void) {
 
 		const lv_image_dsc_t *source = tokyo ? TOKYO_MENU_ICONS[id] : NORMAL_MENU_ICONS[id];
 		if (id == 0 && browse) source = tokyo ? &icon_folder : &icon_menu_explorer;
-		if (id == 3 && books) source = tokyo ? &icon_files_book : &icon_menu_books;
-		if (icons_only && !(id == 0 && browse) && !(id == 3 && books)) {
+		// A destination handed the library slot brings its own glyph, in both
+		// themes: it is not one of the six the menu art was drawn for. The
+		// shelf is drawn the same way, since it is not one of the six either.
+		bool slot_art = id == MENU_HOME_AUDIOBOOKS && (!library_builtin || main_menu_books());
+		if (slot_art) {
+			// Tokyo has a dedicated shelf glyph; every other arrangement takes
+			// the destination's own.
+			source = (library_builtin && main_menu_books() && tokyo) ? &icon_files_book : library_tile.icon;
+		}
+		if (icons_only && !(id == 0 && browse) && !slot_art) {
 			// Use art pre-rasterized at the final pixel size, not stretched
 			// toolbar glyphs or colored art filtered for a second time.
 			// Matching source/layout sizes also avoids LVGL's fractional image
@@ -499,16 +561,18 @@ void main_menu_init(gui_config_t *cfg) {
 	bool visible[16];
 	int order[16];
 	int ordered = menuorder_load(MENUORDER_HOME, order, 16, visible);
+	home_tile_t library_tile;
+	bool library = home_library_tile(&library_tile);
 	int count = 0;
 	for (int i = 0; i < ordered; i++) {
 		int id = order[i];
 		if (!visible[id]) continue;
-		if (id == MENU_HOME_AUDIOBOOKS && !home_library_shown()) continue;
+		if (id == MENU_HOME_AUDIOBOOKS && !library) continue;
 		switch (id) {
 		case 0: entries[count++] = (grid_entry_t){"music", &icon_menu_music, NULL, open_home_music}; break;
 		case 1: entries[count++] = (grid_entry_t){"streaming", &icon_menu_streaming, &streaming_screen, NULL}; break;
 		case 2: entries[count++] = (grid_entry_t){"wireless", &icon_menu_wireless, &wireless_screen, NULL}; break;
-		case 3: entries[count++] = (grid_entry_t){"audiobooks", &icon_menu_audiobooks, NULL, open_home_library}; break;
+		case 3: entries[count++] = (grid_entry_t){library_tile.label, library_tile.icon, library_tile.screen, library_tile.action}; break;
 		case 4: entries[count++] = (grid_entry_t){"more", &icon_menu_more, &morepage_screen, NULL}; break;
 		case 5: entries[count++] = (grid_entry_t){"settings", &icon_menu_settings, &settings_screen, NULL}; break;
 		default: break;

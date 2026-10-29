@@ -16,12 +16,16 @@
 // and a module added later starts on.
 
 typedef struct {
-	const char *id;    // "tidal", "calculator": the config key and the gate
-	const char *label; // the row's name, a tag or a literal ("YouTube Music")
-	const char *note;  // one line on what it adds, a tag
+	const char *id;      // "tidal", "calculator": the config key and the gate
+	const char *label;   // the row's name, a tag or a literal ("YouTube Music")
+	const char *note;    // one line on what it adds, a tag
+	const char *section; // the Plugins page heading it belongs under, a tag
 } addon_t;
 
 // The modules this build carries, in the order the Plugins page lists them.
+// Entries that share a section are drawn under one heading, so the list is
+// ordered by section first: a page that walked it unordered would print the
+// heading again at every change of group.
 int addons_count(void);
 const addon_t *addons_at(int index);
 const addon_t *addons_find(const char *id);

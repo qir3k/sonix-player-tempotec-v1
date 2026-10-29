@@ -8,6 +8,7 @@
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/gui/shell/favmark.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
@@ -259,7 +260,10 @@ static bool gridpage_tokyo_icon(const char *label, const lv_image_dsc_t **icon, 
 	}
 	for (unsigned int i = 0; i < sizeof(icons) / sizeof(icons[0]); i++) {
 		if (strcmp(label, icons[i].label) == 0) {
-			*icon = icons[i].icon;
+			// The favourite's glyph is a setting, not a constant: the table
+			// above carries the heart, and Plugins -> Favourite mark may have
+			// asked for the star.
+			*icon = strcmp(icons[i].label, "favourites") == 0 ? favmark_filled() : icons[i].icon;
 			*tone = icons[i].tone;
 			return true;
 		}

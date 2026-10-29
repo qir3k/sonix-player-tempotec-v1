@@ -17,6 +17,7 @@
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/gridpage.h"
 #include "src/gui/shell/gui.h"
+#include "src/gui/shell/favmark.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/popover.h"
 #include "src/gui/shell/settingsrow.h"
@@ -131,7 +132,7 @@ static grid_entry_t entry_for_tile(music_tile_id_t id) {
 	case MUSIC_TILE_SCAN:
 		return (grid_entry_t){"music_scan_library", &icon_menu_file_explorer, NULL, scan_action};
 	case MUSIC_TILE_FAVOURITES:
-		return (grid_entry_t){"favourites", &icon_heart_filled, NULL, open_favourites};
+		return (grid_entry_t){"favourites", favmark_filled(), NULL, open_favourites};
 	case MUSIC_TILE_BROWSE:
 	default:
 		return (grid_entry_t){"music_browse", &icon_menu_explorer, NULL, open_browse};
@@ -353,7 +354,7 @@ static tokyo_tile_spec_t tokyo_spec_for_tile(music_tile_id_t id) {
 	case MUSIC_TILE_SCAN:
 		return (tokyo_tile_spec_t){"music_scan_library", &icon_refresh, THEME_SEMANTIC_CYAN, scan_row_cb};
 	case MUSIC_TILE_FAVOURITES:
-		return (tokyo_tile_spec_t){"favourites", &icon_heart_filled, THEME_SEMANTIC_RED, favourites_cb};
+		return (tokyo_tile_spec_t){"favourites", favmark_filled(), THEME_SEMANTIC_RED, favourites_cb};
 	case MUSIC_TILE_SEARCH:
 		return (tokyo_tile_spec_t){"search", &icon_search, THEME_SEMANTIC_AMBER, browse_search_cb};
 	case MUSIC_TILE_BROWSE:
@@ -809,7 +810,7 @@ void music_init(gui_config_t *cfg) {
 		playlists_icon = lv_obj_get_child(playlists_btn, 0);
 		lv_obj_add_event_cb(playlists_btn, playlists_cb, LV_EVENT_CLICKED, NULL);
 
-		lv_obj_t *favourites_btn = corner_button(cfg, 2, &icon_heart_filled);
+		lv_obj_t *favourites_btn = corner_button(cfg, 2, favmark_filled());
 		lv_obj_add_event_cb(favourites_btn, favourites_cb, LV_EVENT_CLICKED, NULL);
 
 		lv_obj_t *search_btn = corner_button(cfg, 3, &icon_search);

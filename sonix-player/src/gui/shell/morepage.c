@@ -1,5 +1,6 @@
 #include "morepage.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "lvgl/lvgl.h"
@@ -17,6 +18,7 @@
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/gridpage.h"
 #include "src/gui/shell/icons.h"
+#include "src/gui/settings/homeslot.h"
 #include "src/gui/shell/main_menu.h"
 #include "src/gui/shell/menuorder.h"
 #include "src/gui/shell/settingsrow.h"
@@ -33,6 +35,10 @@ static gui_config_t *more_cfg;
 // Whether the Audiobooks row is part of More right now, so entering the page
 // only rebuilds it when the home-screen choice has changed since it was built.
 static bool more_audiobooks_shown;
+
+// And which destination the home screen's library slot was holding, for the
+// same reason: picking one on Plugins -> Home tile takes it out of this page.
+static char more_home_slot[16];
 
 static void more_action_cb(lv_event_t *e) {
 	void (*action)(void) = (void (*)(void))lv_event_get_user_data(e);
@@ -197,6 +203,12 @@ static int more_entries_build(grid_entry_t *out, int max) {
 		if (holds_audiobooks && !addons_enabled("audiobooks")) {
 			continue;
 		}
+		// The home screen's library slot, while Audiobooks is off, may be
+		// holding one of these destinations. The two pages never show the same
+		// one twice: it has moved up to the home screen, as Books does.
+		if (!addons_enabled("audiobooks") && !books_on_home && strcmp(slug, homeslot_choice()) == 0) {
+			continue;
+		}
 		for (size_t entry = 0; entry < sizeof(MORE_ENTRIES) / sizeof(MORE_ENTRIES[0]); entry++) {
 			if (strcmp(MORE_ENTRIES[entry].label, slug) != 0) {
 				continue;
@@ -229,6 +241,7 @@ static void more_entries_refresh(void) {
 	grid_entry_t entries[MORE_ENTRIES_MAX];
 	int count = more_entries_build(entries, MORE_ENTRIES_MAX);
 	more_audiobooks_shown = main_menu_books();
+	snprintf(more_home_slot, sizeof(more_home_slot), "%s", homeslot_choice());
 
 	if (more_grid) {
 		int columns = more_grid_columns(count);
@@ -248,7 +261,7 @@ void morepage_refresh_layout(void) { more_entries_refresh(); }
 // catch up, and only when the answer has actually changed.
 static void more_screen_loaded_cb(lv_event_t *e) {
 	(void)e;
-	if (more_audiobooks_shown != main_menu_books()) {
+	if (more_audiobooks_shown != main_menu_books() || strcmp(more_home_slot, homeslot_choice()) != 0) {
 		more_entries_refresh();
 	}
 }
@@ -269,6 +282,7 @@ void morepage_init(gui_config_t *cfg) {
 	grid_entry_t entries[MORE_ENTRIES_MAX];
 	int count = more_entries_build(entries, MORE_ENTRIES_MAX);
 	more_audiobooks_shown = main_menu_books();
+	snprintf(more_home_slot, sizeof(more_home_slot), "%s", homeslot_choice());
 
 	// Dark and Light retain the established two-column grid. Tokyo Night uses a
 	// compact, single-column list whose rows share the Settings list styling.

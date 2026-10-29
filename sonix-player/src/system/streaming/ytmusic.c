@@ -74,6 +74,14 @@ static pthread_mutex_t session_lock = PTHREAD_MUTEX_INITIALIZER;
 static char session_cookie[YTMUSIC_COOKIE_MAX];
 static pthread_mutex_t api_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t request_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// The bitrate of the stream the last resolution chose, in kbit/s: what the
+// instance's own reply said, and the only honest figure for a cache file that is
+// still growing. The decoder cannot tell while the sample table is incomplete,
+// and the file's size over its length gave "3 kbps" on screen.
+static volatile int resolved_bitrate_kbps;
+
+int ytmusic_last_bitrate_kbps(void) { return resolved_bitrate_kbps; }
 static char api_key[128];
 static char client_version[64];
 static char oauth_client_id[256];
@@ -1424,6 +1432,7 @@ static bool relay_audio_url(const char *video_id, char *url, size_t url_size,
 			}
 			if (proxied) *proxied = through_relay;
 			ok = true;
+			resolved_bitrate_kbps = (int)(best_bitrate / 1000);
 			if (duration) *duration = (int)json_obj_long(&doc, root, "duration", 0);
 			if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
 			if (artist && artist_size) json_obj_str(&doc, root, "uploader", artist, artist_size);
@@ -1501,6 +1510,7 @@ static bool instance_audio_url(const char *base, const char *video_id, char *url
 					// The instance fronts the bytes itself, which is the only kind
 					// of address from somebody else this player can fetch.
 					snprintf(url, url_size, "%s", candidate);
+					resolved_bitrate_kbps = (int)(best_rate / 1000);
 					if (duration) *duration = (int)json_obj_long(&doc, root, "duration", 0);
 					if (title && title_size) json_obj_str(&doc, root, "title", title, title_size);
 					if (artist && artist_size) json_obj_str(&doc, root, "uploader", artist, artist_size);
@@ -1565,6 +1575,7 @@ static bool instance_audio_url(const char *base, const char *video_id, char *url
 					if (expected_bytes) {
 						*expected_bytes = (uint64_t)json_obj_long(&doc, best, "clen", 0);
 					}
+					resolved_bitrate_kbps = (int)(json_obj_long(&doc, best, "bitrate", 0) / 1000);
 					printf("ytmusic: %.11s: %.48s offers itag %ld at %ld kbps\n", video_id, base,
 						   itag, json_obj_long(&doc, best, "bitrate", 0) / 1000);
 					if (duration) *duration = (int)json_obj_long(&doc, root, "lengthSeconds", 0);
@@ -2437,12 +2448,41 @@ static bool write_playback_tags(const char *path, const ytmusic_track_t *track) 
 	return true;
 }
 
+// The record of a finished download.
+//
+// The tags sidecar used to be that record, and it is not one any more: the tags
+// are written when playback starts, so that a file still arriving already has a
+// title and an artist on screen, and a half-downloaded track carrying them
+// would pass for a whole one. A marker of its own says only that: the audio is
+// all here.
+static void mark_complete(const char *path, bool done) {
+	char marker[700];
+	if (snprintf(marker, sizeof(marker), "%s.done", path) >= (int)sizeof(marker)) {
+		return;
+	}
+	if (done) {
+		FILE *f = fopen(marker, "w");
+		if (f) fclose(f);
+	} else {
+		remove(marker);
+	}
+}
+
 // Google throttles one long transfer of a media URL to about 32 KB/s -- a
 // three-megabyte track then takes two minutes before a note comes out of the
 // player -- while the same bytes asked for a few hundred kilobytes at a time
 // arrive at the link's own speed. So the download is chunked, and one long
 // transfer is kept as the fallback for a server that ignores Range.
 #define YTMUSIC_CHUNK (256 * 1024)
+// The first chunk of a stream, smaller than the rest: playback starts on the
+// one that carries the index and the first frames, and at a public instance's
+// pace the difference between this and a full chunk is the difference between
+// a couple of seconds of card and five.
+#define YTMUSIC_FIRST_CHUNK (96 * 1024)
+// How long the transfer tolerates a server that answers but sends nothing.
+// A 206 with an empty body is the instance's own upstream pausing, not the end
+// of the file: a minute of it is a failure, anything shorter is buffering.
+#define YTMUSIC_STALL_GIVEUP_MS (60 * 1000)
 
 // Where the playback cache lives: /tmp on the device, because it is scratch and
 // nothing there has to survive a reboot. SONIX_YTMUSIC_CACHE moves it, which is
@@ -2486,70 +2526,98 @@ typedef struct {
 	ytmusic_ready_cb ready;
 	void *user;
 	bool called;
-	bool indexed;       // the moov box has been looked for
-	bool have_moov;     // and found, so the decoder has something to read
-	uint64_t indexed_at;
+	bool have_moov;     // the decoder's index has landed, so opening will work
 } stream_hook_t;
 
-// Is the MP4 index in the part that has arrived?
+// Is the MP4 index there, and is it whole?
 //
 // An M4A is no use without its `moov` box: that is where the sample table
-// lives, and the decoder cannot describe the first frame without it. It sits at
-// the front of the streams these instances serve, but "at the front" is a
-// property of the container, not a promise, and handing the player a file whose
-// index has not landed yet is a decode failure a second before it would have
-// worked. So the start waits for it -- scanning once, over the first 64 kB,
-// which is where a faststart file keeps it.
-static bool moov_arrived(const char *path, uint64_t upto) {
-	uint8_t head[64 * 1024];
-	size_t want = upto < sizeof(head) ? (size_t)upto : sizeof(head);
-	if (want < 8) return false;
+// lives, and the decoder cannot describe one frame without it. It sits at the
+// front of the streams these instances serve, but "at the front" is a property
+// of the container, not a promise -- and a `moov` that has begun but not
+// finished is no index at all. So this walks the top-level box headers, which
+// carry their own sizes, and says yes only when a whole `moov` is on disk.
+//
+// The reader walks the same boxes again when it opens the file (mp4.c) and
+// waits there for a partial one; this copy exists so the player is not started
+// -- sheet, artwork, transport -- into a file that cannot be opened yet.
+static bool moov_arrived(const char *path) {
 	FILE *f = fopen(path, "rb");
-	if (!f) return false;
-	size_t got = fread(head, 1, want, f);
-	fclose(f);
-	for (size_t i = 0; i + 4 <= got; i++) {
-		if (memcmp(head + i, "moov", 4) == 0) return true;
+	if (!f) {
+		return false;
 	}
-	return false;
+	bool ready = false;
+	if (fseek(f, 0, SEEK_END) == 0) {
+		long total = ftell(f);
+		uint64_t pos = 0;
+		for (int boxes = 0; total > 0 && boxes < 64 && pos + 8 <= (uint64_t)total; boxes++) {
+			if (fseek(f, (long)pos, SEEK_SET) != 0) {
+				break;
+			}
+			unsigned char head[16];
+			if (fread(head, 1, 8, f) != 8) {
+				break;
+			}
+			uint64_t size = ((uint64_t)head[0] << 24) | ((uint64_t)head[1] << 16) |
+							((uint64_t)head[2] << 8) | (uint64_t)head[3];
+			uint64_t header = 8;
+			if (size == 1) {
+				if (fread(head + 8, 1, 8, f) != 8) {
+					break;
+				}
+				size = ((uint64_t)head[8] << 56) | ((uint64_t)head[9] << 48) |
+					   ((uint64_t)head[10] << 40) | ((uint64_t)head[11] << 32) |
+					   ((uint64_t)head[12] << 24) | ((uint64_t)head[13] << 16) |
+					   ((uint64_t)head[14] << 8) | (uint64_t)head[15];
+				header = 16;
+			} else if (size == 0) {
+				break; // to the end of the file: not an answer while it grows
+			}
+			if (size < header) {
+				break;
+			}
+			if (memcmp(head + 4, "moov", 4) == 0) {
+				ready = pos + size <= (uint64_t)total;
+				break;
+			}
+			pos += size;
+		}
+	}
+	fclose(f);
+	return ready;
 }
-
-// How far past the threshold the start will wait for the index before going
-// ahead anyway: a stream that keeps its moov at the end still plays, it just
-// plays when it would have before this existed.
-#define STREAM_MOOV_PATIENCE (512 * 1024)
 
 static void stream_note(stream_hook_t *hook, uint64_t done) {
 	if (!hook) return;
 	growfile_progress(hook->path, (long)done);
 	if (hook->called || done < hook->ready_at) return;
-	if (!hook->indexed) {
-		hook->indexed = true;
-		hook->indexed_at = done;
-		hook->have_moov = moov_arrived(hook->path, done);
-	}
-	if (!hook->have_moov && done < hook->indexed_at + STREAM_MOOV_PATIENCE) return;
+	// Checked again on every chunk until it is there, and the player is not
+	// started before it is. A stream that keeps its index at the very end
+	// therefore starts when the download is over -- download_for_playback
+	// plays it at its own end -- instead of starting into a decode failure.
+	// The walk is a handful of seeks per chunk, not a parse of the file.
 	if (!hook->have_moov) {
-		printf("ytmusic: no moov box in the first part; starting anyway\n");
+		hook->have_moov = moov_arrived(hook->path);
+		if (!hook->have_moov) return;
 	}
 	hook->called = true;
 	printf("ytmusic: %llu bytes are enough to start playing\n", (unsigned long long)done);
 	if (hook->ready) hook->ready(hook->path, hook->user);
 }
 
-// How many bytes before the decoder is given the file. A small fraction of the
-// whole when the instance said how big it is, with a floor and a ceiling: under
-// the floor the header and the first frames are not there yet, and above the
-// ceiling the wait stops being about latency and starts being the download.
+// How many bytes before the decoder is given the file: the first chunk, which
+// is the smallest request whose answer carries the index and the first frames.
+// Nothing here is sized by the length of the track -- that was the difference
+// between "a song starts" and "a card sits there" -- because the rest of it
+// arrives behind the player (see mp4.c's growth support).
 //
-// The rest of the track arrives behind the player (see mp4.c's growth support),
-// so this is only "enough to open", not "enough to hear the song": waiting for
-// a larger slice of it was time spent looking at a card.
+// A track shorter than two first-chunks has no "behind the player": it starts
+// halfway through instead, which is still earlier than its end.
 static uint64_t stream_threshold(uint64_t expected) {
-	uint64_t at = expected ? expected / 24 : 0;
-	if (at < 131072) at = 131072;
-	if (expected && at > expected / 2) at = expected / 2;
-	if (at > 393216) at = 393216;
+	uint64_t at = YTMUSIC_FIRST_CHUNK;
+	if (expected && expected / 2 < at) {
+		at = expected / 2;
+	}
 	return at;
 }
 
@@ -2566,24 +2634,27 @@ static bool download_ranged(const char *url, const char *part, uint64_t *downloa
 		return false;
 	}
 	bool ok = true;
-	int empty_asks = 0;
+	int empty_ms = 0;
 	while (!*complete) {
 		char range[96], *body = NULL;
 		size_t len = 0;
 		int status = 0;
+		// Measured, not counted: how long the server has been answering with
+		// nothing, so a slow instance is waited out and a dead one is given up.
+		uint64_t ask = (hook && *downloaded == 0) ? YTMUSIC_FIRST_CHUNK : YTMUSIC_CHUNK;
 		// A connection that drops mid-chunk is worth one more ask for the same
 		// bytes: the offset has not moved, so nothing is written twice.
 		bool got = false;
 		for (int attempt = 0; attempt < 2 && !got; attempt++) {
 			snprintf(range, sizeof(range), "Range: bytes=%llu-%llu\r\n",
 					 (unsigned long long)*downloaded,
-					 (unsigned long long)(*downloaded + YTMUSIC_CHUNK - 1));
+					 (unsigned long long)(*downloaded + ask - 1));
 			http_req_t req = {.method = "GET",
 							  .extra_headers = range,
 							  .allow_empty_body = true, // a 206 is success, and so is a 204
 							  .want_error_body = true,  // a refusal says why in its body
 							  .no_https_downgrade = true};
-			got = http_request(url, &req, &body, &len, YTMUSIC_CHUNK + 1, YTMUSIC_RELAY_TIMEOUT,
+			got = http_request(url, &req, &body, &len, (size_t)ask + 1, YTMUSIC_RELAY_TIMEOUT,
 							   &status);
 			if (!got) {
 				fprintf(stderr, "http: media fetch failed at byte %llu: %s%s\n",
@@ -2629,13 +2700,17 @@ static bool download_ranged(const char *url, const char *part, uint64_t *downloa
 			// A 206 carrying nothing is the instance's own upstream pausing, not
 			// the end of the file -- treating it as an ending is the other way a
 			// track used to finish after a minute. Only a 416 says the file is
-			// over, so ask again for the same offset a few times first.
+			// over. Six empty replies in under two seconds (what this used to
+			// allow) marked a half-downloaded track complete, which then played
+			// as a short song for ever because it had tags beside it; the wait
+			// is on the clock now.
 			free(body);
-			if (++empty_asks >= 6) {
-				*complete = *downloaded > 0;
+			empty_ms += 500;
+			if (empty_ms >= YTMUSIC_STALL_GIVEUP_MS) {
+				ok = false; // a dead source, not the end of the track
 				break;
 			}
-			usleep(300 * 1000);
+			usleep(500 * 1000);
 			continue;
 		}
 		if (status != 206 || !body || fwrite(body, 1, len, f) != len) {
@@ -2652,7 +2727,7 @@ static bool download_ranged(const char *url, const char *part, uint64_t *downloa
 		if (hook) fflush(f);
 		progress_note(*downloaded);
 		stream_note(hook, *downloaded);
-		empty_asks = 0;
+		empty_ms = 0;
 		// A short chunk is NOT the end of the file. Invidious proxies the bytes
 		// and hands back less than was asked for whenever its own upstream
 		// pauses, and taking that for an ending is what cut a three-minute
@@ -2717,7 +2792,8 @@ static void prune_playback_cache(const char *keep_id) {
 		if (entry->d_name[0] == '.') continue;
 		char *dot = strrchr(entry->d_name, '.');
 		if (!dot || (strcmp(dot, ".m4a") != 0 && strcmp(dot, ".tags") != 0 &&
-					 strcmp(dot, ".part") != 0 && strcmp(dot, ".jpg") != 0)) {
+					 strcmp(dot, ".part") != 0 && strcmp(dot, ".jpg") != 0 &&
+					 strcmp(dot, ".done") != 0)) {
 			continue;
 		}
 		if (strncmp(entry->d_name, keep_id, 11) == 0 && entry->d_name[11] == '.') continue;
@@ -2736,22 +2812,24 @@ static void prune_playback_cache(const char *keep_id) {
 
 // The cached copy of a song, when there is a whole one.
 //
-// The tags are written beside the audio only once the transfer finished, so a
-// `.tags` file is the record of "this one is complete": a track whose download
-// stopped half way keeps its audio and never gets one. That is what makes this
-// test honest -- the file exists is not the question, the file is whole is.
+// A `.done` marker is written beside the audio only once the transfer
+// finished, and it is what makes this test honest: the file exists is not the
+// question, the file is whole is. The tags sidecar cannot answer it any more --
+// it is written when playback begins, so that a title and an artist are on
+// screen while the file is still arriving -- and a half-downloaded track
+// carrying one would pass for a finished song.
 bool ytmusic_cached_track(const char *id, char *out, size_t out_size) {
 	if (!id || strlen(id) != 11 || !out || out_size == 0) {
 		return false;
 	}
 	const char *cache = playback_cache_dir();
-	char final[512], tags[520];
+	char final[512], done[520];
 	if (snprintf(final, sizeof(final), "%s/%s.m4a", cache, id) >= (int)sizeof(final) ||
-		snprintf(tags, sizeof(tags), "%s.tags", final) >= (int)sizeof(tags) ||
+		snprintf(done, sizeof(done), "%s.done", final) >= (int)sizeof(done) ||
 		strlen(final) >= out_size) {
 		return false;
 	}
-	if (growfile_is_growing(final) || access(final, R_OK) != 0 || access(tags, R_OK) != 0) {
+	if (growfile_is_growing(final) || access(final, R_OK) != 0 || access(done, R_OK) != 0) {
 		return false;
 	}
 	snprintf(out, out_size, "%s", final);
@@ -2890,12 +2968,32 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 		// download keeps its .part until it is whole.
 		const char *target = streaming ? final : part;
 		if (streaming) {
+			// The same song, tapped again while it is still arriving: the
+			// file is already being written for a player that is reading it.
+			// Starting the transfer over would truncate it under the decoder,
+			// so the same growing file is handed over instead.
+			if (growfile_is_growing(final)) {
+				hook->called = true;
+				snprintf(path, path_size, "%s", final);
+				if (hook->ready) hook->ready(final, hook->user);
+				return true;
+			}
 			hook->path = final;
 			hook->ready_at = stream_threshold(expected);
 			// Announced before the first byte, because the reader registers
 			// itself from the player the moment playback starts, and an
 			// unannounced path is an ordinary -- empty -- file to it.
 			remove(final);
+			// The title, the artist and the sleeve before the first byte. The
+			// player is handed this file the moment the index has landed, and
+			// whatever is not beside it by then is what it shows: a YouTube
+			// Music song used to come up nameless, artistless and without a
+			// picture, because both were written only once the transfer ended.
+			// The metadata is not a claim that the file is whole any more --
+			// that is what the .done marker is for.
+			write_playback_tags(final, track);
+			save_cover(final, track->thumbnail);
+			mark_complete(final, false);
 			growfile_announce(final, (long)expected);
 		} else {
 			remove(part);
@@ -2916,7 +3014,6 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 			if (streaming) {
 				// The file starts over, so the search for the index does too:
 				// what the first attempt read is not on the disk any more.
-				hook->indexed = false;
 				hook->have_moov = false;
 				growfile_announce(final, (long)expected);
 			}
@@ -2943,6 +3040,7 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 		if (landed) {
 			write_playback_tags(final, track);
 			save_cover(final, track->thumbnail);
+			mark_complete(final, true);
 			snprintf(path, path_size, "%s", final);
 			if (streaming) {
 				// A file that is whole is an ordinary file from here on. A track

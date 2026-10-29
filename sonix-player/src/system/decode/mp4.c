@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h> // strcasecmp, for the freeform tag names
+#include <time.h>
 #include <unistd.h>
 
 // See mp4.h for why this exists and why the big tables stay in the file.
@@ -156,9 +157,10 @@ struct mp4_file {
 	// per fragment.
 	char path[512];
 	bool growing;
-	// The end of the last top-level `moof` taken in, so a rescan for new
-	// fragments does not index the ones already known a second time.
-	uint64_t frag_scan_upto;
+	// Where the walk of the top-level boxes got to. Everything before it has
+	// been parsed, so a rescan for new fragments starts here instead of at 0:
+	// re-reading the `moov` would add its tracks and chapters a second time.
+	uint64_t scan_to;
 };
 
 // ---------------------------------------------------------------------------
@@ -1133,11 +1135,8 @@ static void parse_boxes(mp4_file_t *m, uint64_t start, uint64_t end, track_t *cu
 
 		case FOURCC('m', 'o', 'o', 'f'):
 			// Only at the top level: a `moof` inside anything else is not one.
-			// A rescan of a growing file walks the boxes it already read, so
-			// the fragments up to here are skipped rather than indexed twice.
-			if (!current && pos >= m->frag_scan_upto) {
+			if (!current) {
 				parse_moof(m, pos, &box);
-				m->frag_scan_upto = box.next;
 			}
 			break;
 
@@ -1541,15 +1540,56 @@ static bool frame_location(mp4_file_t *m, int track_index, uint32_t index, uint6
 // whole track does not cost a wake-up per kilobyte.
 #define MP4_GROW_CHUNK (256 * 1024)
 
+// How long the reader tolerates bytes that are not there yet. A download that
+// has stalled -- a Wi-Fi hiccup, an instance's upstream pausing -- is a wait,
+// not the end of the track: the song pauses for a moment and carries on, which
+// is what buffering means. Past this the reader stops trying and the track ends
+// where the bytes did.
+#define MP4_STALL_TOLERANCE_SECS 60
+
 // Waits for `off + len` to be on disk. Only for a growing file: a whole one
 // already has every byte it is going to have.
 static bool read_frame_at(const mp4_file_t *m, uint64_t off, void *buf, size_t len) {
 	if (m->growing) {
-		// -1 means nobody is writing this path any more; the read below then
-		// answers whether the bytes made it before the writer stopped.
-		growfile_wait_until(m->path, (long)(off + len));
+		long need = (long)(off + len);
+		time_t deadline = time(NULL) + MP4_STALL_TOLERANCE_SECS;
+		while (time(NULL) < deadline) {
+			// -1 means nobody is writing this path any more; the read below then
+			// answers whether the bytes made it before the writer stopped.
+			long have = growfile_wait_until(m->path, need);
+			if (have < 0 || have >= need || !growfile_is_growing(m->path)) {
+				break;
+			}
+		}
 	}
 	return read_at(m, off, buf, len);
+}
+
+// Walks the top-level boxes that have arrived, from `from`, and answers where
+// the next one starts. A box whose declared size runs past what is on disk
+// stops the walk at its own offset, so the same box is taken -- once, whole --
+// by the scan that follows.
+static uint64_t scan_top_boxes(mp4_file_t *m, uint64_t from) {
+	uint64_t pos = from;
+	while (pos + 8 <= m->file_size) {
+		// A size of zero means "to the end of the file", which is only an
+		// answer once the file is whole: while it grows, where the next box
+		// begins cannot be known.
+		unsigned char head[4];
+		if (!read_at(m, pos, head, 4)) {
+			break;
+		}
+		if (be32(head) == 0 && m->growing) {
+			break;
+		}
+		box_t box;
+		if (!read_box(m, pos, m->file_size, &box)) {
+			break; // the header, or the body it promises, is still arriving
+		}
+		parse_boxes(m, pos, box.next, NULL, 0);
+		pos = box.next;
+	}
+	return pos;
 }
 
 // Waits for the next slice of a growing file and takes in whatever landed.
@@ -1569,14 +1609,13 @@ static bool mp4_grow_once(mp4_file_t *m) {
 	off_t end = lseek(m->fd, 0, SEEK_END);
 	if (end > 0 && (uint64_t)end > m->file_size) {
 		m->file_size = (uint64_t)end;
-		// From the top: the box walk skips the media itself, so this costs a
-		// handful of reads per fragment, and `frag_scan_upto` keeps the
-		// fragments already indexed out of the arrays.
-		parse_boxes(m, 0, m->file_size, NULL, 0);
+		m->scan_to = scan_top_boxes(m, m->scan_to);
 	}
 	if (!growfile_is_growing(m->path)) {
 		// The download is over, one way or the other. Whatever the file holds
-		// now is all it will ever hold.
+		// now is all it will ever hold: one last look for anything that landed
+		// with the final bytes.
+		m->scan_to = scan_top_boxes(m, m->scan_to);
 		m->growing = false;
 	}
 	return true;
@@ -1660,17 +1699,21 @@ mp4_file_t *mp4_open(const char *path) {
 	snprintf(m->path, sizeof(m->path), "%s", path);
 	m->growing = growfile_is_growing(path);
 
-	parse_boxes(m, 0, m->file_size, NULL, 0);
+	m->scan_to = scan_top_boxes(m, 0);
 
 	m->audio = pick_audio_track(m);
-	// A fragmented stream -- the DASH audio a streaming service sends -- has no
-	// samples in its `moov`: every one of them is described by a `moof` further
-	// along the file. The player is handed the file as soon as its first piece
-	// has landed, and that piece can be the description alone. A handful of
-	// waits is what separates "not one fragment yet" from "not a playable
-	// file": the first fragment is a few kilobytes behind the header.
-	for (int attempt = 0; m->audio >= 0 && m->tracks[m->audio].sample_count == 0 && m->growing && attempt < 12;
-		 attempt++) {
+	// A growing file can be unplayable for two reasons that both resolve with
+	// time: its `moov` box may not have landed whole (a box that has begun and
+	// not finished is no index at all, so no track is found), or -- for the
+	// DASH audio a streaming service sends -- the `moov` may describe no
+	// samples, because every one of them is in a `moof` further along. This is
+	// where the reader waits instead of failing, since the download is seconds
+	// behind. `mp4_grow_once` rescans from the unfinished box, so a `moov` that
+	// arrives in two pieces is parsed once, whole.
+	for (int attempt = 0; m->growing && attempt < 16; attempt++) {
+		if (m->audio >= 0 && m->tracks[m->audio].sample_count > 0) {
+			break;
+		}
 		if (!mp4_grow_once(m)) {
 			break;
 		}

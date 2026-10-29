@@ -13,6 +13,7 @@
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
+#include "src/system/addons/addons.h"
 #include "src/system/audio/eq.h"
 #include "src/system/core/lang.h"
 
@@ -722,12 +723,18 @@ void peqpage_init(gui_config_t *cfg) {
 	lv_obj_t *container = settingsrow_page(main_screen, cfg, "peq");
 
 	// Reset, AutoEq search and the preset gear share the title's corner slots.
-	settingsrow_title_corner_slots(settingsrow_page_title(main_screen), cfg, 3);
+	// AutoEq is a plugin of its own: with it off its page was never built, so
+	// its button is not drawn and the two that remain take the right-hand
+	// slots rather than leaving a hole where it used to be.
+	bool autoeq_on = addons_enabled("autoeq");
+	settingsrow_title_corner_slots(settingsrow_page_title(main_screen), cfg, autoeq_on ? 3 : 2);
 	reset_btn = corner_button(main_screen, cfg, 0, &icon_reset, reset_cb);
 	corner_button(main_screen, cfg, 1, &icon_music_settings, open_settings_cb);
-	autoeq_btn = corner_button(main_screen, cfg, 2, &icon_audio_waveform, open_autoeq_cb);
-	autoeq_timer = lv_timer_create(autoeq_timer_cb, 1000, NULL);
-	lv_timer_pause(autoeq_timer);
+	if (autoeq_on) {
+		autoeq_btn = corner_button(main_screen, cfg, 2, &icon_audio_waveform, open_autoeq_cb);
+		autoeq_timer = lv_timer_create(autoeq_timer_cb, 1000, NULL);
+		lv_timer_pause(autoeq_timer);
+	}
 
 	peqsettings_set_reload_cb(reload_after_preset);
 	peqautoeq_set_reload_cb(reload_after_preset);

@@ -70,6 +70,10 @@ typedef struct {
 	const char *url;	// matched with strstr, so the port-free base works
 	int status;			// HTTP status, or 0 = transport failure
 	const char *body;
+	// Bytes, not a C string: an MP4 body has zero bytes of its own (box sizes
+	// and audio frames), and one measured with strlen() would be cut off at
+	// the first of them.
+	size_t len;
 } fake_reply_t;
 
 static fake_reply_t replies[16];
@@ -97,7 +101,27 @@ static void fake_reply(const char *url, int status, const char *body) {
 	replies[reply_count].url = url;
 	replies[reply_count].status = status;
 	replies[reply_count].body = body;
+	replies[reply_count].len = strlen(body);
 	reply_count++;
+}
+
+// The same, for a body with binary content -- an MP4 that has to be readable
+// as a container rather than as text.
+static void fake_reply_bytes(const char *url, int status, const char *body, size_t len) {
+	replies[reply_count].url = url;
+	replies[reply_count].status = status;
+	replies[reply_count].body = body;
+	replies[reply_count].len = len;
+	reply_count++;
+}
+
+// A copy the caller owns, NUL-terminated whether or not the body had one.
+static char *fake_body_copy(const char *from, size_t len) {
+	char *copy = malloc(len + 1);
+	if (!copy) return NULL;
+	memcpy(copy, from, len);
+	copy[len] = '\0';
+	return copy;
 }
 
 // A page Google really sent: the fixtures carry whole responses the device
@@ -126,8 +150,8 @@ bool http_get(const char *url, char **out, size_t *out_len, size_t limit, int ti
 	if (strstr(url, "/streams/")) relay_calls++;
 	const fake_reply_t *reply = find_reply(url);
 	if (!reply || reply->status == 0) return false;
-	*out = strdup(reply->body);
-	if (out_len) *out_len = strlen(reply->body);
+	*out = fake_body_copy(reply->body, reply->len);
+	if (out_len) *out_len = reply->len;
 	return true;
 }
 
@@ -142,8 +166,8 @@ bool http_get_ex(const char *url, const char *extra_headers, bool want_error_bod
 	const fake_reply_t *reply = find_reply(url);
 	if (!reply || reply->status == 0) return false;
 	if (status_out) *status_out = reply->status;
-	*out = strdup(reply->body);
-	if (out_len) *out_len = strlen(reply->body);
+	*out = fake_body_copy(reply->body, reply->len);
+	if (out_len) *out_len = reply->len;
 	return true;
 }
 
@@ -161,23 +185,23 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 	if (req && req->extra_headers &&
 		sscanf(req->extra_headers, "Range: bytes=%llu", &start) == 1 &&
 		reply->status == 206) {
-		size_t total = strlen(reply->body);
+		size_t total = reply->len;
 		if (start >= total) {
 			if (status_out) *status_out = 416;
-			*out = strdup("");
+			*out = fake_body_copy("", 0);
 			if (out_len) *out_len = 0;
 			return true;
 		}
 		if (status_out) *status_out = 206;
-		*out = strdup(reply->body + start);
 		size_t avail = total - (size_t)start;
 		if (fake_range_cap && avail > fake_range_cap) avail = fake_range_cap;
+		*out = fake_body_copy(reply->body + start, avail);
 		if (out_len) *out_len = avail;
 		return true;
 	}
 	if (status_out) *status_out = reply->status;
-	*out = strdup(reply->body);
-	if (out_len) *out_len = strlen(reply->body);
+	*out = fake_body_copy(reply->body, reply->len);
+	if (out_len) *out_len = reply->len;
 	return true;
 }
 
@@ -1047,17 +1071,21 @@ static void stream_ready(const char *path, void *user) {
 }
 
 static void test_playback_starts_before_the_download_ends(void) {
-	// A container shaped like the ones the instances serve: an ftyp box, then the
-	// moov index within the first few dozen bytes, then the payload. The index
-	// has to be in the part that arrives first, because the start waits for it.
-	// The box sizes are letters rather than the zero bytes a real file has: this
-	// body is a C string the fake server measures with strlen().
-	static const char MP4_HEAD[] = "IIII" "ftypM4A " "MMMM" "M4A mp42IIII" "moov";
+	// A container shaped like the ones the instances serve: an ftyp box, then a
+	// whole moov index within the first few dozen bytes, then the payload. The
+	// index has to be in the part that arrives first, because the start waits
+	// for it -- and waits for it to be whole, which is a question about the
+	// box headers. Their sizes are binary, so this body is registered by
+	// length rather than as a C string.
+	static const char MP4_HEAD[] = {
+		0x00, 0x00, 0x00, 0x10, 'f', 't', 'y', 'p', 'M', '4', 'A', ' ', 'm', 'p', '4', '2',
+		0x00, 0x00, 0x00, 0x18, 'm', 'o', 'o', 'v',
+	};
 	memset(STREAM_BYTES, 'B', sizeof(STREAM_BYTES) - 1);
-	memcpy(STREAM_BYTES, MP4_HEAD, sizeof(MP4_HEAD) - 1);
+	memcpy(STREAM_BYTES, MP4_HEAD, sizeof(MP4_HEAD));
 	fake_reset();
 	fake_reply("inv.test/api/v1/videos/", 200, INVIDIOUS_FORMATS);
-	fake_reply("inv.test/latest_version", 206, STREAM_BYTES);
+	fake_reply_bytes("inv.test/latest_version", 206, STREAM_BYTES, sizeof(STREAM_BYTES) - 1);
 	// Pieces, the way an instance that proxies its own upstream replies.
 	fake_range_cap = 1000;
 	FILE *writable = fopen(YTM_CACHE_PROBE, "wb");

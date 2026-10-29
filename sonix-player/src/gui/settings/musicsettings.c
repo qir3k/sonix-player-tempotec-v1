@@ -8,6 +8,7 @@
 
 #include "src/gui/board_profile.h"
 #include "src/gui/shell/confirm.h"
+#include "src/gui/shell/favmark.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/library/libraryscan.h"
@@ -34,6 +35,7 @@
 #include "src/system/playback/device_state.h"
 #include "src/system/decode/decode.h"
 #include "src/system/audio/replaygain.h"
+#include "src/system/addons/addons.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/library/library.h"
@@ -1976,7 +1978,11 @@ static void rearrange_populate(void) {
 
 	for (int i = 0; i < MUSIC_TILE_COUNT; i++) {
 		rearrange_entry_t *e = &rearrange_entries[i];
-		lv_image_set_src(e->icon, TILE_INFO[e->tile].icon);
+		// The favourites tile wears whichever mark the interface is set to
+		// (Plugins -> Favourite mark), so the row here matches the tile it
+		// stands for.
+		lv_image_set_src(e->icon, e->tile == MUSIC_TILE_FAVOURITES ? favmark_filled()
+																  : TILE_INFO[e->tile].icon);
 		lv_label_set_text(e->name, tr(TILE_INFO[e->tile].label));
 		lv_obj_set_pos(e->row, 0, rearrange_row_y(i));
 		lv_obj_set_style_border_width(e->row, 0, 0);
@@ -2634,11 +2640,17 @@ void musicsettings_init(gui_config_t *cfg) {
 	settingsrow_add(container, "musicsettings_display_options", NULL, switch_screen_cb, display_screen);
 	settingsrow_add(container, "musicsettings_library", NULL, switch_screen_cb, library_screen);
 
-	lastfmsettings_init(cfg);
-	settingsrow_add(container, "lastfm", NULL, switch_screen_cb, lastfmsettings_screen());
-
-	listenbrainzsettings_init(cfg);
-	settingsrow_add(container, "listenbrainz", NULL, switch_screen_cb, listenbrainzsettings_screen());
+	// Scrobbling is two plugins, each off on its own: a page whose module is
+	// off was never built, so its row goes with it rather than opening a
+	// blank screen.
+	if (addons_enabled("lastfm")) {
+		lastfmsettings_init(cfg);
+		settingsrow_add(container, "lastfm", NULL, switch_screen_cb, lastfmsettings_screen());
+	}
+	if (addons_enabled("listenbrainz")) {
+		listenbrainzsettings_init(cfg);
+		settingsrow_add(container, "listenbrainz", NULL, switch_screen_cb, listenbrainzsettings_screen());
+	}
 
 	build_eq_page(cfg);
 	eq_row = settingsrow_add(container, "equaliser", NULL, switch_screen_cb, eq_screen);

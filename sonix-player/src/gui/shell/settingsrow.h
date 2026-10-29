@@ -78,6 +78,23 @@ lv_obj_t *settingsrow_add_art(lv_obj_t *row, const lv_image_dsc_t *placeholder, 
 // players keep their original one-line row geometry.
 void settingsrow_add_caption(lv_obj_t *row, const char *text);
 
+// A heading between groups of rows: "Streaming services", "Tools". Not a row
+// and not clickable -- it is the page saying where one list stops and the next
+// begins, which a column of identical cards cannot say on its own. Dim and
+// small, with its own air above it, so it reads as a label and not as something
+// that opens.
+lv_obj_t *settingsrow_heading(lv_obj_t *parent, const char *text);
+
+// A line of explanation under a heading, before the rows it is about: what a
+// group of switches is for, in the page's own voice rather than each row's.
+//
+// Not a caption and not in a card: a caption describes one row and sits inside
+// it, while this describes a whole group and sits on the page, wrapped over as
+// many lines as it needs. The Plugins pages use it where a bare list of names
+// would leave the reader guessing -- what a font fallback is, as against a
+// language.
+lv_obj_t *settingsrow_add_note(lv_obj_t *parent, const char *text);
+
 // The row's own name label, for the one row whose text is not a fixed tag: the
 // AirPods row, which says which model is connected. Everything else sets its
 // name once, at build time, from the language file.

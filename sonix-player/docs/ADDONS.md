@@ -13,10 +13,18 @@ who was using it.
 ## Where the switches are
 
 **Settings → Plugins**, a row for each module of this build with a one-line
-description and a switch. Switching one writes `[addons] <id> = true|false`
-into `device_config.ini` and shows a *Restart to apply* toast: a page that has
-already been built cannot give its memory back, so the saving is real from the
-next start.
+description and a switch, grouped under the headings the module list itself
+carries -- **Streaming services**, **Music and sound**, **Tools** -- so a module
+added later lands under the right heading without the page knowing its id.
+Switching one writes `[addons] <id> = true|false` into `device_config.ini` and
+shows a *Restart to apply* toast: a page that has already been built cannot give
+its memory back, so the saving is real from the next start.
+
+Below the modules, under **Interface**, sit the choices that are not modules --
+the favourite mark every page draws, the destination that takes the home
+screen's library tile while Audiobooks is off, and the Languages & Fonts page.
+They cost one bitmap or one config line and apply at once, and the page says so
+rather than putting them beside switches that need a restart.
 
 ## The modules
 
@@ -29,6 +37,11 @@ next start.
 | `audiobooks` | The Audiobooks section: books, series, authors, its settings | Home, More |
 | `subsonic` | A Subsonic / Navidrome server | Streaming |
 | `radio` | Internet radio and the station directory | Streaming |
+| `lyrics` | The player's lyrics pane and its online search | Player |
+| `autoeq` | AutoEQ headphone corrections in the parametric equaliser | Audio |
+| `lastfm` | Scrobbling to Last.fm | Settings -> Last.fm |
+| `listenbrainz` | Scrobbling to ListenBrainz, independent of Last.fm | Settings -> ListenBrainz |
+| `metronome` | The metronome | More |
 | `calculator` | The calculator | More |
 | `notes` | The notes shelf and its editor | More |
 | `flappy` | Flappy Bird | More |
@@ -53,7 +66,9 @@ interface. Nothing calls `switch_screen()` with a page that was never built.
 
 ## Adding a module
 
-1. A row in `src/system/addons/addons.c`: `{"mything", "mything", "addon_mything_note"}`.
+1. A row in `src/system/addons/addons.c`:
+   `{"mything", "mything", "addon_mything_note", "plugins_section_tools"}` --
+   id, label tag, description tag, and the Plugins heading it belongs under.
 2. Two strings: `addon_mything_note` (one line) and the module's own label, in
    every language file — the label is the row's name and must already exist if
    the feature had one.

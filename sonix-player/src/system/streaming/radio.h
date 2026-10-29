@@ -179,6 +179,14 @@ void radio_fav_remove(const char *uuid);
 // it is.
 bool radio_station_art_path(const char *favicon, char *out, size_t out_size);
 
+// Downloads the icons of stations a page is about to draw that have never
+// played here -- the built-in Flylo list is the case, since its stations have no
+// directory entry to carry an icon into the cache the way a played one does.
+// One worker at a time, best effort, and never on the calling thread: the page
+// hands the addresses over and finds the files with radio_station_art_path()
+// once they land.
+void radio_art_prefetch(const char *const *urls, int count);
+
 // Why a station cannot be played here, or NULL when it can. The text is meant
 // to be shown to the user as it is.
 const char *radio_station_problem(const radio_station_t *station);

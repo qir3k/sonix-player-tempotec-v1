@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "lvgl/lvgl.h"
 
@@ -80,6 +81,19 @@ static void add_switch_row(lv_obj_t *list, const char *label, bool on, bool lock
 	lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, (void *)key);
 }
 
+// A group of switches: its heading, the sentence saying what the group is,
+// then the rows themselves. Every group on this page is a different kind of
+// thing -- a translated interface, a typeface, a set of letters for a script
+// the main face has none of -- and three bare lists of names in a row is what
+// made the old page unreadable: "Japanese" under "Polski" looks like another
+// language rather than the face that stops a Japanese title drawing as boxes.
+static void add_group(lv_obj_t *list, const char *heading, const char *note) {
+	settingsrow_heading(list, heading);
+	if (note) {
+		settingsrow_add_note(list, note);
+	}
+}
+
 void langfonts_init(gui_config_t *cfg) {
 	langfonts_screen = lv_obj_create(NULL);
 	lv_obj_add_style(langfonts_screen, &theme_style_screen, 0);
@@ -89,6 +103,7 @@ void langfonts_init(gui_config_t *cfg) {
 	// this is the page that decides what is on, so it has to be able to bring
 	// a language back. The rows say the languages' own names, as the settings
 	// page spells them.
+	add_group(list, "langfonts_group_languages", "langfonts_languages_note");
 	const char *languages[LANGFONTS_LANG_MAX];
 	int lang_count = lang_all(languages, LANGFONTS_LANG_MAX);
 	for (int i = 0; i < lang_count; i++) {
@@ -96,44 +111,30 @@ void langfonts_init(gui_config_t *cfg) {
 		lang_display_name(languages[i], label, sizeof(label));
 		bool on = lang_enabled(languages[i]);
 		add_switch_row(list, label, on, lang_locked(languages[i]), language_switch_cb, languages[i]);
-		if (i == 0) {
-			lv_obj_t *row = lv_obj_get_child(list, -1);
-			if (row) {
-				settingsrow_add_caption(row, "langfonts_languages_note");
-			}
-		}
 	}
 
 	// The faces the font picker will offer: the built-in ones and whatever
 	// the card's Fonts folder carries. MiSans is the default and answers on
 	// whatever the switch says, and so does the face in force.
+	add_group(list, "langfonts_group_fonts", "langfonts_fonts_note");
 	const char *face_ids[LANGFONTS_FACE_MAX];
 	const char *face_labels[LANGFONTS_FACE_MAX];
 	int face_count = fonts_all_choices(face_ids, face_labels, LANGFONTS_FACE_MAX);
 	for (int i = 0; i < face_count; i++) {
 		bool on = fonts_enabled(face_ids[i]);
 		add_switch_row(list, face_labels[i], on, fonts_locked(face_ids[i]), face_switch_cb, face_ids[i]);
-		if (i == 0) {
-			lv_obj_t *row = lv_obj_get_child(list, -1);
-			if (row) {
-				settingsrow_add_caption(row, "langfonts_fonts_note");
-			}
-		}
 	}
 
 	// The scripts chained behind the main face, so a title the main face has
-	// no letters for draws letters rather than squares.
+	// no letters for draws letters rather than squares. These are letters and
+	// nothing else: switching one on does not translate a word of the
+	// interface, which is the distinction the heading and the note carry.
+	add_group(list, "langfonts_group_scripts", "langfonts_scripts_note");
 	const char *scripts[LANGFONTS_SCRIPT_MAX];
 	int script_count = fonts_script_names(scripts, LANGFONTS_SCRIPT_MAX);
 	for (int i = 0; i < script_count; i++) {
 		bool on = fonts_script_enabled(scripts[i]);
 		add_switch_row(list, scripts[i], on, false, script_switch_cb, scripts[i]);
-		if (i == 0) {
-			lv_obj_t *row = lv_obj_get_child(list, -1);
-			if (row) {
-				settingsrow_add_caption(row, "langfonts_scripts_note");
-			}
-		}
 	}
 
 	player_sheet_attach_drag(list, true);

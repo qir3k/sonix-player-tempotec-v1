@@ -1,6 +1,7 @@
 #include "ytmusicpage.h"
 
 #include <dirent.h>
+#include <malloc.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1647,6 +1648,10 @@ static void list_done(void *data) {
 		switch_screen(results_screen);
 	}
 	free(result);
+	// A page of results is a few hundred kilobytes of JSON read and thrown away
+	// on the worker thread. Its arena keeps the high-water mark otherwise, and
+	// an afternoon of searching is a few megabytes that never go back.
+	(void)malloc_trim(0);
 }
 
 // A tap in either list: a song plays, a card opens its own page in the tracks
@@ -1728,6 +1733,7 @@ static void explore_done(void *data) {
 	}
 	switch_screen(explore_screen);
 	free(result);
+	(void)malloc_trim(0); // the carousels' JSON, for the reason above
 }
 
 static void explore_start_cb(lv_event_t *e) {

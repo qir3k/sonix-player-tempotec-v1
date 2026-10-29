@@ -11,6 +11,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/gestures.h"
 #include "src/gui/shell/gui.h"
+#include "src/gui/shell/favmark.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/settings/musicsettings.h"
 #include "src/gui/audio/peqpage.h"
@@ -490,7 +491,9 @@ static void refresh_now_playing_card(void) {
 	} else {
 		fav = state.current_file[0] && library_fav_contains(state.current_file);
 	}
-	lv_image_set_src(np_star_icon, fav ? &icon_heart_filled : &icon_heart_outline);
+	// The mark the whole interface uses (Plugins -> Favourite mark): the star
+	// for somebody used to the older builds, the heart by default.
+	lv_image_set_src(np_star_icon, fav ? favmark_filled() : favmark_outline());
 	// The same colours the player's own heart takes, so the two cannot disagree:
 	// Adwaita's yellow on the light and dark themes, and on the two V1
 	// monochrome palettes the accent the whole page is drawn in -- the yellow

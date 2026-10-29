@@ -131,6 +131,9 @@ static int heading_count;
 
 // The radio.txt line the rows were last marked for, -1 for none.
 static int marked_custom = -1;
+// How many more poll ticks the Flylo list should keep looking for icons that
+// its own worker is still fetching. Zero for every other list.
+static int flylo_art_ticks;
 
 // The station the other lists were last marked for -- the directory's, the
 // starred and the recent ones: its uuid, or its address when it has none.
@@ -1032,17 +1035,31 @@ static void menu_btn_cb(lv_event_t *e) {
 //
 // These are not a file on the card and not a network directory -- they are
 // built into the page, so the list is always there and never needs a refresh.
+//
+// `id` is what gives a station here an identity of its own: favourites and the
+// recent list are kept by uuid, and a station with none could not be starred at
+// all -- the button did nothing. `icon` is the station's own logo, downloaded
+// the first time the list is opened (radio_art_prefetch) rather than only when
+// it has been listened to.
 typedef struct {
+	const char *id;
 	const char *name;
 	const char *url;
+	const char *icon;
 } flylo_station_t;
 
 static const flylo_station_t FLYLO_STATIONS[] = {
-	{"I Love Chillhop", "https://streams.ilovemusic.de/iloveradio17.mp3"},
-	{"ChillHop", "http://stream01.iloveradio.de/iloveradio17.mp3"},
-	{"Flux Fm Chillhop", "https://streams.fluxfm.de/Chillhop/mp3-320/streams.fluxfm.de/"},
-	{"Le Mellotron", "https://listen.radioking.com/radio/477719/stream/534044"},
-	{"Lo-Fi Hip-Hop Radio", "https://stream.zeno.fm/0r0xa792kwzuv"},
+	{"ilove-chillhop", "I Love Chillhop", "https://streams.ilovemusic.de/iloveradio17.mp3",
+	 "https://ilovemusic.de/favicon.png"},
+	{"ilove-chillhop-2", "ChillHop", "http://stream01.iloveradio.de/iloveradio17.mp3",
+	 "https://ilovemusic.de/favicon.png"},
+	{"fluxfm-chillhop", "Flux Fm Chillhop", "https://streams.fluxfm.de/Chillhop/mp3-320/streams.fluxfm.de/",
+	 "https://www.fluxfm.de/assets/favicons/apple-icon-180x180.png"},
+	{"le-mellotron", "Le Mellotron", "https://listen.radioking.com/radio/477719/stream/534044",
+	 "https://cdn.prod.website-files.com/62288d6c9e6c33efb4e67d74/"
+	 "622895c09e6c33d606e6e822_Icone-webclip.png"},
+	{"zeno-lofi", "Lo-Fi Hip-Hop Radio", "https://stream.zeno.fm/0r0xa792kwzuv",
+	 "https://zeno.fm/icon-192x192.png"},
 };
 #define FLYLO_STATION_COUNT (int)(sizeof(FLYLO_STATIONS) / sizeof(FLYLO_STATIONS[0]))
 
@@ -1051,6 +1068,11 @@ static const flylo_station_t FLYLO_STATIONS[] = {
 static void list_reload_stored(void) {
 	term_count = 0;
 	station_count = 0;
+	// Only the built-in list has icons on their way; a page that is no longer
+	// that one has nothing to keep looking for.
+	if (list_mode != LIST_FLYLO) {
+		flylo_art_ticks = 0;
+	}
 
 	int max = (int)(sizeof(stations) / sizeof(stations[0]));
 	int n;
@@ -1082,14 +1104,19 @@ static void list_reload_stored(void) {
 			got = radio_custom_get(i, &stations[station_count]);
 			break;
 		case LIST_FLYLO:
-			// Flylo stations are not in the directory and carry no uuid; the
-			// uuid field stays empty so the star and the playmark fall back to
-			// matching on the stream address, which is fine.
+			// Flylo stations are not in the directory, so nothing has ever given
+			// them a uuid -- and a favourite is stored by one, which is why the
+			// star did nothing here. The id in the table is theirs, stable for
+			// as long as the entry is.
 			memset(&stations[station_count], 0, sizeof(stations[station_count]));
+			snprintf(stations[station_count].uuid, sizeof(stations[station_count].uuid),
+					 "flylo:%s", FLYLO_STATIONS[i].id);
 			snprintf(stations[station_count].name, sizeof(stations[station_count].name), "%s",
 					 FLYLO_STATIONS[i].name);
 			snprintf(stations[station_count].url, sizeof(stations[station_count].url), "%s",
 					 FLYLO_STATIONS[i].url);
+			snprintf(stations[station_count].favicon, sizeof(stations[station_count].favicon), "%s",
+					 FLYLO_STATIONS[i].icon);
 			got = true;
 			break;
 		default:
@@ -1102,6 +1129,26 @@ static void list_reload_stored(void) {
 	}
 	if (list_mode == LIST_CUSTOM) {
 		marked_custom = radio_custom_current_index();
+	}
+
+	// The built-in list's icons are nobody's download yet: a station writes its
+	// own only when it has been played, and these have just appeared on a page.
+	// Asked for here, off this thread, and the rows look at the card again for
+	// the next few seconds so the pictures arrive without leaving the page.
+	if (list_mode == LIST_FLYLO && station_count > 0) {
+		const char *missing[FLYLO_STATION_COUNT];
+		char cached[512];
+		int n = 0;
+		for (int i = 0; i < station_count; i++) {
+			if (stations[i].favicon[0] &&
+				!radio_station_art_path(stations[i].favicon, cached, sizeof(cached))) {
+				missing[n++] = stations[i].favicon;
+			}
+		}
+		if (n > 0) {
+			radio_art_prefetch(missing, n);
+			flylo_art_ticks = 30; // about ten seconds of the list's poll
+		}
 	}
 }
 
@@ -1147,6 +1194,17 @@ static void list_poll_cb(lv_timer_t *timer) {
 	// bookkeeping: the decode happened off the UI thread and this only swaps
 	// the finished picture in.
 	rows_art_update();
+
+	// The Flylo list is still waiting for pictures somebody else is fetching:
+	// once a second each row looks at the card again, until the window closes
+	// or the page goes away. Cheap -- a stat or two per row, and only for a
+	// list that was opened without a single icon in the cache.
+	if (flylo_art_ticks > 0) {
+		flylo_art_ticks--;
+		if (flylo_art_ticks % 3 == 0) {
+			rows_art_refresh();
+		}
+	}
 
 	// The mark follows the station, which changes from the player and the
 	// side keys as well as from here.
@@ -1360,6 +1418,12 @@ static void build_list_page(gui_config_t *cfg) {
 		lv_image_set_inner_align(row->icon, LV_IMAGE_ALIGN_CENTER);
 		lv_obj_add_style(row->icon, &theme_style_icon, 0);
 		lv_obj_set_style_image_recolor_opa(row->icon, LV_OPA_COVER, 0);
+		// The same soft corner the Tidal, Qobuz and YouTube rows draw their
+		// covers with. A station's logo is a picture like theirs, and a square
+		// among rounded sleeves reads as a different kind of row rather than as
+		// a different kind of station.
+		lv_obj_set_style_radius(row->icon, 6, 0);
+		lv_obj_set_style_clip_corner(row->icon, true, 0);
 		lv_obj_set_clickable(row->icon, false);
 		lv_obj_set_event_bubble(row->icon, true);
 		row_art_placeholder(row);

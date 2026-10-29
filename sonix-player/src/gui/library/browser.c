@@ -20,6 +20,7 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/board_profile.h"
 #include "src/gui/shell/gui.h"
+#include "src/gui/shell/favmark.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/settings/musicsettings.h"
 #include "src/gui/library/playlistpage.h"
@@ -1655,7 +1656,7 @@ void browser_init(gui_config_t *cfg) {
 	sel_add_btn = corner_button(cfg, 1, &icon_list_plus, sel_add_cb);
 	// The outline heart the rest of the interface uses for "not a favourite
 	// yet": tapping it fills them in.
-	sel_fav_btn = corner_button(cfg, 2, &icon_heart_outline, sel_fav_cb);
+	sel_fav_btn = corner_button(cfg, 2, favmark_outline(), sel_fav_cb);
 	sel_queue_btn = corner_button(cfg, 3, &icon_list_queue, sel_queue_cb);
 	lv_obj_add_event_cb(browser_screen, screen_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 

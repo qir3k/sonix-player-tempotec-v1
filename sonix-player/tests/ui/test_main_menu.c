@@ -177,6 +177,17 @@ void streaming_refresh_layout(void) { }
 static bool browser_music_started;
 void browser_start_in_music_folder(void) { browser_music_started = true; }
 void ebookpage_open(void) { switch_screen(ebookpage_screen); }
+
+/* ---- the destinations Plugins -> Home tile can hand the library slot ----
+ * The page that offers them links nothing but their names, so a suite that
+ * never draws a calculator still has to stand behind these. */
+lv_obj_t *dacpage_screen, *gearboypage_screen, *filespage_screen;
+void filespage_open(void) { switch_screen(filespage_screen); }
+void flappybird_open(void) { }
+void calculator_open(void) { }
+void notes_open(void) { }
+void metronome_open(void) { }
+
 void switcher_attach_back_gesture(lv_obj_t *obj) { (void)obj; }
 bool switcher_back_drag_active(void) { return false; }
 void player_sheet_attach_drag(lv_obj_t *obj, bool opening) { (void)obj; (void)opening; }

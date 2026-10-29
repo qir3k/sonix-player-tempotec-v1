@@ -797,7 +797,9 @@ void gui_init(gui_config_t *cfg) {
 	msebsettings_init(cfg); // before musicsettings: the MSEB page hangs its gear off it
 	eqsettings_init(cfg);	// and the equalizer page hangs its own off this
 	peqsettings_init(cfg); // the parametric page hangs its preset screen off the gear
-	peqautoeq_init(cfg);  // the waveform entry on that page searches AutoEq profiles
+	if (addons_enabled("autoeq")) {
+		peqautoeq_init(cfg); // the waveform entry on that page searches AutoEq profiles
+	}
 	musicsettings_init(cfg);
 	search_init(cfg);
 	medialist_init(cfg);
@@ -810,7 +812,9 @@ void gui_init(gui_config_t *cfg) {
 		audiobooks_init(cfg);
 	}
 	chapters_init(cfg);
-	lyricsearch_init(cfg);
+	if (addons_enabled("lyrics")) {
+		lyricsearch_init(cfg);
+	}
 	trackmenu_init(cfg);
 
 	// The leftward swipe that pulls the player in works on the browsing pages

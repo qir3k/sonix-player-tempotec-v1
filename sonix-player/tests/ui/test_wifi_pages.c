@@ -133,6 +133,17 @@ void power_hold_screen_on(bool on) { (void)on; }
 void switch_screen(lv_obj_t *screen) { lv_screen_load(screen); }
 void switch_screen_cb(lv_event_t *e) { switch_screen(lv_event_get_user_data(e)); }
 
+/* ---- the destinations Plugins -> Home tile can hand the library slot ----
+ * Plugins links that page, so its tiles are named here even though this suite
+ * only ever draws the Wi-Fi pages. */
+lv_obj_t *dacpage_screen, *gearboypage_screen, *filespage_screen, *ebookpage_screen;
+void ebookpage_open(void) { switch_screen(ebookpage_screen); }
+void filespage_open(void) { switch_screen(filespage_screen); }
+void flappybird_open(void) { }
+void calculator_open(void) { }
+void notes_open(void) { }
+void metronome_open(void) { }
+
 lv_obj_t *main_menu_screen;
 bool clock_is_set(void) { return false; }
 bool clock_network_sync_busy(void) { return false; }

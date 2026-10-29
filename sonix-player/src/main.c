@@ -42,6 +42,7 @@
 #include "src/system/bluetooth/btplayer.h"
 #include "src/system/device/clock.h"
 #include "src/system/device/factoryreset.h"
+#include "src/system/addons/addons.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/led.h"
@@ -157,6 +158,18 @@ static bool restore_saved_track(void) {
 static void restore_track_timer_cb(lv_timer_t *timer) {
 	lv_timer_delete(timer);
 	restore_saved_track();
+}
+
+// The heap back to the kernel, once a minute, and only while the player is
+// silent. See the call site for why.
+static void idle_trim_cb(lv_timer_t *timer) {
+	(void)timer;
+	// radio_is_playing(), not radio_is_active(): a stopped station stays loaded
+	// so that the player can still show which one it was, and that is silent.
+	if (audio_get_status() == AUDIO_STATUS_PLAYING || radio_is_playing()) {
+		return; // walking the heap is a pause, and a pause is the one thing
+	}
+	malloc_trim(0);
 }
 
 #ifndef HOST_BUILD
@@ -1976,6 +1989,17 @@ int main(int argc, char **argv) {
 	// straight back to the kernel when it is freed.
 	mallopt(M_MMAP_THRESHOLD, 96 * 1024);
 	mallopt(M_TRIM_THRESHOLD, 128 * 1024);
+	// glibc gives every thread that allocates its own arena, up to eight times
+	// the core count, and an arena never gives its top back on its own. Every
+	// streaming request, download and cover decode here starts a thread that
+	// allocates a few hundred kilobytes and then exits, so the arenas piled up:
+	// thirty-six megabytes at boot became forty-eight after an hour of use,
+	// with nothing playing and nothing to show for it. Two arenas is enough for
+	// this device -- the audio thread and the one doing the work -- and the
+	// memory stays where it was at the start.
+#ifdef M_ARENA_MAX
+	mallopt(M_ARENA_MAX, 2);
+#endif
 	signal(SIGINT, sigint_handler);
 
 	logging_init();
@@ -2080,10 +2104,17 @@ int main(int argc, char **argv) {
 	streamkeys_init();
 	qobuz_init();
 	tidal_init();
-	lastfm_init();
+	// Scrobbling is two independent plugins: somebody on Last.fm does not want
+	// a ListenBrainz session opened behind them, and somebody on neither wants
+	// the scrobbler's queue and worker at all. Off means not started.
+	if (addons_enabled("lastfm")) {
+		lastfm_init();
+	}
 	// ListenBrainz needs no application keys: its account is a user token
 	// pasted in its settings page, and the module starts with or without it.
-	listenbrainz_init();
+	if (addons_enabled("listenbrainz")) {
+		listenbrainz_init();
+	}
 
 	lv_init();
 
@@ -2339,7 +2370,9 @@ int main(int argc, char **argv) {
 	if (streamkeys_load_card(card_root)) {
 		qobuz_init();
 		tidal_init();
-		lastfm_init();
+		if (addons_enabled("lastfm")) {
+			lastfm_init();
+		}
 	}
 
 	qobuzcache_set_root(card_root && card_root[0] ? card_root : gui_cfg.sd_root_path);
@@ -2457,6 +2490,17 @@ int main(int argc, char **argv) {
 		}
 	}
 
+
+	// The heap, once a minute, while nothing is playing.
+	//
+	// glibc gives freed space back to the arena rather than to the kernel, so
+	// the high-water mark a page of results, a downloaded cover or a stream's
+	// buffers left behind stays mapped: thirty-six megabytes at boot read as
+	// forty-eight an hour later with the music off and nothing on screen to
+	// account for it. Walking the heap is a pause, which is why this only ever
+	// runs with the player silent -- and the point of the player is the song,
+	// not the megabytes.
+	lv_timer_create(idle_trim_cb, 60000, NULL);
 
 #ifdef HOST_BUILD
 	lv_timer_create(host_shot_poll_cb, 200, NULL); // see host_shot_poll_cb
