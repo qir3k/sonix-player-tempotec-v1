@@ -74,6 +74,15 @@ static char open_show[256];
 static cover_image_t episode_thumb;
 static int menu_episode = -1;
 
+// Selection mode, the shape the online episode list uses: a long press starts
+// it, taps choose rows, the dots go away, and the corner holds the sheet of
+// what can be done to everything chosen and the way out of it.
+static bool selecting;
+static bool sel_chosen[SAVED_MAX_EPISODES];
+static int sel_count;
+static lv_obj_t *sel_act_btn;
+static lv_obj_t *sel_close_btn;
+
 // ---------------------------------------------------------------------------
 // reading the card
 // ---------------------------------------------------------------------------
@@ -316,18 +325,27 @@ static void format_date(const tagdate_t *date, char *out, size_t size) {
 
 static void paint_thumb(lv_obj_t *thumb, const cover_image_t *image) {
 	if (image && image->pixels) {
+		// The rounded corner Tidal's lists draw on their covers, and the themed
+		// glyph style taken off: it recolours whatever it is given, which turned
+		// a real cover into a tinted block. A widget that once held the
+		// placeholder keeps that style, so it is removed rather than assumed
+		// absent.
+		lv_obj_remove_style(thumb, &theme_style_icon, 0);
+		lv_obj_set_style_image_recolor_opa(thumb, LV_OPA_TRANSP, 0);
 		lv_image_set_src(thumb, &image->dsc);
-		lv_obj_set_style_radius(thumb, 6, 0);
+		lv_obj_set_style_radius(thumb, 8, 0);
 		lv_obj_set_style_clip_corner(thumb, true, 0);
 		return;
 	}
 	lv_image_set_src(thumb, &icon_podcast_list);
 	lv_obj_add_style(thumb, &theme_style_icon, 0);
 	lv_obj_set_style_image_recolor_opa(thumb, LV_OPA_COVER, 0);
+	lv_obj_set_style_clip_corner(thumb, false, 0);
+	lv_obj_set_style_radius(thumb, 0, 0);
 }
 
 static lv_obj_t *make_row(lv_obj_t *parent, const cover_image_t *image, const char *title, const char *detail,
-						  lv_event_cb_t cb, lv_event_cb_t long_cb, int index, bool heard) {
+						  lv_event_cb_t cb, lv_event_cb_t long_cb, lv_event_cb_t menu_cb, int index, bool heard) {
 	lv_obj_t *row = lv_btn_create(parent);
 	lv_obj_set_size(row, lv_pct(100), SAVED_ROW_HEIGHT);
 	lv_obj_add_style(row, &theme_style_card, 0);
@@ -384,16 +402,45 @@ static lv_obj_t *make_row(lv_obj_t *parent, const cover_image_t *image, const ch
 	// An episode heard to its end wears the tick the online list gives it, and
 	// its two lines go dim: the same mark on both lists, so a podcast heard
 	// halfway through the day reads the same whether it is on the card or not.
-	if (heard) {
+	// While rows are being chosen the tick says "this one" instead, in the
+	// accent colour the whole interface uses for a decision.
+	bool chosen = selecting && index >= 0 && index < episode_count && sel_chosen[index];
+	if (chosen || heard) {
 		lv_obj_t *tick = lv_image_create(row);
 		lv_obj_set_size(tick, bp_pick(22, 30), bp_pick(22, 30));
 		lv_image_set_src(tick, &icon_check);
 		lv_obj_add_style(tick, &theme_style_icon, 0);
 		lv_obj_set_event_bubble(tick, true);
-		lv_obj_set_style_text_opa(name, LV_OPA_50, 0);
-		if (sub) {
-			lv_obj_set_style_text_opa(sub, LV_OPA_50, 0);
+		if (chosen) {
+			lv_obj_set_style_image_recolor(tick, theme()->accent, 0);
+			lv_obj_set_style_image_recolor_opa(tick, LV_OPA_COVER, 0);
 		}
+		if (heard && !selecting) {
+			lv_obj_set_style_text_opa(name, LV_OPA_50, 0);
+			if (sub) {
+				lv_obj_set_style_text_opa(sub, LV_OPA_50, 0);
+			}
+		}
+	}
+
+	// The three dots, where Tidal's rows keep theirs: the row's tap plays the
+	// episode, and what a tap cannot do lives behind them. They go away while a
+	// selection is being made, as every row menu does.
+	if (menu_cb) {
+		lv_obj_t *dots = lv_btn_create(row);
+		lv_obj_set_size(dots, bp_pick(26, 34), bp_pick(28, 34));
+		lv_obj_set_style_bg_opa(dots, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(dots, 0, 0);
+		lv_obj_set_style_shadow_width(dots, 0, 0);
+		lv_obj_set_style_pad_all(dots, 0, 0);
+		lv_obj_set_ext_click_area(dots, bp_pick(7, 10));
+		lv_obj_add_event_cb(dots, menu_cb, LV_EVENT_CLICKED, (void *)(intptr_t)index);
+		lv_obj_t *dots_icon = lv_image_create(dots);
+		lv_image_set_src(dots_icon, &icon_ellipsis_vertical);
+		lv_obj_add_style(dots_icon, &theme_style_icon, 0);
+		lv_image_set_scale(dots_icon, (uint32_t)(LV_SCALE_NONE * 22 / 36));
+		lv_obj_center(dots_icon);
+		lv_obj_set_hidden(dots, selecting);
 	}
 	return row;
 }
@@ -427,7 +474,7 @@ static void shows_fill(void) {
 		} else {
 			snprintf(detail, sizeof(detail), tr("podcast_episodes_2"), shows[i].episodes);
 		}
-		make_row(shows_list, &shows[i].thumb, shows[i].name, detail, show_clicked_cb, NULL, i, false);
+		make_row(shows_list, &shows[i].thumb, shows[i].name, detail, show_clicked_cb, NULL, NULL, i, false);
 	}
 	if (show_count == 0) {
 		lv_obj_set_hidden(shows_empty, false);
@@ -453,8 +500,15 @@ static void shows_unloaded_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 
 static void episodes_fill(void);
+static void episodes_rows(void);
 static void paint_order_button(void);
 static void episode_long_cb(lv_event_t *e);
+static void episode_menu_cb(lv_event_t *e);
+static void selection_start(int index);
+static void selection_stop(void);
+static void selection_reset(void);
+static void selection_paint(void);
+static void selection_toggle(int index);
 
 // The episodes in the order shown, from the one tapped onwards into the past,
 // as the online list plays them.
@@ -464,6 +518,12 @@ static void episode_clicked_cb(lv_event_t *e) {
 	}
 	int i = (int)(intptr_t)lv_event_get_user_data(e);
 	if (i < 0 || i >= episode_count) {
+		return;
+	}
+	// While rows are being chosen a tap chooses: the list plays nothing until
+	// the selection is left.
+	if (selecting) {
+		selection_toggle(i);
 		return;
 	}
 	const char *paths[SAVED_MAX_EPISODES];
@@ -555,8 +615,8 @@ static void episodes_rows(void) {
 	for (int i = 0; i < episode_count; i++) {
 		char when[48];
 		format_date(&episodes[i].date, when, sizeof(when));
-		make_row(episodes_list, &episode_thumb, episodes[i].title, when, episode_clicked_cb, episode_long_cb, i,
-				 episodes[i].heard);
+		make_row(episodes_list, &episode_thumb, episodes[i].title, when, episode_clicked_cb, episode_long_cb,
+				 episode_menu_cb, i, episodes[i].heard);
 	}
 }
 
@@ -580,18 +640,188 @@ static void mark_not_heard_cb(void *user) {
 	episodes_rows();
 }
 
-static void episode_long_cb(lv_event_t *e) {
-	int i = (int)(intptr_t)lv_event_get_user_data(e);
-	if (i < 0 || i >= episode_count) {
+// ---------------------------------------------------------------------------
+// choosing several
+//
+// The same shape as the online episode list: a long press starts it, taps
+// choose rows, and the corner holds what can be done to all of them at once and
+// the way out. The single-row menu has not gone anywhere -- it is behind the
+// three dots now, where Tidal's rows keep theirs.
+// ---------------------------------------------------------------------------
+
+// Clears the flags without drawing anything: what a list read or a page left
+// behind does before it paints its own rows.
+static void selection_reset(void) {
+	selecting = false;
+	sel_count = 0;
+	memset(sel_chosen, 0, sizeof(sel_chosen));
+}
+
+static void selection_paint(void) {
+	// Two buttons while choosing -- the sheet of actions and the cross -- and
+	// the order button back in its one slot afterwards.
+	settingsrow_title_corner_slots(episodes_title, g_cfg, selecting ? 2 : 1);
+	if (order_btn) {
+		lv_obj_set_hidden(order_btn, selecting);
+	}
+	if (sel_act_btn) {
+		lv_obj_set_hidden(sel_act_btn, !selecting);
+	}
+	if (sel_close_btn) {
+		lv_obj_set_hidden(sel_close_btn, !selecting);
+	}
+}
+
+static void selection_stop(void) {
+	if (!selecting) {
 		return;
 	}
-	menu_episode = i;
-	// The lift that ends this press would otherwise arrive as a click and
-	// start the episode.
-	lv_indev_t *indev = lv_indev_active();
-	if (indev) {
-		lv_indev_wait_release(indev);
+	selection_reset();
+	selection_paint();
+	episodes_rows();
+}
+
+static void selection_start(int index) {
+	selection_reset();
+	selecting = true;
+	if (index >= 0 && index < episode_count) {
+		sel_chosen[index] = true;
+		sel_count = 1;
 	}
+	selection_paint();
+	episodes_rows();
+}
+
+static void selection_toggle(int index) {
+	if (index < 0 || index >= episode_count) {
+		return;
+	}
+	sel_chosen[index] = !sel_chosen[index];
+	sel_count += sel_chosen[index] ? 1 : -1;
+	if (sel_count <= 0) {
+		// Nothing chosen any more is the same as leaving: a selection mode with
+		// no selection in it has nothing to act on.
+		selection_stop();
+		return;
+	}
+	selection_paint();
+	episodes_rows();
+}
+
+static void selection_mark(bool heard) {
+	for (int i = 0; i < episode_count; i++) {
+		if (!sel_chosen[i] || episodes[i].episode_id <= 0) {
+			continue;
+		}
+		podcastplayed_set(episodes[i].episode_id, heard);
+		episodes[i].heard = heard;
+	}
+	selection_stop();
+}
+
+static void sel_heard_cb(void *user) {
+	(void)user;
+	selection_mark(true);
+}
+
+static void sel_unheard_cb(void *user) {
+	(void)user;
+	selection_mark(false);
+}
+
+static void sel_delete_confirmed(void *user) {
+	(void)user;
+	// The paths are taken before the selection is left: leaving redraws the
+	// rows, and the deletions below would leave what they read pointing at
+	// files that no longer exist.
+	char *paths[SAVED_MAX_EPISODES];
+	int wanted = 0;
+	for (int i = 0; i < episode_count && wanted < SAVED_MAX_EPISODES; i++) {
+		if (sel_chosen[i]) {
+			paths[wanted++] = episodes[i].path;
+		}
+	}
+	selection_reset();
+	selection_paint();
+
+	int removed = 0;
+	for (int i = 0; i < wanted; i++) {
+		if (remove(paths[i]) != 0) {
+			continue;
+		}
+		char tags[1200];
+		snprintf(tags, sizeof(tags), "%s.tags", paths[i]);
+		remove(tags);
+		removed++;
+	}
+	if (removed == 0) {
+		toast_error(tr("card_write_failed"));
+		episodes_fill();
+		return;
+	}
+	sync_card_soon();
+	char folder[800];
+	snprintf(folder, sizeof(folder), "%s/%s", podcastdl_root(), open_show);
+	remove_folder_if_empty(folder);
+	episodes_fill();
+	if (episode_count == 0) {
+		switch_screen_return_to(podcastsaved_screen);
+	}
+}
+
+static void sel_delete_cb(void *user) {
+	(void)user;
+	if (sel_count <= 0) {
+		return;
+	}
+	char count[64];
+	snprintf(count, sizeof(count), tr(sel_count == 1 ? "selection_one_track" : "selection_tracks_count"),
+			 sel_count);
+	char message[320];
+	snprintf(message, sizeof(message), "%s. %s", count, tr("medialist_delete_note"));
+	confirm_show("podcast_delete_download", message, "delete", sel_delete_confirmed, NULL);
+}
+
+// What the selection's corner offers: the marks that make sense for what is
+// chosen -- a row already heard is offered the other mark, not the same one --
+// and the bin.
+static void sel_sheet_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	if (!selecting || sel_count <= 0) {
+		return;
+	}
+	bool any_heard = false;
+	bool any_unheard = false;
+	for (int i = 0; i < episode_count; i++) {
+		if (!sel_chosen[i] || episodes[i].episode_id <= 0) {
+			continue;
+		}
+		if (episodes[i].heard) {
+			any_heard = true;
+		} else {
+			any_unheard = true;
+		}
+	}
+	popover_item_t actions[3];
+	int count = 0;
+	if (any_unheard) {
+		actions[count++] = (popover_item_t){"podcast_mark_listened", sel_heard_cb, NULL, false};
+	}
+	if (any_heard) {
+		actions[count++] = (popover_item_t){"podcast_mark_not_listened", sel_unheard_cb, NULL, false};
+	}
+	actions[count++] = (popover_item_t){"delete", sel_delete_cb, NULL, false};
+	popover_show(lv_event_get_current_target(e), actions, count);
+}
+
+static void sel_close_cb(lv_event_t *e) {
+	(void)e;
+	selection_stop();
+}
+
+// The one row's own menu, behind the dots.
+static void episode_menu(lv_obj_t *anchor, int i) {
+	menu_episode = i;
 	static const popover_item_t HEARD[] = {{"podcast_mark_not_listened", mark_not_heard_cb, NULL},
 										  {"delete", delete_cb, NULL}};
 	static const popover_item_t NOT_HEARD[] = {{"podcast_mark_listened", mark_heard_cb, NULL},
@@ -600,18 +830,44 @@ static void episode_long_cb(lv_event_t *e) {
 	// keep the mark under and the menu offers only the one thing left to do.
 	static const popover_item_t DELETE_ONLY[] = {{"delete", delete_cb, NULL}};
 	if (episodes[i].episode_id <= 0) {
-		popover_show(lv_event_get_current_target(e), DELETE_ONLY, 1);
+		popover_show(anchor, DELETE_ONLY, 1);
 	} else {
-		popover_show(lv_event_get_current_target(e), episodes[i].heard ? HEARD : NOT_HEARD, 2);
+		popover_show(anchor, episodes[i].heard ? HEARD : NOT_HEARD, 2);
 	}
 }
 
+static void episode_menu_cb(lv_event_t *e) {
+	int i = (int)(intptr_t)lv_event_get_user_data(e);
+	if (i < 0 || i >= episode_count || selecting) {
+		return;
+	}
+	episode_menu(lv_event_get_current_target(e), i);
+}
+
+// A long press no longer opens one row's menu: it starts choosing rows, the
+// way a long press does on the lists elsewhere. The menu is on the dots.
+static void episode_long_cb(lv_event_t *e) {
+	int i = (int)(intptr_t)lv_event_get_user_data(e);
+	if (i < 0 || i >= episode_count) {
+		return;
+	}
+	// The lift that ends this press would otherwise arrive as a click and start
+	// the episode under the selection just started.
+	lv_indev_t *indev = lv_indev_active();
+	if (indev) {
+		lv_indev_wait_release(indev);
+	}
+	selection_start(i);
+}
+
 static void episodes_fill(void) {
+	// A list read afresh is a list nobody has chosen anything on.
+	selection_reset();
 	episodes_read();
 	episodes_rows();
 	lv_label_set_text(episodes_title, open_show);
-	settingsrow_title_corner_slots(episodes_title, g_cfg, 1);
 	paint_order_button();
+	selection_paint();
 }
 
 void podcastsaved_episode_heard(long long episode_id) {
@@ -643,6 +899,10 @@ static void episodes_loaded_cb(lv_event_t *e) {
 
 static void episodes_unloaded_cb(lv_event_t *e) {
 	(void)e;
+	// Left behind now, not on the next visit: a selection that outlived its
+	// rows would have the corner asking about nothing.
+	selection_reset();
+	selection_paint();
 	lv_obj_clean(episodes_list);
 	episodes_free();
 }
@@ -707,7 +967,9 @@ void podcastsaved_init(gui_config_t *cfg) {
 	g_cfg = cfg;
 
 	podcastsaved_screen = lv_obj_create(NULL);
-	shows_list = settingsrow_page(podcastsaved_screen, cfg, "podcast_on_card");
+	// The same heading every downloads page wears -- Tidal's and YouTube
+	// Music's say "Downloaded" -- rather than a second name for one idea.
+	shows_list = settingsrow_page(podcastsaved_screen, cfg, "downloaded");
 	lv_obj_set_flex_align(shows_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 	player_sheet_attach_drag(shows_list, true);
 	switcher_attach_back_gesture(podcastsaved_screen);
@@ -735,6 +997,12 @@ void podcastsaved_init(gui_config_t *cfg) {
 	// kept on the card is read the same way round as one streamed.
 	settingsrow_title_corner_slots(episodes_title, cfg, 1);
 	order_btn = corner_button(cfg, episodes_screen, 0, &icon_sort_date_new, order_cb);
+	// While rows are chosen these two take the corner: the sheet of what the
+	// selection can be used for, and the way out.
+	sel_act_btn = corner_button(cfg, episodes_screen, 0, &icon_check, sel_sheet_cb);
+	sel_close_btn = corner_button(cfg, episodes_screen, 1, &icon_close, sel_close_cb);
+	lv_obj_set_hidden(sel_act_btn, true);
+	lv_obj_set_hidden(sel_close_btn, true);
 	player_sheet_attach_drag(episodes_list, true);
 	switcher_attach_back_gesture(episodes_screen);
 	lv_obj_add_event_cb(episodes_screen, episodes_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);

@@ -999,8 +999,15 @@ static library_filter_t filter_for(library_list_t kind);
 
 // The lists rows can be chosen on: tracks, albums, artists, album artists, a
 // playlist, the favourites, the most played tracks, and years, read from the
-// index. Not genres, and not a list handed in as paths.
+// index. Not genres, and not a list handed in as paths -- with one exception:
+// a downloads list (Tidal's saved songs, YouTube Music's downloads) is a path
+// list, and it is the one where choosing several rows is the whole point. Its
+// corner offers what those rows can do: the queue, a favourite, a playlist and
+// the bin the flag already allowed one row to reach.
 static bool panel_selectable(const panel_t *p) {
+	if (p->downloads) {
+		return p->is_tracks;
+	}
 	if (p->from_paths) {
 		return false;
 	}
