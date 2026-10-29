@@ -22,6 +22,8 @@
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
 #include "src/gui/nowplaying/cover.h"
+#include "src/gui/nowplaying/artworkpage.h"
+#include "src/system/addons/addons.h"
 #include "src/system/audio/audio.h"
 #include "src/system/audio/replaygain.h"
 #include "src/system/decode/decode.h"
@@ -1335,6 +1337,24 @@ void trackmenu_details_open(const char *path) {
 	switcher_set_player_return(NULL);
 }
 
+// Artwork for the file playing: the page that looks a record's sleeve up in
+// two public catalogues and writes the chosen one beside the file. Offered on a
+// local file's menu only -- a stream's artwork comes with the stream, and a
+// cover written into a playback cache would be swept with it.
+static void find_artwork_cb(void *user) {
+	(void)user;
+	if (!addons_enabled("artwork")) {
+		return;
+	}
+	device_state_t state;
+	device_state_get(&state);
+	if (!state.current_file[0]) {
+		toast_error("artwork_no_folder");
+		return;
+	}
+	artworkpage_open(state.current_file, state.metadata.title, state.metadata.artist, state.metadata.album);
+}
+
 void trackmenu_open(lv_obj_t *anchor) {
 	// Two tables rather than one with the label patched at runtime, because of
 	// the string-extraction tool: it reads popover_item_t initialisers (see
@@ -1351,6 +1371,20 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"smartmix_start", start_genius_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
 		{"show_album", open_album_cb, NULL},
+		{"details", open_details_cb, NULL},
+		{"settings", open_settings_cb, NULL},
+	};
+	// The same rows with the artwork search among them, for a build where the
+	// module is on: a table of its own rather than a row filtered at runtime,
+	// for the reason the others are separate -- the string-extraction tool reads
+	// these initialisers, and the Plugins switch has to be able to take the row
+	// away completely.
+	static const popover_item_t ITEMS_ART[] = {
+		{"trackmenu_queue", open_queue_cb, NULL},
+		{"smartmix_start", start_genius_cb, NULL},
+		{"add_to_playlist", add_to_playlist_cb, NULL},
+		{"show_album", open_album_cb, NULL},
+		{"find_artwork", find_artwork_cb, NULL},
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
 	};
@@ -1391,6 +1425,12 @@ void trackmenu_open(lv_obj_t *anchor) {
 	// The Tidal Downloaded list is made of files already present on the card.
 	// Offering "Download" again is both misleading and useless offline.
 	bool keepable = !podcast && !tidal_track && streamkeep_is_stream_track(state.current_file);
+	// A stream's artwork arrives with it, and a cover written into one of the
+	// playback caches would be swept with the song: the artwork search is for
+	// files of the user's own, so it is not offered on a Qobuz or YouTube Music
+	// cache file.
+	bool streamed = !podcast && !tidal_track && state.current_file[0] &&
+					(qobuzcache_track_id(state.current_file) > 0 || ytmusic_cache_owns(state.current_file));
 
 	// Smart Mix stays available on every non-podcast menu, as upstream has it.
 	// Only the episode table omits it; the Tidal and keep-on-card tables add
@@ -1402,6 +1442,8 @@ void trackmenu_open(lv_obj_t *anchor) {
 		popover_show(anchor, ITEMS_TIDAL, (int)(sizeof(ITEMS_TIDAL) / sizeof(ITEMS_TIDAL[0])));
 	} else if (podcast) {
 		popover_show(anchor, ITEMS_PODCAST, (int)(sizeof(ITEMS_PODCAST) / sizeof(ITEMS_PODCAST[0])));
+	} else if (!streamed && addons_enabled("artwork")) {
+		popover_show(anchor, ITEMS_ART, (int)(sizeof(ITEMS_ART) / sizeof(ITEMS_ART[0])));
 	} else {
 		popover_show(anchor, ITEMS, (int)(sizeof(ITEMS) / sizeof(ITEMS[0])));
 	}

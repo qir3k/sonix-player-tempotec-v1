@@ -268,6 +268,19 @@ $(BUILD)/test_covers: $(COVERS_SRC) $(TAGS_DECODE_SRC) $(BUILD)/sqlite3_impl.o \
 		-Wno-unused-parameter -Wno-sign-compare -Wno-unused-function -Wno-implicit-fallthrough -Wno-misleading-indentation $(TAGS_DECODE_SRC) \
 		$(BUILD)/sqlite3_impl.o $(LDFLAGS) $(LDLIBS)
 
+# The tag writer: a picture written INTO a song's own tags. Synthetic MP3s and
+# FLACs are rewritten and read back -- the audio bytes must come out identical,
+# the other frames must survive, a tag that was there must lose its old picture
+# and one that was not must gain a whole tag. Plain C, no LVGL.
+TAGWRITE_SRC = test_tagwrite.c $(ROOT)/src/system/library/tagwrite.c
+.PHONY: tagwrite
+tagwrite: $(BUILD)/test_tagwrite
+	$(BUILD)/test_tagwrite
+
+$(BUILD)/test_tagwrite: $(TAGWRITE_SRC) $(ROOT)/src/system/library/tagwrite.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(TAGWRITE_SRC) $(LDFLAGS) $(LDLIBS)
+
 # FLAC radio stream decoding: native FLAC behind ID3v2, mid-stream 24-bit
 # relaxed join across false sync markers, chained Ogg FLAC with song titles
 # and multi-page packet assembly, and non-FLAC rejection.

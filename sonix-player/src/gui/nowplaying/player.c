@@ -4862,6 +4862,23 @@ static void refresh_cover(const char *filepath) {
 	reload_cover(filepath);
 }
 
+// The artwork of what is playing has changed on the card: the artwork page just
+// wrote a new cover beside it. What is on screen belongs to the old picture, and
+// the id that answers "is this the same sleeve?" would answer yes -- it is the
+// same file, with different bytes in it now -- so the id is forgotten and the
+// sleeve is asked for again.
+void player_cover_reload(void) {
+	device_state_t state;
+	device_state_get(&state);
+	if (!state.current_file[0] || !cover_img) {
+		return;
+	}
+	cover_shown_id = 0;
+	cover_incoming_id = 0;
+	cover_id_state = COVER_ID_IDLE;
+	reload_cover(state.current_file);
+}
+
 // The answer to whichever question was asked, picked up on the progress poll.
 static void apply_cover_id_result(void) {
 	if (cover_id_state == COVER_ID_IDLE) {

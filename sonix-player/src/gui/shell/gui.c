@@ -13,6 +13,7 @@
 #include "src/gui/settings/ccsettings.h"
 #include "src/gui/nowplaying/chapters.h"
 #include "src/gui/nowplaying/lyricsearch.h"
+#include "src/gui/nowplaying/artworkpage.h"
 #include "src/gui/wireless/airplay.h"
 #include "src/gui/bluetooth/airpodspage.h"
 #include "src/gui/settings/appearance.h"
@@ -664,6 +665,7 @@ void gui_init(gui_config_t *cfg) {
 	audiobookscan_screen = lv_obj_create(NULL);
 	chapters_screen = lv_obj_create(NULL);
 	lyricsearch_screen = lv_obj_create(NULL);
+	artworkpage_screen = lv_obj_create(NULL);
 	queue_screen = lv_obj_create(NULL);
 	details_screen = lv_obj_create(NULL);
 	wireless_screen = lv_obj_create(NULL);
@@ -814,6 +816,12 @@ void gui_init(gui_config_t *cfg) {
 	chapters_init(cfg);
 	if (addons_enabled("lyrics")) {
 		lyricsearch_init(cfg);
+	}
+	// The artwork search: the same idea as the lyrics one, for a record that
+	// came without its sleeve. Off, its page is never built and the player's
+	// menu does not offer it.
+	if (addons_enabled("artwork")) {
+		artworkpage_init(cfg);
 	}
 	trackmenu_init(cfg);
 

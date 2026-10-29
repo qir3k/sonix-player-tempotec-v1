@@ -27,6 +27,11 @@ void player_refresh_artist(void);
 // brings their page in when it is the file playing.
 void player_lyrics_reload(const char *path);
 
+// Reads the artwork of what is playing again, once a cover has been written
+// beside it: the sleeve on screen belongs to the old picture, and the loader's
+// answer to "the same picture?" would be about a path that now holds another.
+void player_cover_reload(void);
+
 // The "4/12" under the progress bar: the place in the queue as the screen shows
 // it (the deal's order under shuffle) and the length. False, with both zero,
 // where the screen shows nothing -- one track, a book, DLNA, a stream.
