@@ -5,15 +5,23 @@
 
 // The sleep timers: the player stops by itself after a while.
 //
-// Four of them, one per kind of listening, because the answer is not the same
-// for all of them. Half an hour is a reasonable way to fall asleep to music and
-// a poor way to fall asleep to a book, and somebody who sets one for podcasts at
-// bedtime does not want it counting down over an album the next morning. Each
-// keeps its own switch and its own length, in its own corner of the config.
+// Two of them, not four. One covers everything you listen to -- the card, Tidal,
+// Qobuz, YouTube Music, podcasts and radio -- because "stop in half an hour" is
+// one thought about one evening, not a fact about where the audio came from.
+// Four timers meant a stretch set at bedtime stopped counting the moment a
+// station was opened instead of an album, which from the outside is a timer
+// that stopped working, and it put four separate switches in the control
+// centre for one intention. Podcasts and radio are aliases of the music timer
+// now; the settings pages that still have a row set the same one.
 //
-// Radio is the fourth. It has no pause -- stopping a station is a disconnection
-// -- so the timer stops it rather than pausing it, which is what somebody
-// falling asleep to a station wants anyway.
+// The audiobook stays apart, and for a reason that is not taste: falling asleep
+// to a book is measured against the end of a chapter, and a book somebody
+// resumes the next morning should not have inherited the album's countdown.
+//
+// A station has no pause -- stopping it is a disconnection -- so when the
+// shared timer expires on one it is stopped rather than paused, which is what
+// somebody falling asleep to it wants anyway. The player decides that: see
+// sleep_timer_cb().
 //
 // One rule decides when any of them counts. The countdown starts fresh at every
 // transition into playing and runs only while something of that kind is
@@ -32,11 +40,13 @@
 // so a slow tick with the screen dark loses nothing: the tick only asks what
 // time it is now.
 typedef enum {
-	SLEEPTIMER_MUSIC = 0, // the card, Tidal and Qobuz: one transport, one timer
+	SLEEPTIMER_MUSIC = 0, // the card and every streaming service: one transport, one timer
 	SLEEPTIMER_AUDIOBOOK,
-	SLEEPTIMER_PODCAST,
-	SLEEPTIMER_RADIO,
-	SLEEPTIMER_COUNT,
+	// Kept as names because the pages and the player name them, but they are
+	// the music timer: one evening, one countdown, wherever the sound is from.
+	SLEEPTIMER_PODCAST = SLEEPTIMER_MUSIC,
+	SLEEPTIMER_RADIO = SLEEPTIMER_MUSIC,
+	SLEEPTIMER_COUNT = 2,
 } sleeptimer_kind_t;
 
 // Reads all three out of the config.

@@ -3716,7 +3716,9 @@ static void open_downloads_cb(lv_event_t *e) {
 		titles[i] = entries[i].title;
 		artists[i] = entries[i].detail;
 	}
-	medialist_open_paths(tr("downloaded"), paths, titles, artists, count, NULL);
+	// The downloads flavour, which also offers to delete a song: Music/Tidal is
+	// a folder this player wrote, not the user's own collection.
+	medialist_open_downloads(tr("downloaded"), paths, titles, artists, count);
 	free(entries);
 	free(paths);
 	free(titles);

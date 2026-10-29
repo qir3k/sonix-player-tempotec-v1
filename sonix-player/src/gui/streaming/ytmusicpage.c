@@ -556,8 +556,10 @@ static void open_downloads_cb(lv_event_t *e) {
 		titles[i] = entries[i].title;
 		artists[i] = entries[i].artist;
 	}
-	// medialist copies all of it and opens its own page.
-	medialist_open_paths(tr("downloaded"), paths, titles, artists, count, NULL);
+	// medialist copies all of it and opens its own page. The downloads flavour
+	// is what puts "Delete" in a row's menu: these are songs the player wrote
+	// into Music/YouTube Music itself, so they are the user's to remove.
+	medialist_open_downloads(tr("downloaded"), paths, titles, artists, count);
 	free(entries);
 	free(paths);
 	free(titles);
@@ -2760,6 +2762,11 @@ void ytmusicpage_init(gui_config_t *cfg) {
 	// loader's benefit: with no card named it has nowhere to write and every
 	// list keeps its placeholders, which is the honest answer.
 	qobuzart_set_root(storage_sd_root());
+	// And where the song being streamed is written. On the card, not in /tmp:
+	// /tmp is tmpfs here, so a track kept there is a track kept in the heap the
+	// decoder and a Bluetooth codec are also using. Without a card the cache
+	// stays where it was, because a player with no card should still play.
+	ytmusic_set_cache_root(storage_sd_root());
 	ytmusic_screen = lv_obj_create(NULL);
 	lv_obj_add_style(ytmusic_screen, &theme_style_screen, 0);
 	home_container = settingsrow_page(ytmusic_screen, cfg, "YouTube Music");

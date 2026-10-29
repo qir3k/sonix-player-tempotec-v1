@@ -83,8 +83,6 @@ typedef enum {
 	// playing at lunchtime, and a station's has nothing to do with either.
 	QP_BTN_SLEEP_MUSIC,
 	QP_BTN_SLEEP_AUDIOBOOK,
-	QP_BTN_SLEEP_PODCAST,
-	QP_BTN_SLEEP_RADIO,
 	QP_BTN_WIFI_TRANSFER,
 	QP_BTN_GAPLESS,
 	QP_BTN_COUNT,

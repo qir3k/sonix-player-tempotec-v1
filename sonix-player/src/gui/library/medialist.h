@@ -118,6 +118,13 @@ void medialist_refresh_visible(void);
 void medialist_open_paths(const char *title, const char *const *paths, const char *const *names,
 						  const char *const *artists, int count, const char *playlist);
 
+// The same list for a downloads folder -- Tidal's saved songs, YouTube Music's
+// downloads. Same rows and same playback, plus the offer to delete a song: these
+// are files this player wrote on request, so removing one does not need the
+// Music > Settings > Library permission the user's own collection does.
+void medialist_open_downloads(const char *title, const char *const *paths, const char *const *names,
+							  const char *const *artists, int count);
+
 // A playlist was renamed while its track list was still open behind the
 // playlists page. The list keeps the name it was opened with, and would go on
 // writing to a file that no longer exists, so it is told the new one.

@@ -212,6 +212,16 @@ bool ytmusic_stream_for_playback(const ytmusic_track_t *track, char *path, size_
 // card" action copies out of it.
 bool ytmusic_cache_owns(const char *path);
 
+// Where the playback cache lives: the card's own .local folder, so a song being
+// streamed is never held in RAM. Told once the storage has looked for the card;
+// without one the cache falls back to /tmp, which is memory on this device, so
+// a player with a card never pays for a song twice.
+void ytmusic_set_cache_root(const char *sd_root);
+
+// Empties the playback cache. Called on the way down with the other streaming
+// caches: it is scratch that now lives on the card, and so has to be swept.
+void ytmusic_cache_clear(void);
+
 // How far the download in flight has got, for the page's loading card. Percent
 // is -1 until the instance has said how big the file is, and `running` is false
 // when nothing is downloading.

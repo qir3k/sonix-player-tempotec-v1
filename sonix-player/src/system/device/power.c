@@ -734,6 +734,17 @@ static bool g_bt_parked;
 // there means the track after that never arrives. What decides is who owns the
 // file being played.
 //
+// YouTube Music belongs on this list and was the one missing from it. Its songs
+// are played out of a file that is written as they arrive, and they live in a
+// folder that is nobody else's -- so a song that was fully buffered a minute in
+// looked like a local track, the radio was parked under it at the sixty-second
+// mark, and the next song (or a seek) had nothing to fetch on. That is the
+// "Wi-Fi goes off while YouTube Music is playing" report.
+//
+// Paused counts while the track is one of these: the position in a streamed
+// track is only worth anything if the network is there when play is pressed,
+// and pressing play is the moment a parked radio costs the user a wait.
+//
 // radio_is_playing(), not radio_is_active(): a station merely loaded and
 // stopped uses nothing, and counting it as in-use would leave the radio on and
 // the automatic shutdown disabled for the rest of the day after one listen.
@@ -741,7 +752,9 @@ static bool streaming_playback_active(void) {
 	if (radio_is_playing()) {
 		return true;
 	}
-	if (audio_get_status() == AUDIO_STATUS_STOPPED) {
+
+	audio_status_t status = audio_get_status();
+	if (status == AUDIO_STATUS_STOPPED) {
 		return false;
 	}
 
@@ -750,7 +763,8 @@ static bool streaming_playback_active(void) {
 	if (!path[0]) {
 		return false;
 	}
-	return subsonicstream_owns(path) || qobuzcache_owns(path) || tidalcache_owns(path) || podcastcache_owns(path);
+	return subsonicstream_owns(path) || qobuzcache_owns(path) || tidalcache_owns(path) || podcastcache_owns(path) ||
+		   ytmusic_cache_owns(path);
 }
 
 // A YouTube Music track on its way to the player. Most of the transfer -- since
@@ -1227,6 +1241,7 @@ void power_shutdown(void) {
 	qobuzcache_clear_on_exit();
 	tidalcache_clear_on_exit();
 	podcastcache_clear_on_exit();
+	ytmusic_cache_clear();
 	dlna_clear_on_exit();
 
 	// The charger back on before the power goes: the driver keeps that bit

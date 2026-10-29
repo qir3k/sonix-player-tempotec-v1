@@ -223,6 +223,12 @@ typedef struct {
 	char album_artist[128];
 	char title[160];
 	bool from_paths; // filled by medialist_open_paths: not a query, cannot reorder
+	// A downloads list: Tidal's saved songs, YouTube Music's downloads. The
+	// rows are files the player itself put on the card, so deleting them is
+	// always offered here -- Music > Settings > Library's switch is about the
+	// user's own music, not about scratch this player wrote. See
+	// medialist_open_downloads().
+	bool downloads;
 	// The playlist this list came from, empty when it came from anywhere else.
 	// It is what lets the ellipsis offer to take a track out of the list it is
 	// looking at, rather than to put it into another one.
@@ -1096,7 +1102,7 @@ static void show_if(lv_obj_t *obj, bool show) {
 // of tracks can be deleted from: a row that stands for an album or an artist is
 // not a file.
 static bool panel_can_delete(const panel_t *p) {
-	return p->is_tracks && musicsettings_allow_delete();
+	return p->is_tracks && (p->downloads || musicsettings_allow_delete());
 }
 
 // Selection mode's buttons, four on every list: the queue first, close last,
@@ -1428,6 +1434,7 @@ static void sel_fav_cb(lv_event_t *e) {
 }
 
 static void window_update(panel_t *p);
+static void model_remove(panel_t *p, int index);
 
 // Taking rows out of the list on screen. Asked first: a slip of the finger on a
 // selection of fifty is fifty tracks to find again.
@@ -1579,15 +1586,30 @@ static void delete_confirmed(void *user) {
 	if (deleted > 0) {
 		library_remove_tracks((const char *const *)gone, deleted);
 	}
-	free(gone);
-	delete_pending_free();
 
 	if (p) {
-		// The index moved under the list: everything the rows stand for is
-		// read again, and the ones that went are gone from it.
-		panel_refresh_stale(p);
-		window_update(p);
+		if (p->downloads) {
+			// A downloads list is a list of files this player wrote, not a
+			// window on the library: there is no query to re-run, so the rows
+			// that went are taken out of the model as they were deleted. Back
+			// to front, because each removal shifts the ones after it.
+			for (int i = 0; i < deleted; i++) {
+				for (int j = p->count - 1; j >= 0; j--) {
+					if (p->entries[j].path && strcmp(p->entries[j].path, gone[i]) == 0) {
+						model_remove(p, j);
+						break;
+					}
+				}
+			}
+		} else {
+			// The index moved under the list: everything the rows stand for is
+			// read again, and the ones that went are gone from it.
+			panel_refresh_stale(p);
+			window_update(p);
+		}
 	}
+	free(gone);
+	delete_pending_free();
 
 	if (deleted == asked && asked > 0) {
 		toast_success(deleted == 1 ? "medialist_track_deleted" : "medialist_tracks_deleted");
@@ -3511,6 +3533,29 @@ static void menu_details_action(void *user) {
 	}
 }
 
+// "Delete from the card", on a downloads list and nowhere else: these rows are
+// files this player put there itself, so removing one is housekeeping rather
+// than the irreversible change Music > Settings > Library guards for the user's
+// own recordings. Asked first all the same -- see delete_confirmed() -- because
+// the file is the file either way.
+static void menu_delete_action(void *user) {
+	(void)user;
+	if (!menu_path[0] || !menu_panel || !menu_panel->downloads) {
+		return;
+	}
+	delete_pending_free();
+	delete_paths = calloc(1, sizeof(*delete_paths));
+	if (!delete_paths || !(delete_paths[0] = strdup(menu_path))) {
+		delete_pending_free();
+		return;
+	}
+	delete_count = 1;
+	delete_panel = menu_panel;
+	char message[320];
+	snprintf(message, sizeof(message), "%s. %s", menu_name[0] ? menu_name : menu_path, tr("medialist_delete_note"));
+	confirm_show("medialist_delete_from_card", message, "delete", delete_confirmed, NULL);
+}
+
 // "Show album": the record this track came off, with everything else on it.
 // The album name is looked up again at the moment it is asked for rather than
 // carried on every row -- one query against a path that is already indexed,
@@ -3564,7 +3609,7 @@ static void menu_btn_cb(lv_event_t *e) {
 		menu_album[0] = '\0';
 	}
 
-	popover_item_t items[6];
+	popover_item_t items[7];
 	int n = 0;
 	// The two "add to" lines stay next to each other: they are the same kind
 	// of thing, and reading past one to reach the other is friction with no
@@ -3591,6 +3636,10 @@ static void menu_btn_cb(lv_event_t *e) {
 	}
 
 	items[n++] = (popover_item_t){"details", menu_details_action, NULL};
+	// Last, because it is the only line here that cannot be undone.
+	if (p->downloads) {
+		items[n++] = (popover_item_t){"delete", menu_delete_action, NULL};
+	}
 	popover_show(button, items, n);
 }
 
@@ -4207,6 +4256,7 @@ void medialist_open_paths(const char *title, const char *const *paths, const cha
 	p->kind = LIBRARY_LIST_TRACKS;
 	p->filter = LIBRARY_FILTER_NONE;
 	p->from_paths = true;
+	p->downloads = false;
 	// A path list is always an ordinary listen, never a seed walk.
 	p->picking_seed = false;
 	snprintf(p->playlist, sizeof(p->playlist), "%s", playlist ? playlist : "");
@@ -4269,6 +4319,18 @@ void medialist_open_paths(const char *title, const char *const *paths, const cha
 	window_update(p);
 
 	switch_screen(p->screen);
+}
+
+// The same list, for files this player downloaded itself: Tidal's saved songs
+// and YouTube Music's downloads. Identical rows and identical playback; what
+// the flag adds is the offer to delete them, from the row's own menu and from
+// a selection, without asking Music > Settings > Library first -- that switch
+// is about the user's own collection, and these files are the player's own
+// scratch, written on request and never edited.
+void medialist_open_downloads(const char *title, const char *const *paths, const char *const *names,
+							  const char *const *artists, int count) {
+	medialist_open_paths(title, paths, names, artists, count, NULL);
+	panel_tracks.downloads = true;
 }
 
 void medialist_playlist_renamed(const char *old_name, const char *new_name) {

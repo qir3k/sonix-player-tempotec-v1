@@ -491,6 +491,13 @@ static bool stop_thread = false;
 static double seek_target_secs = -1.0;
 static bool seek_request = false;
 
+// How long a seek will stand still waiting for the download to reach the point
+// it was asked for. Long enough for a point that is almost buffered, short
+// enough that a skip into the far end of a download does not look like a
+// frozen player: past this the position becomes the furthest one that exists
+// and playback carries on. See the seek block in the decoder loop.
+#define SEEK_WAIT_MAX_MS 6000
+
 // Set true by the playback thread when a track plays through to its end (as
 // opposed to being stopped/replaced by the user). Consumed via
 // audio_take_completion() so the controller can auto-advance.
@@ -3303,6 +3310,16 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 			// to reach it -- progress bar parked on the requested point, card
 			// silent, and the wait giving up on any command (including another
 			// seek: the last touch always wins).
+			//
+			// But not for ever. The wait used to be open-ended, and skipping a
+			// minute ahead in a track that had buffered twenty seconds meant
+			// standing still -- silent, bar frozen -- for the forty seconds the
+			// download took to catch up, with the whole player looking dead.
+			// A seek is a request for the next few seconds, not for a promise:
+			// six seconds is enough for a point that is nearly there, and past
+			// that the position becomes the furthest point that exists and the
+			// music carries on from it. The rest of the track keeps arriving
+			// in the background, so the next seek is closer.
 			uint64_t reachable = decoder_seekable_limit(dec);
 			bool dropped_while_waiting = false;
 			if (reachable > 0 && target_frame > reachable && decoder_is_growing(dec)) {
@@ -3320,6 +3337,7 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 				progress_current_secs = (double)target_frame / sample_rate;
 				pthread_mutex_unlock(&audio_mutex);
 
+				int waited_ms = 0;
 				while (true) {
 					pthread_mutex_lock(&audio_mutex);
 					bool leave = audio_command != AUDIO_CMD_PLAY || play_request || seek_request;
@@ -3335,7 +3353,13 @@ static void play_decoded_file(const char *filepath, decode_format_t format) {
 						fprintf(stderr, "audio[%ld]: the requested point has downloaded, resuming from there\n", log_ms());
 						break;
 					}
+					if (waited_ms >= SEEK_WAIT_MAX_MS) {
+						fprintf(stderr, "audio[%ld]: the requested point is %d s behind the download; starting at %u s instead\n",
+								log_ms(), SEEK_WAIT_MAX_MS / 1000, (unsigned)(reachable / (sample_rate ? (uint64_t)sample_rate : 1)));
+						break;
+					}
 					usleep(100 * 1000);
+					waited_ms += 100;
 				}
 				reachable = decoder_seekable_limit(dec);
 			}

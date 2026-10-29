@@ -2484,14 +2484,64 @@ static void mark_complete(const char *path, bool done) {
 // of the file: a minute of it is a failure, anything shorter is buffering.
 #define YTMUSIC_STALL_GIVEUP_MS (60 * 1000)
 
-// Where the playback cache lives: /tmp on the device, because it is scratch and
-// nothing there has to survive a reboot. SONIX_YTMUSIC_CACHE moves it, which is
-// what lets the host suite write it at all -- some Windows machines refuse
-// every create under \tmp, and a suite that cannot make the folder would have
-// to skip the download checks it exists to make.
+// Where the playback cache lives.
+//
+// On the memory card, beside Tidal's and Qobuz's scratch folders, and NOT in
+// /tmp: /tmp is tmpfs on this device, which is to say RAM. A five minute track
+// is four or five megabytes written there, and then they sit in the heap for as
+// long as the song is loaded -- on a player where the decoder, the sleeve and a
+// Bluetooth codec are all asking for the same megabytes. That is what made the
+// figure on the processes page climb through a listening session, and what took
+// the player down with LDAC on top of it.
+//
+// /tmp is still the answer when there is no card: the song is scratch, and a
+// player with no card at all should still play. SONIX_YTMUSIC_CACHE moves it,
+// which is what lets the host suite write it at all -- some Windows machines
+// refuse every create under \tmp, and a suite that cannot make the folder would
+// have to skip the download checks it exists to make.
+#define YTMUSIC_CACHE_DIR ".local/ytmusic-cache"
+
+static char cache_dir[320];
+
 static const char *playback_cache_dir(void) {
 	const char *override = getenv("SONIX_YTMUSIC_CACHE");
-	return (override && override[0]) ? override : "/tmp/sonix-ytmusic";
+	if (override && override[0]) {
+		return override;
+	}
+	return cache_dir[0] ? cache_dir : "/tmp/sonix-ytmusic";
+}
+
+// The card the cache lives on, told once the storage has looked for it.
+// Without one the cache stays in /tmp, which is what it always was.
+void ytmusic_set_cache_root(const char *sd_root) {
+	if (!sd_root || !*sd_root) {
+		cache_dir[0] = '\0';
+		return;
+	}
+#ifdef HOST_BUILD
+	sd_root = "/tmp"; // the simulator has no card; its /tmp stands in for one
+#endif
+	snprintf(cache_dir, sizeof(cache_dir), "%s/%s", sd_root, YTMUSIC_CACHE_DIR);
+}
+
+// mkdir -p over the two levels the cache needs: .local, then the folder.
+static bool ensure_cache_dir(void) {
+	const char *cache = playback_cache_dir();
+	char path[512];
+	snprintf(path, sizeof(path), "%s", cache);
+	for (char *p = path + 1; *p; p++) {
+		if (*p != '/') {
+			continue;
+		}
+		*p = '\0';
+		mkdir(path, 0777);
+		*p = '/';
+	}
+	if (mkdir(path, 0777) != 0 && errno != EEXIST) {
+		fprintf(stderr, "ytmusic: cannot create %s: %s\n", path, strerror(errno));
+		return false;
+	}
+	return true;
 }
 
 // What the download is doing, for the page's loading card. A percentage rather
@@ -2810,6 +2860,44 @@ static void prune_playback_cache(const char *keep_id) {
 	closedir(dir);
 }
 
+// Everything the playback cache holds, removed.
+//
+// The cache is scratch: it lives on the card now, and a card that quietly
+// collects a gigabyte of songs nobody asked to keep is worse than one that does
+// not. The one file a listener DID ask for is the one "save to the card" copied
+// into Music, which is not here. Called on the way down, where Tidal's, Qobuz's
+// and the podcasts' caches are cleared for the same reason.
+void ytmusic_cache_clear(void) {
+	const char *cache = playback_cache_dir();
+	DIR *dir = opendir(cache);
+	if (!dir) {
+		return;
+	}
+	int removed = 0;
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		if (entry->d_name[0] == '.') {
+			continue;
+		}
+		char *dot = strrchr(entry->d_name, '.');
+		if (!dot || (strcmp(dot, ".m4a") != 0 && strcmp(dot, ".tags") != 0 && strcmp(dot, ".part") != 0 &&
+					 strcmp(dot, ".jpg") != 0 && strcmp(dot, ".done") != 0)) {
+			continue;
+		}
+		char path[640];
+		if (snprintf(path, sizeof(path), "%s/%s", cache, entry->d_name) >= (int)sizeof(path)) {
+			continue;
+		}
+		if (remove(path) == 0) {
+			removed++;
+		}
+	}
+	closedir(dir);
+	if (removed > 0) {
+		printf("ytmusic: playback cache cleared (%d files)\n", removed);
+	}
+}
+
 // The cached copy of a song, when there is a whole one.
 //
 // A `.done` marker is written beside the audio only once the transfer
@@ -2930,7 +3018,7 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 		return false;
 	}
 	const char *cache = playback_cache_dir();
-	if (mkdir(cache, 0700) != 0 && errno != EEXIST) {
+	if (!ensure_cache_dir()) {
 		set_error(error, error_size, "ytmusic_cache_unavailable");
 		return false;
 	}

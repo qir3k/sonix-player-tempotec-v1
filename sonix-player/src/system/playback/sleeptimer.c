@@ -20,12 +20,11 @@ static const struct {
 	const char *key_minutes;
 	const char *name;
 } PROFILES[SLEEPTIMER_COUNT] = {
+	// Everything you listen to, in the player's own corner of the config: it
+	// used to be "music", and the name in the log says so still.
 	[SLEEPTIMER_MUSIC] = {"player", "sleep_timer", "sleep_minutes", "music"},
+	// The book, which keeps its own switch and its own length.
 	[SLEEPTIMER_AUDIOBOOK] = {"audiobook", "sleep_timer", "sleep_minutes", "audiobook"},
-	[SLEEPTIMER_PODCAST] = {"podcast", "sleep_timer", "sleep_minutes", "podcast"},
-	// Radio's own, beside the stations' other settings: a stretch set for
-	// falling asleep to a station should not be counting over an album.
-	[SLEEPTIMER_RADIO] = {"radio", "sleep_timer", "sleep_minutes", "radio"},
 };
 
 typedef struct {

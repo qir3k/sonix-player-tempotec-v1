@@ -14,8 +14,11 @@ who was using it.
 
 **Settings → Plugins**, a row for each module of this build with a one-line
 description and a switch, grouped under the headings the module list itself
-carries -- **Streaming services**, **Music and sound**, **Tools** -- so a module
-added later lands under the right heading without the page knowing its id.
+carries -- **Streaming services**, **Music features**, **Library**, **Tools**
+-- so a module added later lands under the right heading without the page
+knowing its id. Music features is what the player does with a track (lyrics,
+AutoEQ, Last.fm, ListenBrainz); Library is the shelves (audiobooks, books);
+Tools is what is not music at all.
 Switching one writes `[addons] <id> = true|false` into `device_config.ini` and
 shows a *Restart to apply* toast: a page that has already been built cannot give
 its memory back, so the saving is real from the next start.
@@ -34,7 +37,12 @@ rather than putting them beside switches that need a restart.
 | `qobuz` | Qobuz pages, playlists, offline cache | Streaming |
 | `ytmusic` | YouTube Music search, charts, Explore, downloads | Streaming |
 | `podcasts` | Podcast search, subscriptions, saved episodes | Streaming |
-| `audiobooks` | The Audiobooks section: books, series, authors, its settings | Home, More |
+| `audiobooks` | The Audiobooks section: books, series, authors, its settings | Library |
+| `ebook` | The Books shelf and the EPUB reader | Library |
+| `lyrics` | The lyrics pane and the online lyrics search | Music features |
+| `autoeq` | AutoEQ and its headphone curves | Music features |
+| `lastfm` | Scrobbling to Last.fm | Music features |
+| `listenbrainz` | Scrobbling to ListenBrainz, on its own switch | Music features |
 | `subsonic` | A Subsonic / Navidrome server | Streaming |
 | `radio` | Internet radio and the station directory | Streaming |
 | `lyrics` | The player's lyrics pane and its online search | Player |

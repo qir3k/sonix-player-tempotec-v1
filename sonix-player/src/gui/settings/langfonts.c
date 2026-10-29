@@ -137,6 +137,21 @@ void langfonts_init(gui_config_t *cfg) {
 		add_switch_row(list, scripts[i], on, false, script_switch_cb, scripts[i]);
 	}
 
+	// Cyrillic is the one people look for here and do not find, because it
+	// needs nothing: the default face carries it, so Russian, Ukrainian,
+	// Bulgarian and Greek titles draw as letters on a player that has never
+	// switched anything on. Left out, the list reads as a gap -- "where is
+	// Russian?" -- so it is here, checked and locked, saying why.
+	{
+		lv_obj_t *sw = NULL;
+		lv_obj_t *row = settingsrow_toggle(list, "langfonts_script_cyrillic", &sw, switch_noop);
+		settingsrow_add_caption(row, "langfonts_script_cyrillic_note");
+		if (sw) {
+			lv_obj_add_state(sw, LV_STATE_CHECKED);
+			lv_obj_add_state(sw, LV_STATE_DISABLED);
+		}
+	}
+
 	player_sheet_attach_drag(list, true);
 	switcher_attach_back_gesture(langfonts_screen);
 }

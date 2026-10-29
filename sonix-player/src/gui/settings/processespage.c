@@ -11,10 +11,16 @@
 #include "src/system/core/utils.h"
 
 #include <dirent.h>
+#include <errno.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+#include "src/system/device/system.h"
+#include "src/system/streaming/ytmusic.h"
 
 lv_obj_t *processespage_screen;
 
@@ -223,6 +229,137 @@ static void rebuild(void) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Optimize
+//
+// The answer to "it has been on for hours and it has gone slow": give the heap
+// and the disk cache back, and sweep the junk the streaming services leave
+// behind. Nothing here changes a setting or touches the user's own music -- it
+// is exactly the housekeeping a restart would do, minus the restart.
+//
+// Four things, in the order they cost the least:
+//
+//   * the kernel's page cache, dropped with drop_caches. Those are clean copies
+//     of files already on flash; what comes back is free memory in large
+//     pieces, which is what a driver allocating its buffers wants after hours
+//     of reading scattered files (audio.c does the same before opening one);
+//   * the heap itself, trimmed back to the kernel. The allocator holds on to
+//     freed chunks by design, so the figure on the card does not fall by
+//     itself even when nothing is using it;
+//   * the playback caches of the streaming services: files whose download never
+//     finished (a .part left by a Wi-Fi hiccup) are dead weight, and YouTube
+//     Music's cache is scratch by definition -- a song kept on the card on
+//     purpose is in Music, not here;
+//   * the thumbnail cache, which is rebuilt from the artwork on demand and is
+//     the biggest thing in .local.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+	unsigned long long bytes;
+	int files;
+} sweep_t;
+
+// Removes the regular files of `dir` whose name ends with `suffix` (NULL: every
+// one). One level, no recursion: every junk directory here is flat, and a walk
+// would be a way to delete something nobody meant.
+static void sweep_dir(const char *dir, const char *suffix, sweep_t *out) {
+	DIR *d = opendir(dir);
+	if (!d) {
+		return;
+	}
+	struct dirent *entry;
+	while ((entry = readdir(d)) != NULL) {
+		if (entry->d_name[0] == '.' && entry->d_name[1] == '\0') {
+			continue;
+		}
+		if (suffix) {
+			size_t name_len = strlen(entry->d_name), suffix_len = strlen(suffix);
+			if (name_len <= suffix_len || strcmp(entry->d_name + name_len - suffix_len, suffix) != 0) {
+				continue;
+			}
+		}
+		char path[600];
+		if (snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name) >= (int)sizeof(path)) {
+			continue;
+		}
+		struct stat st;
+		if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+			continue;
+		}
+		if (unlink(path) == 0) {
+			out->files++;
+			if (st.st_size > 0) {
+				out->bytes += (unsigned long long)st.st_size;
+			}
+		}
+	}
+	closedir(d);
+}
+
+static long mem_available_kb(void) {
+	return meminfo_kb("MemAvailable");
+}
+
+// The page's own label under the button: what the last run did.
+static lv_obj_t *optimize_result;
+
+static void optimize_clicked_cb(lv_event_t *e) {
+	(void)e;
+	long before = mem_available_kb();
+
+	sweep_t junk = {0, 0};
+	const char *root = storage_sd_root();
+	if (root && root[0]) {
+		// Half-written downloads, one folder each -- never a finished file.
+		static const char *const cache_dirs[] = {
+			".local/tidal-cache", ".local/qobuz-cache", ".local/podcast-cache", ".local/ytmusic-cache", ".local/dlna",
+		};
+		for (size_t i = 0; i < sizeof(cache_dirs) / sizeof(cache_dirs[0]); i++) {
+			char dir[600];
+			if (snprintf(dir, sizeof(dir), "%s/%s", root, cache_dirs[i]) < (int)sizeof(dir)) {
+				sweep_dir(dir, ".part", &junk);
+			}
+		}
+		char thumbs[600];
+		if (snprintf(thumbs, sizeof(thumbs), "%s/.local/thumbnails", root) < (int)sizeof(thumbs)) {
+			sweep_dir(thumbs, NULL, &junk);
+		}
+	}
+	// And the thumbnail cache in the RAM-backed /tmp, which is what a player
+	// with no card uses -- and what a card pulled out mid-song leaves behind.
+	// Nothing else in /tmp is swept: a card font's working copy lives there
+	// and FreeType may still be reading it, and the log file is the evidence a
+	// bug report is made of.
+	sweep_dir("/tmp/.local/thumbnails", NULL, &junk);
+
+	// The YouTube Music cache is scratch on the card too: clearing all of it, not
+	// only the .part files, is what the services' own leave does.
+	ytmusic_cache_clear();
+
+	// Page cache first, then the heap: the trim walks it, and the walk is
+	// cheaper once the kernel has let go of what it was caching.
+#ifndef HOST_BUILD
+	FILE *drop = fopen("/proc/sys/vm/drop_caches", "w");
+	if (drop) {
+		fputs("1\n", drop);
+		fclose(drop);
+	}
+#endif
+	malloc_trim(0);
+
+	long after = mem_available_kb();
+	long gained = (before > 0 && after > before) ? after - before : 0;
+	fprintf(stderr, "processes: optimize freed %ld kB of RAM, removed %d file(s), %llu kB of junk\n", gained, junk.files,
+			junk.bytes / 1024);
+
+	rebuild();
+	if (optimize_result) {
+		char freed[24];
+		format_kb(gained, freed, sizeof(freed));
+		lv_label_set_text_fmt(optimize_result, tr("optimize_done"), junk.files, freed);
+	}
+}
+
 static void screen_loaded_cb(lv_event_t *e) {
 	(void)e;
 	rebuild();
@@ -271,6 +408,16 @@ void processespage_init(gui_config_t *cfg) {
 	lv_obj_set_width(ram_label, lv_pct(100));
 	lv_obj_set_style_text_font(ram_label, &font_ui_22, 0);
 	lv_label_set_text(ram_label, "");
+
+	// Optimize, right under what it improves: the figures are the reason
+	// anybody is on this page, and the button is what changes them.
+	lv_obj_t *optimize = settingsrow_add(page_container, "optimize", NULL, optimize_clicked_cb, NULL);
+	settingsrow_add_caption(optimize, "optimize_note");
+	optimize_result = lv_label_create(page_container);
+	lv_obj_set_width(optimize_result, lv_pct(100));
+	lv_obj_add_style(optimize_result, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(optimize_result, &font_ui_18, 0);
+	lv_label_set_text(optimize_result, "");
 
 	// The list heading, then the list itself: a column refilled on every open.
 	lv_obj_t *list_title = lv_label_create(page_container);

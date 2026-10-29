@@ -21,12 +21,17 @@ static const addon_t ADDONS[] = {
 	{"podcasts", "podcasts", "addon_podcasts_note", "plugins_section_services"},
 	{"radio", "radio", "addon_radio_note", "plugins_section_services"},
 	{"subsonic", "subsonic", "addon_subsonic_note", "plugins_section_services"},
-	{"audiobooks", "audiobooks", "addon_audiobooks_note", "plugins_section_music"},
-	{"ebook", "books", "addon_ebook_note", "plugins_section_music"},
-	{"lyrics", "lyrics_search", "addon_lyrics_note", "plugins_section_music"},
-	{"autoeq", "autoeq", "addon_autoeq_note", "plugins_section_music"},
-	{"lastfm", "last_fm", "addon_lastfm_note", "plugins_section_music"},
-	{"listenbrainz", "listenbrainz", "addon_listenbrainz_note", "plugins_section_music"},
+	// The shelves are a place of their own: a book is not a music feature, and
+	// nobody would look for it under one.
+	{"audiobooks", "audiobooks", "addon_audiobooks_note", "plugins_section_library"},
+	{"ebook", "books", "addon_ebook_note", "plugins_section_library"},
+	// What the player does WITH the music: words on screen, a curve for a pair
+	// of headphones, a line to two scrobblers. Four features, not four places,
+	// which is why the heading says so.
+	{"lyrics", "lyrics_search", "addon_lyrics_note", "plugins_section_features"},
+	{"autoeq", "autoeq", "addon_autoeq_note", "plugins_section_features"},
+	{"lastfm", "last_fm", "addon_lastfm_note", "plugins_section_features"},
+	{"listenbrainz", "listenbrainz", "addon_listenbrainz_note", "plugins_section_features"},
 	{"calculator", "calculator", "addon_calculator_note", "plugins_section_tools"},
 	{"notes", "notes", "addon_notes_note", "plugins_section_tools"},
 	{"flappy", "flappy_bird", "addon_flappy_note", "plugins_section_tools"},
