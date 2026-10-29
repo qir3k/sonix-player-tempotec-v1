@@ -93,10 +93,6 @@ typedef enum {
 // outside config.c's small per-value limit, and survive player reboots.
 void ytmusic_init(void);
 
-// Where diagnostic dumps go: a public page that parses empty keeps its whole
-// response body under <card_root>/.local/ytmusic/ (and falls back to /tmp when
-// no card was named). Call once at startup, next to ytmusic_init().
-void ytmusic_set_card_root(const char *path);
 bool ytmusic_logged_in(void);
 bool ytmusic_oauth_configured(void);
 bool ytmusic_login_device_begin(ytmusic_device_login_t *login, char *error, size_t error_size);
@@ -189,6 +185,13 @@ int ytmusic_instance_bases(char out[][YTMUSIC_SOURCE_MAX], int limit);
 // download, which has nothing to play while it runs.
 bool ytmusic_download_for_playback(const ytmusic_track_t *track, char *path, size_t path_size,
 								   char *error, size_t error_size);
+
+// The file of a song that is already in the playback cache, whole. A second play
+// of a song -- or a play of one that finished downloading a moment ago -- goes
+// straight to the player: there is nothing left to fetch, and a card saying so
+// would be a prompt about work that is not happening. False when the cache holds
+// no whole copy of that id.
+bool ytmusic_cached_track(const char *id, char *out, size_t out_size);
 
 // The same download, for a song the listener is waiting to hear. `ready` is
 // called once, from this worker thread, as soon as enough of the file is on the

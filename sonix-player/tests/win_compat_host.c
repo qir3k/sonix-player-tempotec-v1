@@ -42,6 +42,15 @@ int win_usleep(unsigned usec) {
 	return 0;
 }
 
+// The suites hardcode "/tmp" (POSIX); on this host that is the current drive's
+// \tmp, and host security has been seen refusing one process while allowing
+// another -- a big test binary gets EACCES where a small probe succeeds. The
+// CRT temp directory (honouring TMP/TEMP when the caller sets it) always
+// works, so a /tmp template moves there first. The rewrite needs room in the
+// caller's buffer beyond the literal, which is why the suites size their
+// template arrays at 600 bytes.
+#define WIN_MKDTEMP_BUF 600
+
 char *win_mkdtemp(char *tmpl) {
 	// mingw has no mkdtemp: fill the XXXXXX in and take the first folder that
 	// does not already exist, the same contract the POSIX call has.
@@ -49,6 +58,21 @@ char *win_mkdtemp(char *tmpl) {
 	if (!tmpl) return NULL;
 	size_t len = strlen(tmpl);
 	if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) return NULL;
+	if (strncmp(tmpl, "/tmp/", 5) == 0) {
+		char temp[MAX_PATH];
+		DWORD n = GetTempPathA(sizeof(temp), temp);
+		if (n > 0 && n < sizeof(temp)) {
+			if (temp[n - 1] != '\\' && temp[n - 1] != '/') {
+				temp[n++] = '/';
+			}
+			size_t keep = len - 5; // the basename, XXXXXX included
+			if (n + keep < WIN_MKDTEMP_BUF) {
+				memmove(tmpl + n, tmpl + 5, keep + 1);
+				memcpy(tmpl, temp, n);
+				len = n + keep;
+			}
+		}
+	}
 	for (unsigned attempt = 0; attempt < 1000; attempt++) {
 		unsigned r = GetTickCount() ^ (seed++ * 2654435761u) ^ GetCurrentProcessId();
 		for (int i = 0; i < 6; i++) {

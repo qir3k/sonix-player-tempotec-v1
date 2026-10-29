@@ -703,7 +703,31 @@ static void aac_state_free(aac_state_t *s) {
 static bool aac_fill(decoder_t *dec) {
 	aac_state_t *s = dec->impl.aac;
 
-	while (s->frame_index < s->frame_total) {
+	while (true) {
+		if (s->frame_index >= s->frame_total) {
+			// A file that is still arriving has more frames than its index
+			// could name when the player opened it. Asking again is what lets
+			// a streamed track play to its end instead of stopping where the
+			// first piece of it did; a whole file answers the same number and
+			// the track is over.
+			//
+			// More than once: the next fragment can be further along than one
+			// slice of the file, and giving up on the first answer stopped a
+			// song at the start of the very gap this waits for.
+			bool more = false;
+			for (int tries = 0; tries < 600 && !more; tries++) {
+				uint32_t now = mp4_audio_frames_available(s->mp4);
+				if (now > s->frame_total) {
+					s->frame_total = now;
+					more = true;
+				} else if (!mp4_file_is_growing(s->mp4)) {
+					break;
+				}
+			}
+			if (!more) {
+				return false;
+			}
+		}
 		int len = mp4_read_audio_frame(s->mp4, s->frame_index, s->au, s->au_capacity);
 		if (len < 0) {
 			// The buffer was too small; the container said exactly how small,

@@ -25,6 +25,7 @@
 #include "src/gui/wireless/wifisettings.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
+#include "src/system/core/region.h"
 #include "src/system/library/library.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/streaming/radio.h"
@@ -199,18 +200,16 @@ static lv_obj_t *radio_order_rows;
 
 // --- The region ---
 //
-// The country the lists are kept to, chosen from the directory's own list, the
-// way the podcast page picks its chart's language: one page of rows, the chosen
-// one ticked. What it costs is a list of countries to scroll, and what it buys
-// is that a Polish listener is not offered a station in Texas unless they ask
-// for one.
+// The country the lists are kept to, chosen from the one shared list in
+// region.h: Worldwide first, then one row per language the firmware ships.
+// Nothing is fetched to draw it, so the page opens with no network at all, and
+// the choice it writes is the same one the podcasts and the YouTube Music
+// settings read. What it buys is that a Polish listener is not offered a
+// station in Texas unless they ask for one.
 static lv_obj_t *region_screen;
 static lv_obj_t *region_container;
-static radio_term_t region_terms[250];
-static int region_term_count;
-static bool region_terms_ready;
-static lv_timer_t *region_timer;
-static unsigned region_job_serial;
+static region_t region_rows[REGION_LIST_MAX];
+static int region_count;
 
 // --- the search page ---
 static lv_obj_t *search_field;
@@ -1845,14 +1844,14 @@ static void hub_loaded_cb(lv_event_t *e) {
 // so, and this page is four rows long again.
 // ---------------------------------------------------------------------------
 
-static void region_label(const char *name, char *out, size_t size);
+static void radio_region_label(const char *country, char *out, size_t size);
 
 static void radio_region_refresh(void) {
 	if (!radio_region_value) {
 		return;
 	}
 	char label[96];
-	region_label(radio_region(), label, sizeof(label));
+	radio_region_label(radio_region(), label, sizeof(label));
 	lv_label_set_text(radio_region_value, label);
 	lv_obj_set_style_text_align(radio_region_value, LV_TEXT_ALIGN_RIGHT, 0);
 	lv_obj_align(radio_region_value, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -1980,21 +1979,16 @@ static void radio_arrange_toggle_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 // The region page
 //
-// The directory's countries, alphabetically, with "Any country" first and the
-// chosen one ticked -- the shape the podcast page gives its chart's language.
+// The shared list, Worldwide first and the chosen one ticked -- the same rows
+// the podcast and the YouTube Music settings pages draw (region.h), so one
+// choice in one place serves every service. Nothing is fetched to build it,
+// which is what a page that used to wait for a sixty-country slice of the
+// directory gives back: it opens instantly, with no network at all.
+//
 // Choosing one is what keeps every browse list in that country (see radio.h);
 // it does not touch the stations the user starred or played, which are theirs
 // wherever they were found.
-//
-// Sixty of them, and not the two hundred and fifty the directory holds: those
-// are one row each down a page that shows five, and the sixty with the most
-// stations behind them cover every country somebody is likely to pick. A
-// country further down is still reachable -- "Any country" with a search.
 // ---------------------------------------------------------------------------
-#define REGION_MAX_COUNTRIES 60
-
-static radio_term_t region_countries[REGION_MAX_COUNTRIES];
-static int region_country_count;
 
 static void region_rows_build(void);
 static void region_rows_build_async(void *user) {
@@ -2002,28 +1996,24 @@ static void region_rows_build_async(void *user) {
 	region_rows_build();
 }
 
-static int region_index_of(const char *name) {
-	for (int i = 0; i < region_country_count; i++) {
-		if (strcasecmp(region_countries[i].name, name ? name : "") == 0) {
+static void region_rows_load(void) {
+	region_count = region_list(region_rows, REGION_LIST_MAX);
+}
+
+static int region_index_of(const char *country) {
+	region_rows_load();
+	for (int i = 0; i < region_count; i++) {
+		if (strcasecmp(region_rows[i].country, country ? country : "") == 0) {
 			return i;
 		}
 	}
-	return -1;
-}// The row on the settings page, and a country's name as the page writes it.
-static void region_label(const char *name, char *out, size_t size) {
-	if (!name || !name[0]) {
-		snprintf(out, size, "%s", tr("radio_region_all"));
-		return;
-	}
-	int index = region_index_of(name);
-	if (index >= 0) {
-		snprintf(out, size, "%s", region_countries[index].label);
-		return;
-	}
-	snprintf(out, size, "%s", name);
-	if (out[0] >= 'a' && out[0] <= 'z') {
-		out[0] = (char)(out[0] - 'a' + 'A');
-	}
+	return 0;
+}
+
+// The row on the settings page: the entry's own name, which is "Worldwide"
+// for the empty code this directory's "any country" always was.
+static void radio_region_label(const char *country, char *out, size_t size) {
+	region_entry_label(&region_rows[region_index_of(country)], out, size);
 }
 
 static void region_pick_cb(lv_event_t *e) {
@@ -2031,7 +2021,10 @@ static void region_pick_cb(lv_event_t *e) {
 		return;
 	}
 	int index = (int)(intptr_t)lv_event_get_user_data(e);
-	radio_set_region(index < 0 ? "" : region_countries[index].name);
+	if (index < 0 || index >= region_count) {
+		return;
+	}
+	radio_set_region(region_rows[index].country);
 	radio_region_refresh();
 	// The rows are rebuilt a pass later: the row that was tapped is one of them,
 	// and deleting it from inside its own click is how a page goes down with the
@@ -2046,19 +2039,14 @@ static void region_rows_build(void) {
 	int keep_scroll = (int)lv_obj_get_scroll_y(region_container);
 	lv_obj_clean(region_container);
 
+	region_rows_load();
 	int active = region_index_of(radio_region());
-	bool any = radio_region()[0] == '\0';
 
-	lv_obj_t *value = NULL;
-	lv_obj_t *row = settingsrow_add(region_container, "radio_region_all", &value, region_pick_cb, (void *)(intptr_t)-1);
-	if (any) {
-		settingsrow_add_icon(row, &icon_check, THEME_SEMANTIC_GREEN);
-	}
-	for (int i = 0; i < region_country_count; i++) {
+	for (int i = 0; i < region_count; i++) {
 		char label[96];
-		snprintf(label, sizeof(label), "%s", region_countries[i].label);
-		value = NULL;
-		row = settingsrow_add(region_container, label, &value, region_pick_cb, (void *)(intptr_t)i);
+		region_entry_label(&region_rows[i], label, sizeof(label));
+		lv_obj_t *value = NULL;
+		lv_obj_t *row = settingsrow_add(region_container, label, &value, region_pick_cb, (void *)(intptr_t)i);
 		if (i == active) {
 			settingsrow_add_icon(row, &icon_check, THEME_SEMANTIC_GREEN);
 		}
@@ -2067,64 +2055,10 @@ static void region_rows_build(void) {
 	lv_obj_scroll_to_y(region_container, keep_scroll, LV_ANIM_OFF);
 }
 
-// The sixty countries with the most stations behind them, alphabetically.
-static int term_station_count_order(const void *a, const void *b) {
-	const radio_term_t *x = a;
-	const radio_term_t *y = b;
-	return y->stationcount - x->stationcount;
-}
-
-static int term_label_order(const void *a, const void *b) {
-	const radio_term_t *x = a;
-	const radio_term_t *y = b;
-	int order = strcasecmp(x->label, y->label);
-	return order ? order : strcmp(x->name, y->name);
-}
-
-static void region_terms_take(void) {
-	radio_term_t *all = malloc(sizeof(*all) * (size_t)region_term_count);
-	if (!all) {
-		return;
-	}
-	memcpy(all, region_terms, sizeof(*all) * (size_t)region_term_count);
-	qsort(all, (size_t)region_term_count, sizeof(*all), term_station_count_order);
-	int keep = region_term_count < REGION_MAX_COUNTRIES ? region_term_count : REGION_MAX_COUNTRIES;
-	memcpy(region_countries, all, sizeof(*region_countries) * (size_t)keep);
-	region_country_count = keep;
-	free(all);
-	qsort(region_countries, (size_t)region_country_count, sizeof(*region_countries), term_label_order);
-}
-
-static void region_poll_cb(lv_timer_t *timer) {
-	(void)timer;
-	if (lv_screen_active() != region_screen) {
-		return;
-	}
-	unsigned serial = radio_job_serial();
-	if (serial == region_job_serial) {
-		return;
-	}
-	region_job_serial = serial;
-
-	if (radio_job_state() != RADIO_JOB_OK) {
-		gui_notify_popup("radio_directory_unreachable");
-		return;
-	}
-	region_term_count = radio_get_terms(region_terms, (int)(sizeof(region_terms) / sizeof(region_terms[0])));
-	region_terms_ready = region_term_count > 0;
-	region_terms_take();
-	region_rows_build();
-}
-
 static void region_loaded_cb(lv_event_t *e) {
 	(void)e;
-	// Asked again on every visit: a country can be added or removed, and the
-	// answer is small. A page that has never had an answer shows the one row it
-	// can be sure of, so the choice can always be cleared.
-	region_job_serial = radio_job_serial();
-	if (!region_terms_ready && region_country_count == 0) {
-		radio_request_terms(RADIO_BROWSE_COUNTRIES);
-	}
+	// The list is the firmware's own, so there is nothing to wait for and
+	// nothing to ask the directory for: every visit is the same rows.
 	region_rows_build();
 }
 
@@ -2141,7 +2075,6 @@ static void build_region_page(gui_config_t *cfg) {
 	region_container = settingsrow_page(region_screen, cfg, "radio_region");
 	lv_obj_add_event_cb(region_screen, region_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	switcher_attach_back_gesture(region_screen);
-	region_timer = lv_timer_create(region_poll_cb, POLL_MS, NULL);
 }
 
 // ---------------------------------------------------------------------------

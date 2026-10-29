@@ -31,6 +31,7 @@
 #include "src/system/playback/device_state.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
+#include "src/gui/settings/langfonts.h"
 #include "src/gui/settings/plugins.h"
 #include "src/system/addons/addons.h"
 #include "src/gui/shell/morepage.h"
@@ -97,6 +98,33 @@ int fonts_choices(const char **ids, const char **labels, int max) {
 	ids[0] = "default";
 	labels[0] = "Test font";
 	return 1;
+}
+
+// The switches of Plugins -> Languages & Fonts, with no FreeType behind them:
+// one face and one script, and whatever the switch last said about them.
+static bool stub_face_on = true;
+static bool stub_script_on = true;
+int fonts_all_choices(const char **ids, const char **labels, int max) {
+	assert(max > 0);
+	ids[0] = "default";
+	labels[0] = "Test font";
+	return 1;
+}
+bool fonts_enabled(const char *id) { return strcmp(id, "default") == 0 || stub_face_on; }
+bool fonts_locked(const char *id) { return strcmp(id, "default") == 0; }
+void fonts_set_enabled(const char *id, bool on) {
+	(void)id;
+	stub_face_on = on;
+}
+int fonts_script_names(const char **names, int max) {
+	assert(max > 0);
+	names[0] = "Japanese";
+	return 1;
+}
+bool fonts_script_enabled(const char *name) { return strcmp(name, "Japanese") == 0 && stub_script_on; }
+void fonts_set_script_enabled(const char *name, bool on) {
+	(void)name;
+	stub_script_on = on;
 }
 
 void bootlogo_set(int choice, bool dark) { (void)choice; (void)dark; }
@@ -1223,9 +1251,9 @@ int main(int argc, char **argv) {
 	assert(argc == 2);
 
 	/* The card, as a folder the test owns and throws away. */
-	char card[] = "/tmp/sonix-tools-test-XXXXXX";
+	char card[600] = "/tmp/sonix-tools-test-XXXXXX";
 	assert(mkdtemp(card));
-	char config[512];
+	char config[640];
 	snprintf(config, sizeof(config), "%s/device_config.ini", card);
 	config_init(config);
 	config_set("ui", "language", "English");
@@ -1314,6 +1342,24 @@ int main(int argc, char **argv) {
 		assert(lv_obj_get_style_text_opa(name, LV_PART_MAIN) > LV_OPA_50);
 	}
 	dump_snapshot(plugins_screen, "plugins");
+
+	/* The Languages & Fonts row is the one thing on this page that is not a
+	 * module: a page of its own, where the languages the picker lists and the
+	 * faces it offers are switched on and off. It has to be here, and it has
+	 * to open with rows on it -- this is what took the place of the build-time
+	 * trim, and a barebones image is now the same image with these off. */
+	assert(find_label(plugins_screen, tr("languages_fonts")));
+	assert(langfonts_screen);
+	lv_screen_load(langfonts_screen);
+	lv_obj_update_layout(langfonts_screen);
+	// A row from each of the page's three groups: a language, a face and a
+	// script. The two latter come from the stubs above -- one face called
+	// "Test font" and one script, Japanese.
+	assert(find_label(langfonts_screen, "English"));
+	assert(find_label(langfonts_screen, "Test font"));
+	assert(find_label(langfonts_screen, "Japanese"));
+	dump_snapshot(langfonts_screen, "languages_fonts");
+
 	lv_screen_load(morepage_screen);
 	player_drag_attaches = 0; // counting from here: only the viewers are built below
 	textview_init(&cfg); // the notes shelf shows a long note through it

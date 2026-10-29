@@ -796,7 +796,7 @@ int main(int argc, char **argv) {
 	assert(argc == 2 || argc == 3);
 	bool saved_framed = argc == 3 && strcmp(argv[2], "saved") == 0;
 
-	char dir[] = "/tmp/sonix-screensaver-test-XXXXXX";
+	char dir[600] = "/tmp/sonix-screensaver-test-XXXXXX";
 	assert(mkdtemp(dir));
 	char config[256];
 	snprintf(config, sizeof(config), "%s/device_config.ini", dir);

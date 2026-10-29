@@ -45,6 +45,19 @@ void growfile_finish(const char *path, bool ok);
 // True while that path is being written.
 bool growfile_is_growing(const char *path);
 
+// The final size the writer announced, 0 when it never said. Reserved for the
+// readers that do not go through growfile_read: a container with its index at
+// the front (an MP4's `moov`) seeks to a sample and needs to know how big the
+// file will be before it gets there.
+long growfile_total(const char *path);
+
+// Waits until at least `need` bytes are on disk and answers how many there are,
+// or -1 when nobody is writing that path any more -- the file is finished, or
+// the download died, and there is nothing left to wait for. The wait gives up
+// early on a pending command, exactly as growfile_read does (see
+// growfile_set_reader_abort_cb).
+long growfile_wait_until(const char *path, long need);
+
 // True if any file being written starts with `prefix`. Needed by whoever
 // sweeps the directory: deleting the file being downloaded (or its cover, or
 // its tags) while it is playing is the fastest way to break everything.

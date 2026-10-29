@@ -173,6 +173,7 @@ void topbar_set_battery_percent(bool shown) { (void)shown; }
 void topbar_set_clock_position(int pos) { (void)pos; }
 void switch_screen(lv_obj_t *screen) { lv_screen_load(screen); }
 void switch_screen_cb(lv_event_t *e) { switch_screen(lv_event_get_user_data(e)); }
+void streaming_refresh_layout(void) { }
 static bool browser_music_started;
 void browser_start_in_music_folder(void) { browser_music_started = true; }
 void ebookpage_open(void) { switch_screen(ebookpage_screen); }
@@ -432,7 +433,7 @@ static void check_metrics(lv_obj_t *tile, tile_metrics_t expected) {
 int main(int argc, char **argv) {
 	assert(argc == 2 || argc == 3);
 	bool saved_icons_only = argc == 3;
-	char dir[] = "/tmp/sonix-menu-test-XXXXXX";
+	char dir[600] = "/tmp/sonix-menu-test-XXXXXX";
 	assert(mkdtemp(dir));
 	char config[256];
 	snprintf(config, sizeof(config), "%s/device_config.ini", dir);

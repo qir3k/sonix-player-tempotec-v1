@@ -243,7 +243,7 @@ static void test_replay_from_start_counts_again(void) {
 }
 
 int main(void) {
-	char dir[] = "/tmp/sonix-mostplayed-test-XXXXXX";
+	char dir[600] = "/tmp/sonix-mostplayed-test-XXXXXX";
 	if (!mkdtemp(dir)) {
 		perror("mkdtemp");
 		return 1;

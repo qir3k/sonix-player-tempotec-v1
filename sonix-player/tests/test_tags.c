@@ -749,7 +749,7 @@ static void test_vorbischap_and_containers(const char *dir) {
 }
 
 int main(void) {
-	char dir[] = "/tmp/sonix-tags-test-XXXXXX";
+	char dir[600] = "/tmp/sonix-tags-test-XXXXXX";
 	assert(mkdtemp(dir) != NULL);
 
 	test_flac_with_id3_header(dir);

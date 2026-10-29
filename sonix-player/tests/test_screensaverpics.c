@@ -346,7 +346,7 @@ static void check_folder(const char *tmp) {
 }
 
 int main(void) {
-	char tmp[] = "/tmp/sonix-pictures-test-XXXXXX";
+	char tmp[600] = "/tmp/sonix-pictures-test-XXXXXX";
 	assert(mkdtemp(tmp));
 	check_headers(tmp);
 	check_folder(tmp);

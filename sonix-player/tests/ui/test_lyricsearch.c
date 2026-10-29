@@ -332,7 +332,7 @@ static void check_all_languages_and_themes(const char *language_dir, gui_config_
 int main(int argc, char **argv) {
 	assert(argc == 2);
 
-	char card[] = "/tmp/sonix-lyricsearch-ui-XXXXXX";
+	char card[600] = "/tmp/sonix-lyricsearch-ui-XXXXXX";
 	assert(mkdtemp(card));
 	char config_path[512];
 	snprintf(config_path, sizeof(config_path), "%s/device_config.ini", card);

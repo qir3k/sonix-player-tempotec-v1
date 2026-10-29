@@ -78,6 +78,33 @@ int fonts_choices(const char **ids, const char **labels, int max) {
 	return 1;
 }
 
+// The switches of Plugins -> Languages & Fonts, with no FreeType behind them:
+// one face and one script, and whatever the switch last said about them.
+static bool stub_face_on = true;
+static bool stub_script_on = true;
+int fonts_all_choices(const char **ids, const char **labels, int max) {
+	assert(max > 0);
+	ids[0] = "default";
+	labels[0] = "Test font";
+	return 1;
+}
+bool fonts_enabled(const char *id) { return strcmp(id, "default") == 0 || stub_face_on; }
+bool fonts_locked(const char *id) { return strcmp(id, "default") == 0; }
+void fonts_set_enabled(const char *id, bool on) {
+	(void)id;
+	stub_face_on = on;
+}
+int fonts_script_names(const char **names, int max) {
+	assert(max > 0);
+	names[0] = "Japanese";
+	return 1;
+}
+bool fonts_script_enabled(const char *name) { return strcmp(name, "Japanese") == 0 && stub_script_on; }
+void fonts_set_script_enabled(const char *name, bool on) {
+	(void)name;
+	stub_script_on = on;
+}
+
 /* ---- the parts of the shell the page leans on, substituted -------------- */
 
 void bootlogo_set(int choice, bool dark) {
@@ -323,9 +350,9 @@ static void check_strings(const char *language_dir) {
 int main(int argc, char **argv) {
 	assert(argc == 2);
 
-	char card[] = "/tmp/sonix-wifi-ui-test-XXXXXX";
+	char card[600] = "/tmp/sonix-wifi-ui-test-XXXXXX";
 	assert(mkdtemp(card));
-	char config[512];
+	char config[640];
 	snprintf(config, sizeof(config), "%s/device_config.ini", card);
 	config_init(config);
 	config_set("ui", "language", "English");

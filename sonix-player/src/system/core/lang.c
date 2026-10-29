@@ -435,8 +435,52 @@ const char *tr(const char *text) {
 const char *lang_current(void) { return current; }
 
 static bool read_declared_name(const char *name, char *out, size_t size);
+static int lang_scan(const char **names, int max, bool only_enabled);
 
-int lang_list(const char **names, int max) {
+// ---------------------------------------------------------------------------
+// Which languages this build offers (Plugins -> Languages & Fonts)
+//
+// Every .ini stays on the card; this is the switch over which of them the
+// player will list and load. It starts on, as every addon does: the image
+// somebody already has must keep offering the eleven languages it shipped
+// with, and only a switch somebody threw turns one off. English answers on
+// whatever the config says because it is the first-boot language and the
+// fallback the settings page falls back to, and the language on screen answers
+// on too: a language can be taken off the list, but never off the screen that
+// is written in it.
+// ---------------------------------------------------------------------------
+bool lang_locked(const char *name) {
+	if (!name || !name[0]) {
+		return false;
+	}
+	return strcmp(name, current) == 0 || strcmp(name, LANG_FIRST_BOOT) == 0;
+}
+
+bool lang_enabled(const char *name) {
+	if (!name || !name[0]) {
+		return false;
+	}
+	if (lang_locked(name)) {
+		return true;
+	}
+	return config_get_bool("languages", name, true);
+}
+
+void lang_set_enabled(const char *name, bool on) {
+	if (!name || !name[0]) {
+		return;
+	}
+	config_set_bool("languages", name, on);
+	config_save();
+}
+
+int lang_list(const char **names, int max) { return lang_scan(names, max, true); }
+
+// The same directory with no switch applied, for the switchboard itself: a
+// page that only listed what is already on could never turn anything back on.
+int lang_all(const char **names, int max) { return lang_scan(names, max, false); }
+
+static int lang_scan(const char **names, int max, bool only_enabled) {
 	// Whatever .ini files are in the folder, and nothing else. Dropping a new
 	// one in is all it takes to add a language: the list is the directory.
 	// Nothing is offered that has no file behind it -- the keys in the source
@@ -462,6 +506,13 @@ int lang_list(const char **names, int max) {
 		char name[64];
 		memcpy(name, e->d_name, len);
 		name[len] = '\0';
+
+		// Only the languages the switchboard leaves on. The file is still
+		// there -- it is the offering of it that this decides, which is what
+		// keeps a barebones player's language page two rows long.
+		if (only_enabled && !lang_enabled(name)) {
+			continue;
+		}
 
 		// Two files can name the same language -- the shipped set carries both
 		// `Francais.ini` and its `#U00e7` spelling -- and the list must not show

@@ -393,7 +393,7 @@ static void test_submit(void) {
 }
 
 int main(void) {
-	char dir[] = "/tmp/lb-test-XXXXXX";
+	char dir[600] = "/tmp/lb-test-XXXXXX";
 	assert(mkdtemp(dir) != NULL);
 	snprintf(card_root, sizeof(card_root), "%s", dir);
 	snprintf(queue_path, sizeof(queue_path), "%s/queue", dir);

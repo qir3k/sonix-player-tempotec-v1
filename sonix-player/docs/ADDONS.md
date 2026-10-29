@@ -74,5 +74,8 @@ interface. Nothing calls `switch_screen()` with a page that was never built.
   device; the player's build is static today. The switch model is the honest
   half of "install only what you need": leave out what you do not run.
 - **Languages.** Only the chosen language file is loaded, so switching language
-  already costs nothing at runtime. Trimming the unused `.ini` files out of the
-  package is a packaging decision, not a player one.
+  already costs nothing at runtime, and which languages the picker *offers* is a
+  switch under Plugins -> Languages & Fonts rather than something a build has to
+  remove: every `.ini` stays in the package and each one is one config line. The
+  same page switches the faces the font picker lists and the script fallbacks
+  behind them, so a barebones player and a fully loaded one are one image.

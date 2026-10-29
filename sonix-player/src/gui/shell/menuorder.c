@@ -30,6 +30,10 @@ static const menu_item_t MORE_ITEMS[] = {
 	{"flappy_bird", "flappy_bird"},
 	{"calculator", "calculator"},
 	{"notes", "notes"},
+	// The tempo page is a More destination like the other tools, so it belongs
+	// in the arrangement too: without a slug here the page drew it -- it is in
+	// morepage's own table -- but Arrange could neither move nor hide it.
+	{"metronome", "metronome"},
 };
 
 static const menu_item_t STREAMING_ITEMS[] = {

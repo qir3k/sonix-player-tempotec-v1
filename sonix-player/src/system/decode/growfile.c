@@ -174,11 +174,17 @@ void growfile_close(growfile_t *g) {
 
 // Waits until at least `need` bytes are on disk. Returns how many there really
 // are when it stops waiting, which can be fewer than `need` if the download
-// ended -- successfully or not -- before getting there.
-static long wait_for_bytes_timeout(growfile_t *g, long need, int timeout_ms) {
+// ended -- successfully or not -- before getting there, or -1 when nobody is
+// writing that file at all (it is finished, it died, or it never was a
+// download).
+//
+// The path rather than the reader, because a container whose index is at the
+// front of the file (an MP4's `moov`) does not read it through growfile_read:
+// it seeks to the sample it wants and asks whether those bytes have arrived.
+static long wait_path_timeout(const char *path, long need, int timeout_ms) {
 	pthread_mutex_lock(&lock);
 
-	slot_t *slot = find_locked(g->path);
+	slot_t *slot = find_locked(path);
 	if (!slot) {
 		// Nobody is writing it, so the file is whatever it already is.
 		pthread_mutex_unlock(&lock);
@@ -205,7 +211,7 @@ static long wait_for_bytes_timeout(growfile_t *g, long need, int timeout_ms) {
 		waited_ms += 100;
 		if (waited_ms >= timeout_ms) {
 			if (timeout_ms >= 1000) {
-				fprintf(stderr, "growfile: %s stalled for %d s at %ld bytes; giving up waiting\n", g->path,
+				fprintf(stderr, "growfile: %s stalled for %d s at %ld bytes; giving up waiting\n", path,
 						waited_ms / 1000, slot->done);
 			}
 			break;
@@ -213,7 +219,7 @@ static long wait_for_bytes_timeout(growfile_t *g, long need, int timeout_ms) {
 
 		// The slot may have been reused for another file during the wait; if it
 		// no longer names this path there is nothing left to wait for.
-		slot = find_locked(g->path);
+		slot = find_locked(path);
 		if (!slot) {
 			break;
 		}
@@ -225,7 +231,22 @@ static long wait_for_bytes_timeout(growfile_t *g, long need, int timeout_ms) {
 }
 
 static long wait_for_bytes(growfile_t *g, long need) {
-	return wait_for_bytes_timeout(g, need, GROWFILE_WAIT_TIMEOUT_MS);
+	return wait_path_timeout(g->path, need, GROWFILE_WAIT_TIMEOUT_MS);
+}
+
+long growfile_wait_until(const char *path, long need) {
+	return wait_path_timeout(path, need, GROWFILE_WAIT_TIMEOUT_MS);
+}
+
+long growfile_total(const char *path) {
+	if (!path) {
+		return 0;
+	}
+	pthread_mutex_lock(&lock);
+	slot_t *slot = find_locked(path);
+	long total = slot ? slot->total : 0;
+	pthread_mutex_unlock(&lock);
+	return total;
 }
 
 size_t growfile_read(growfile_t *g, void *out, size_t bytes) {
@@ -304,7 +325,7 @@ bool growfile_seek(growfile_t *g, long offset, int origin) {
 	// search asks for positions scattered across the whole file. Hence the
 	// shorter seek timeout.
 	if (growfile_is_growing(g->path)) {
-		long available = wait_for_bytes_timeout(g, target, GROWFILE_SEEK_WAIT_MS);
+		long available = wait_path_timeout(g->path, target, GROWFILE_SEEK_WAIT_MS);
 		if (available >= 0 && available < target) {
 			return false;
 		}

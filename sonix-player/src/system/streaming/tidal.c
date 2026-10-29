@@ -13,6 +13,7 @@
 #include "src/system/core/json.h"
 #include "src/system/streaming/streamkeys.h"
 #include "src/system/core/lang.h"
+#include "src/system/core/region.h"
 
 // The scopes asked for at sign-in: r_usr to read, w_usr to write favourites
 // and playlists. Not w_sub.
@@ -381,7 +382,21 @@ void tidal_logout(void) {
 // formality: the catalogue really does differ by country, and without this
 // parameter some responses come back empty rather than failing -- the worst way
 // to fail, because it reads as "no results".
-static const char *country(void) { return country_code[0] ? country_code : "US"; }
+//
+// The account's own country wins whenever there is one, because Tidal licenses
+// by country and asking a session for a market it is not in answers nothing at
+// all -- a picker has no business overriding that. The one shared region
+// (core/region.h) is the fallback before anybody signs in, so the settings
+// pages are one list with one default rather than a fifth private answer here;
+// Worldwide, as everywhere else, is the US catalogue a request with no
+// preference already gets.
+static const char *country(void) {
+	if (country_code[0]) {
+		return country_code;
+	}
+	const char *region = region_country();
+	return region[0] ? region : "US";
+}
 
 // The client version this player claims to be.
 //

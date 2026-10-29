@@ -1,13 +1,18 @@
 #include "ytmusicpage.h"
 
+#include <dirent.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "src/gui/board_profile.h"
 #include "src/gui/library/browser.h"
+#include "src/gui/library/medialist.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
@@ -26,6 +31,8 @@
 #include "src/system/device/system.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/net/wifi.h"
+#include "src/system/decode/growfile.h"
+#include "src/system/playback/playlist.h"
 #include "src/system/streaming/streamkeep.h"
 #include "src/system/streaming/ytmusic.h"
 
@@ -128,7 +135,11 @@ static bool yt_home_hidden[YT_HOME_ROWS];
 // should be, which country's catalogue it comes from, and when to stop.
 static lv_obj_t *quality_pills[2];
 static settingsrow_duration_t yt_sleep_row;
-#define YT_REGION_MAX 8
+// One row per entry of the shared region list (system/core/region.h), which
+// is Worldwide plus one per language the firmware ships: every entry has to
+// have a row here, or a region chosen on the podcast page could not be shown
+// as chosen on this one.
+#define YT_REGION_MAX 16
 static lv_obj_t *region_screen;
 static lv_obj_t *region_list;
 static lv_obj_t *region_value_label;
@@ -137,11 +148,27 @@ static int region_item_count;
 static lv_obj_t *order_screen;
 static lv_obj_t *order_rows;
 
+// The corner of whichever list is on screen, while rows are chosen: the tick
+// queues them onto the card and the cross leaves the mode. Both list pages
+// carry a pair, hidden until a long press asks for them.
+static lv_obj_t *sel_action_btn;
+static lv_obj_t *sel_close_btn;
+static lv_obj_t *results_sel_action;
+static lv_obj_t *results_sel_close;
+static lv_obj_t *tracks_sel_action;
+static lv_obj_t *tracks_sel_close;
+
+// How far a queue of chosen songs has got, for the loading card: written by the
+// worker and read by the card's timer. An int each, because a percentage and a
+// position are all that is shown and a byte count would need a lock.
+static volatile int bulk_at;
+static volatile int bulk_total;
+
 static void home_refresh_session_rows(void);
 static void home_build(void);
 // The three dots a row that plays carries instead of a chevron; defined with the
 // playing code below, used where the rows are built.
-static void row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item);
+static lv_obj_t *row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item);
 static void track_from_item(const ytmusic_item_t *item, ytmusic_track_t *track);
 
 // Whether the network is really there. Every row on this page is a request to
@@ -255,6 +282,11 @@ static lv_obj_t *loading_veil;
 static lv_obj_t *loading_label;
 static lv_obj_t *loading_bar;
 static lv_timer_t *loading_timer;
+// Whether the card is about a transfer somebody asked for (a download onto the
+// card) or about a song starting. The first says "Downloading...", the second
+// "Loading...": the same bytes are moving, but a tap on a song asked for it to
+// play, not for a download.
+static bool loading_transfer;
 
 static void loading_show(void);
 static void loading_hide(void);
@@ -265,10 +297,19 @@ static void loading_poll(lv_timer_t *timer) {
 	bool running = false;
 	ytmusic_download_progress(&percent, &running);
 	char text[96];
-	if (percent >= 0) {
-		snprintf(text, sizeof(text), "%s  %d%%", tr("downloading"), percent);
+	int at = bulk_at;
+	int total = bulk_total;
+	// A queue says where it has got to; a single song has nothing to count.
+	if (total > 1) {
+		if (percent >= 0) {
+			snprintf(text, sizeof(text), "%d / %d  %d%%", at, total, percent);
+		} else {
+			snprintf(text, sizeof(text), "%d / %d", at, total);
+		}
+	} else if (percent >= 0) {
+		snprintf(text, sizeof(text), "%s  %d%%", tr(loading_transfer ? "downloading" : "loading"), percent);
 	} else {
-		snprintf(text, sizeof(text), "%s", tr("downloading"));
+		snprintf(text, sizeof(text), "%s", tr(loading_transfer ? "downloading" : "loading"));
 	}
 	if (loading_label) lv_label_set_text(loading_label, text);
 	if (loading_bar && percent >= 0) lv_bar_set_value(loading_bar, percent, LV_ANIM_OFF);
@@ -303,7 +344,7 @@ static void loading_build(void) {
 	loading_label = lv_label_create(card);
 	lv_obj_add_style(loading_label, &theme_style_text, 0);
 	lv_obj_set_style_text_font(loading_label, &font_ui_20, 0);
-	lv_label_set_text(loading_label, tr("downloading"));
+	lv_label_set_text(loading_label, tr(loading_transfer ? "downloading" : "loading"));
 
 	loading_bar = lv_bar_create(card);
 	lv_obj_set_size(loading_bar, lv_pct(100), 6);
@@ -328,9 +369,11 @@ static void loading_hide(void) {
 	if (loading_veil) lv_obj_add_flag(loading_veil, LV_OBJ_FLAG_HIDDEN);
 }
 
-static lv_obj_t *ytmusic_corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph,
-									   lv_event_cb_t cb) {
-	lv_obj_t *button = lv_btn_create(ytmusic_screen);
+// A corner button on any page of this tab: the home screen's three, and the two
+// a list page shows while rows are chosen.
+static lv_obj_t *page_corner_button(lv_obj_t *screen, gui_config_t *cfg, int slot,
+									const lv_image_dsc_t *glyph, lv_event_cb_t cb) {
+	lv_obj_t *button = lv_btn_create(screen);
 	settingsrow_place_corner_button(button, cfg, slot);
 	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(button, 0, 0);
@@ -345,17 +388,136 @@ static lv_obj_t *ytmusic_corner_button(gui_config_t *cfg, int slot, const lv_ima
 	return button;
 }
 
+static lv_obj_t *ytmusic_corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph,
+									   lv_event_cb_t cb) {
+	return page_corner_button(ytmusic_screen, cfg, slot, glyph, cb);
+}
+
 static void open_settings_cb(lv_event_t *e) {
 	(void)e;
 	home_refresh_session_rows();
 	switch_screen(settings_screen);
 }
 
-// What "Download" in a row's menu leaves behind: the song itself, in the card's
-// own folder. The downloads here are files rather than a queue -- the copy is
-// already in the library, with its tags and sleeve -- so the list of them is
-// the music browser opened on that folder, where they can be played, renamed or
-// deleted like anything else on the card.
+// ---------------------------------------------------------------------------
+// the downloads page
+//
+// What "Download" leaves behind is the song itself, under
+// <card>/Music/YouTube Music/<artist>/<album>/, with its tags and sleeve beside
+// it. The Tidal page lists its own folder the same way and hands the list to
+// the shared track page, so this is that shape rather than a second browser:
+// a browser says "this directory does not exist" until the first download has
+// made one, and then makes the user walk three folders to find a song.
+// ---------------------------------------------------------------------------
+
+#define YT_DOWNLOADS_MAX 400
+
+typedef struct {
+	char path[512];
+	char title[YTMUSIC_TITLE_MAX];
+	char artist[YTMUSIC_NAME_MAX];
+} yt_download_entry_t;
+
+static int yt_download_cmp(const void *a, const void *b) {
+	return strcasecmp(((const yt_download_entry_t *)a)->title, ((const yt_download_entry_t *)b)->title);
+}
+
+// One key of the tags written beside a downloaded file. The downloader writes
+// them next to the audio and the keep worker copies both, so a file on the card
+// describes itself without being opened.
+static bool yt_download_tag(const char *path, const char *key, char *out, size_t size) {
+	if (!path || !key || !out || size == 0) {
+		return false;
+	}
+	out[0] = '\0';
+	char tags[800];
+	if ((size_t)snprintf(tags, sizeof(tags), "%.760s.tags", path) >= sizeof(tags)) {
+		return false;
+	}
+	FILE *file = fopen(tags, "r");
+	if (!file) {
+		return false;
+	}
+	size_t key_len = strlen(key);
+	char line[512];
+	bool found = false;
+	while (!found && fgets(line, sizeof(line), file)) {
+		if (strncmp(line, key, key_len) != 0 || line[key_len] != '=') {
+			continue;
+		}
+		char *value = line + key_len + 1;
+		char *end = value + strlen(value);
+		while (end > value && (end[-1] == '\n' || end[-1] == '\r')) {
+			*--end = '\0';
+		}
+		snprintf(out, size, "%s", value);
+		found = out[0] != '\0';
+	}
+	fclose(file);
+	return found;
+}
+
+static void yt_download_scan_dir(const char *root, yt_download_entry_t **entries, int *count, int *capacity,
+								 int depth) {
+	if (depth > 16 || *count >= YT_DOWNLOADS_MAX) {
+		return;
+	}
+	DIR *dir = opendir(root);
+	if (!dir) {
+		return;
+	}
+	struct dirent *de;
+	while (*count < YT_DOWNLOADS_MAX && (de = readdir(dir)) != NULL) {
+		if (de->d_name[0] == '.' || strcmp(de->d_name, "..") == 0) {
+			continue;
+		}
+		char path[768];
+		int n = snprintf(path, sizeof(path), "%s/%s", root, de->d_name);
+		if (n < 0 || (size_t)n >= sizeof(path)) {
+			continue;
+		}
+		struct stat info;
+		if (stat(path, &info) != 0) {
+			continue;
+		}
+		if (S_ISDIR(info.st_mode)) {
+			yt_download_scan_dir(path, entries, count, capacity, depth + 1);
+			continue;
+		}
+		// A file still being written is not a download yet, and a folder whose
+		// song is still arriving would list a title somebody cannot play.
+		if (!S_ISREG(info.st_mode) || !playlist_is_playable_file(de->d_name) || growfile_is_growing(path)) {
+			continue;
+		}
+		if (*count == *capacity) {
+			int next = *capacity ? *capacity * 2 : 8;
+			if (next > YT_DOWNLOADS_MAX) {
+				next = YT_DOWNLOADS_MAX;
+			}
+			yt_download_entry_t *grown = realloc(*entries, (size_t)next * sizeof(**entries));
+			if (!grown) {
+				break;
+			}
+			*entries = grown;
+			*capacity = next;
+		}
+		yt_download_entry_t *entry = &(*entries)[*count];
+		if (snprintf(entry->path, sizeof(entry->path), "%s", path) >= (int)sizeof(entry->path)) {
+			continue;
+		}
+		if (!yt_download_tag(path, "title", entry->title, sizeof(entry->title))) {
+			snprintf(entry->title, sizeof(entry->title), "%s", de->d_name);
+			char *dot = strrchr(entry->title, '.');
+			if (dot) {
+				*dot = '\0';
+			}
+		}
+		yt_download_tag(path, "artist", entry->artist, sizeof(entry->artist));
+		(*count)++;
+	}
+	closedir(dir);
+}
+
 static void open_downloads_cb(lv_event_t *e) {
 	(void)e;
 	const char *root = storage_sd_root();
@@ -364,9 +526,41 @@ static void open_downloads_cb(lv_event_t *e) {
 		return;
 	}
 	char folder[600];
-	snprintf(folder, sizeof(folder), "%s/Music/YouTube Music", root);
-	browser_open_dir_public(folder);
-	switch_screen(browser_screen);
+	if (snprintf(folder, sizeof(folder), "%s/Music/YouTube Music", root) >= (int)sizeof(folder)) {
+		return;
+	}
+	yt_download_entry_t *entries = NULL;
+	int count = 0;
+	int capacity = 0;
+	yt_download_scan_dir(folder, &entries, &count, &capacity, 0);
+	if (count <= 0) {
+		free(entries);
+		toast_error("ytmusic_no_downloads");
+		return;
+	}
+	qsort(entries, (size_t)count, sizeof(*entries), yt_download_cmp);
+	const char **paths = calloc((size_t)count, sizeof(*paths));
+	const char **titles = calloc((size_t)count, sizeof(*titles));
+	const char **artists = calloc((size_t)count, sizeof(*artists));
+	if (!paths || !titles || !artists) {
+		free(entries);
+		free(paths);
+		free(titles);
+		free(artists);
+		toast_error("out_of_memory");
+		return;
+	}
+	for (int i = 0; i < count; i++) {
+		paths[i] = entries[i].path;
+		titles[i] = entries[i].title;
+		artists[i] = entries[i].artist;
+	}
+	// medialist copies all of it and opens its own page.
+	medialist_open_paths(tr("downloaded"), paths, titles, artists, count, NULL);
+	free(entries);
+	free(paths);
+	free(titles);
+	free(artists);
 }
 
 static void home_refresh_session_rows(void) {
@@ -821,8 +1015,262 @@ static void tracks_loaded_cb(lv_event_t *e) {
 	art_activate(&art_tracks, tracks_list, track_items, track_count);
 }
 
+// ---------------------------------------------------------------------------
+// choosing several rows
+//
+// The Tidal page's shape, over these rows: a long press on a song starts the
+// mode, a tap then chooses or lets go of it, and the list's corner becomes the
+// two things the mode can do -- queue the chosen songs onto the card, or leave.
+// A selection belongs to the list it was started on; opening another list ends
+// it, because row 3 of one list is not row 3 of the next.
+// ---------------------------------------------------------------------------
+
+static bool selecting;
+// One flag per row of the list on screen, or NULL outside the mode.
+static unsigned char *chosen;
+static int chosen_count;
+// The rows as they were filled, so a tick can be put on one without rebuilding
+// the list -- which would lose the scroll position under the finger.
+static ytmusic_item_t *sel_items;
+static int sel_total;
+static lv_obj_t *row_objs[YTMUSIC_PAGE_RESULTS];
+static lv_obj_t *row_checks[YTMUSIC_PAGE_RESULTS];
+static lv_obj_t *row_menus[YTMUSIC_PAGE_RESULTS];
+
+static void selection_stop(void);
+
+static void yt_corners_refresh(void) {
+	if (sel_action_btn) lv_obj_set_hidden(sel_action_btn, !selecting);
+	if (sel_close_btn) lv_obj_set_hidden(sel_close_btn, !selecting);
+}
+
+static void row_tick_put(int index, bool on) {
+	if (index < 0 || index >= YTMUSIC_PAGE_RESULTS || !row_objs[index]) {
+		return;
+	}
+	lv_obj_t *check = row_checks[index];
+	if (!check) {
+		check = lv_image_create(row_objs[index]);
+		lv_obj_set_size(check, 32, 32);
+		// The plain tick the file browser puts on a chosen row, at the same
+		// right-hand spot the three dots occupy outside the mode.
+		lv_image_set_src(check, &icon_check);
+		lv_obj_add_style(check, &theme_style_icon, 0);
+		lv_obj_set_style_image_recolor(check, theme()->accent, 0);
+		lv_obj_set_style_image_recolor_opa(check, LV_OPA_COVER, 0);
+		lv_image_set_scale(check, 156); // 36 px source -> about 22 px
+		lv_obj_set_event_bubble(check, true);
+		lv_obj_align(check, LV_ALIGN_RIGHT_MID, 0, 0);
+		row_checks[index] = check;
+	}
+	lv_obj_set_hidden(check, !on);
+}
+
+static void selection_stop(void) {
+	if (!selecting) {
+		return;
+	}
+	selecting = false;
+	for (int i = 0; i < YTMUSIC_PAGE_RESULTS; i++) {
+		if (row_checks[i]) {
+			lv_obj_set_hidden(row_checks[i], true);
+		}
+		if (row_menus[i]) {
+			lv_obj_set_hidden(row_menus[i], false);
+		}
+	}
+	free(chosen);
+	chosen = NULL;
+	chosen_count = 0;
+	yt_corners_refresh();
+}
+
+static bool selection_start(void) {
+	if (selecting) {
+		return true;
+	}
+	if (!sel_items || sel_total <= 0) {
+		return false;
+	}
+	chosen = calloc((size_t)sel_total, 1);
+	if (!chosen) {
+		toast_error("ytmusic_out_of_memory");
+		return false;
+	}
+	selecting = true;
+	chosen_count = 0;
+	for (int i = 0; i < sel_total; i++) {
+		if (row_menus[i]) {
+			lv_obj_set_hidden(row_menus[i], true);
+		}
+	}
+	yt_corners_refresh();
+	return true;
+}
+
+// Chooses the row, or lets it go. Letting go of the last one leaves the mode.
+static void selection_toggle(int index) {
+	if (!selecting || !chosen || index < 0 || index >= sel_total) {
+		return;
+	}
+	chosen[index] = !chosen[index];
+	if (chosen[index]) {
+		chosen_count++;
+	} else if (--chosen_count == 0) {
+		selection_stop();
+		return;
+	}
+	row_tick_put(index, chosen[index]);
+}
+
+static void row_long_cb(lv_event_t *e) {
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (!selection_start()) {
+		return;
+	}
+	selection_toggle(index);
+}
+
+// A queue of chosen songs onto the card. Each one is downloaded to the cache
+// and handed to the keep worker, one at a time: the keep worker copies one file
+// at a time and refuses while it is busy, so the next transfer starts when the
+// last copy is done.
+typedef struct {
+	int count;
+	int failed;
+	bool ok;
+	char error[192];
+	ytmusic_item_t items[YTMUSIC_PAGE_RESULTS];
+} bulk_result_t;
+
+static void bulk_done_cb(void *data) {
+	bulk_result_t *result = data;
+	if (!result) return;
+	loading_hide();
+	end_busy();
+	bulk_at = 0;
+	bulk_total = 0;
+	if (result->ok) {
+		toast_success("stream_keep_done");
+	} else {
+		toast_error(result->error[0] ? result->error : "ytmusic_playback_failed");
+	}
+	free(result);
+}
+
+static void *bulk_worker(void *arg) {
+	bulk_result_t *result = arg;
+	for (int i = 0; i < result->count; i++) {
+		bulk_at = i + 1;
+		ytmusic_track_t track;
+		track_from_item(&result->items[i], &track);
+		char path[512] = "";
+		char error[192] = "";
+		if (!ytmusic_download_for_playback(&track, path, sizeof(path), error, sizeof(error))) {
+			result->failed++;
+			if (!result->error[0]) {
+				snprintf(result->error, sizeof(result->error), "%s",
+						 error[0] ? error : "ytmusic_playback_failed");
+			}
+			continue;
+		}
+		if (!streamkeep_keep(path, false)) {
+			char why[192] = "";
+			result->failed++;
+			if (!result->error[0]) {
+				if (streamkeep_last_error(why, sizeof(why)) && why[0]) {
+					snprintf(result->error, sizeof(result->error), "%s", why);
+				} else {
+					snprintf(result->error, sizeof(result->error), "%s", "stream_keep_failed");
+				}
+			}
+			continue;
+		}
+		// The copy out of the cache is the keep worker's own thread.
+		for (int tick = 0; tick < 400 && streamkeep_busy(); tick++) {
+			usleep(100000);
+		}
+	}
+	result->ok = result->failed == 0;
+	if (!gui_post(bulk_done_cb, result)) {
+		end_busy();
+		bulk_at = 0;
+		bulk_total = 0;
+		free(result);
+	}
+	return NULL;
+}
+
+static void selection_queue_cb(lv_event_t *e) {
+	(void)e;
+	if (!selecting || !chosen || chosen_count <= 0 || !sel_items) {
+		return;
+	}
+	if (!begin_busy()) {
+		return;
+	}
+	bulk_result_t *result = calloc(1, sizeof(*result));
+	if (!result) {
+		end_busy();
+		toast_error("ytmusic_out_of_memory");
+		return;
+	}
+	for (int i = 0; i < sel_total; i++) {
+		if (chosen[i]) {
+			result->items[result->count++] = sel_items[i];
+		}
+	}
+	if (result->count == 0) {
+		free(result);
+		end_busy();
+		return;
+	}
+	selection_stop();
+	bulk_total = result->count;
+	bulk_at = 0;
+	loading_transfer = true;
+	loading_show();
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, bulk_worker, result) != 0) {
+		loading_hide();
+		end_busy();
+		bulk_at = 0;
+		bulk_total = 0;
+		free(result);
+		toast_error("ytmusic_playback_failed");
+		return;
+	}
+	pthread_detach(thread);
+}
+
+static void selection_cancel_cb(lv_event_t *e) {
+	(void)e;
+	selection_stop();
+}
+
 static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int count, lv_event_cb_t cb) {
 	yt_art_list_t *art = art_state_for(list);
+	// The flags describe rows that are about to go: entry 3 of this list is not
+	// entry 3 of the next. Ended before the widgets are cleaned, so the ticks it
+	// hides are still real objects.
+	selection_stop();
+	sel_items = (ytmusic_item_t *)items;
+	sel_total = count;
+	if (list == results_list) {
+		sel_action_btn = results_sel_action;
+		sel_close_btn = results_sel_close;
+	} else if (list == tracks_list) {
+		sel_action_btn = tracks_sel_action;
+		sel_close_btn = tracks_sel_close;
+	} else {
+		sel_action_btn = NULL;
+		sel_close_btn = NULL;
+	}
+	for (int i = 0; i < YTMUSIC_PAGE_RESULTS; i++) {
+		row_objs[i] = NULL;
+		row_checks[i] = NULL;
+		row_menus[i] = NULL;
+	}
 	art_forget_rows(art);
 	lv_obj_clean(list);
 	if (count <= 0) {
@@ -843,11 +1291,18 @@ static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int coun
 		lv_obj_t *row = items[i].kind == YTMUSIC_ITEM_TRACK
 							? settingsrow_action(list, label, cb, (void *)(intptr_t)i)
 							: settingsrow_add(list, label, NULL, cb, (void *)(intptr_t)i);
+		if (i < YTMUSIC_PAGE_RESULTS) {
+			row_objs[i] = row;
+		}
 		// A song also gets the menu a Tidal track has: the row's tap plays it,
 		// the dots offer what a tap cannot -- playing it now, or downloading it
-		// to the card whether or not it is the song in the player.
+		// to the card whether or not it is the song in the player. A long press
+		// starts choosing several of them.
 		if (items[i].kind == YTMUSIC_ITEM_TRACK) {
-			row_kebab_add(row, &items[i]);
+			if (i < YTMUSIC_PAGE_RESULTS) {
+				row_menus[i] = row_kebab_add(row, &items[i]);
+			}
+			lv_obj_add_event_cb(row, row_long_cb, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
 		}
 		// An entry with artwork gets the shared cover slot; one without keeps
 		// the glyph it would have had anyway.
@@ -943,6 +1398,16 @@ static void *playback_worker(void *arg) {
 
 static void play_item(const ytmusic_item_t *item) {
 	if (!item || item->kind != YTMUSIC_ITEM_TRACK || !item->id[0]) return;
+	// A song played a moment ago is still in the cache, whole. Playing it again
+	// is a local file: no transfer, and no card about one -- which is what a
+	// prompt on the second play of the same song was.
+	char cached[512];
+	if (ytmusic_cached_track(item->id, cached, sizeof(cached))) {
+		player_play_file(cached);
+		player_refresh_now_playing();
+		player_sheet_open(true);
+		return;
+	}
 	if (!begin_busy()) return;
 	play_result_t *result = calloc(1, sizeof(*result));
 	if (!result) {
@@ -951,6 +1416,7 @@ static void play_item(const ytmusic_item_t *item) {
 		return;
 	}
 	track_from_item(item, &result->track);
+	loading_transfer = false;
 	loading_show();
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, playback_worker, result) != 0) {
@@ -1042,6 +1508,7 @@ static void row_menu_save(void *user) {
 		return;
 	}
 	track_from_item(item, &result->track);
+	loading_transfer = true;
 	loading_show();
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, save_worker, result) != 0) {
@@ -1069,18 +1536,29 @@ static void row_menu_cb(lv_event_t *e) {
 	popover_show(lv_event_get_target(e), items, 2);
 }
 
-static void row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item) {
+static lv_obj_t *row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item) {
 	lv_obj_t *button = lv_btn_create(row);
 	lv_obj_set_size(button, bp_pick(26, 34), bp_pick(28, 34));
 	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(button, 0, 0);
 	lv_obj_set_style_shadow_width(button, 0, 0);
 	lv_obj_set_style_pad_all(button, 0, 0);
+	// The row places its children itself -- the cover at the left edge, the
+	// chevron at the right -- so a button created here starts at 0,0 and drew
+	// itself on top of the album art. It belongs where the chevron would be.
+	lv_obj_align(button, LV_ALIGN_RIGHT_MID, 0, 0);
+	// A target two dots wide is a narrow one: a tap that lands just outside it
+	// used to be a tap on the row, which started the song instead of the menu.
+	lv_obj_set_ext_click_area(button, bp_pick(7, 10));
 	lv_obj_add_event_cb(button, row_menu_cb, LV_EVENT_CLICKED, (void *)item);
 	lv_obj_t *icon = lv_image_create(button);
 	lv_image_set_src(icon, &icon_ellipsis_vertical);
 	lv_obj_add_style(icon, &theme_style_icon, 0);
+	// 22 px of glyph in the button: the source is 36, and unscaled it drew past
+	// the button's own edges.
+	lv_image_set_scale(icon, (uint32_t)(LV_SCALE_NONE * 22 / 36));
 	lv_obj_center(icon);
+	return button;
 }
 
 static bool start_list_request(list_kind_t kind, bool to_tracks, ytmusic_filter_t filter,
@@ -1182,6 +1660,14 @@ static void item_clicked_cb(lv_event_t *e) {
 	} else {
 		if (index < 0 || index >= track_count) return;
 		item = &track_items[index];
+	}
+	if (selecting) {
+		// A tap chooses in this mode. A card is not a song, and has nothing to
+		// download -- it is not offered a tick either.
+		if (item->kind == YTMUSIC_ITEM_TRACK) {
+			selection_toggle(index);
+		}
+		return;
 	}
 	if (item->kind == YTMUSIC_ITEM_CONTAINER) {
 		// Everything opened from here belongs to this list: an album's own
@@ -1665,6 +2151,13 @@ static void build_search_page(void) {
 	lv_obj_add_style(results_screen, &theme_style_screen, 0);
 	results_list = settingsrow_page(results_screen, page_cfg, "YouTube Music");
 	results_title = settingsrow_page_title(results_screen);
+	// The corner is empty until rows are chosen: the tick queues them onto the
+	// card, the cross leaves the mode. The same pair as on the Tidal page.
+	settingsrow_title_corner_slots(results_title, page_cfg, 2);
+	results_sel_action = page_corner_button(results_screen, page_cfg, 0, &icon_check, selection_queue_cb);
+	results_sel_close = page_corner_button(results_screen, page_cfg, 1, &icon_close, selection_cancel_cb);
+	lv_obj_set_hidden(results_sel_action, true);
+	lv_obj_set_hidden(results_sel_close, true);
 	player_sheet_attach_drag(results_list, true);
 	// The covers belong to the list that is on screen, and these two carry rows.
 	lv_obj_add_event_cb(results_screen, results_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
@@ -1675,6 +2168,11 @@ static void build_search_page(void) {
 	lv_obj_add_style(tracks_screen, &theme_style_screen, 0);
 	tracks_list = settingsrow_page(tracks_screen, page_cfg, "YouTube Music");
 	tracks_title = settingsrow_page_title(tracks_screen);
+	settingsrow_title_corner_slots(tracks_title, page_cfg, 2);
+	tracks_sel_action = page_corner_button(tracks_screen, page_cfg, 0, &icon_check, selection_queue_cb);
+	tracks_sel_close = page_corner_button(tracks_screen, page_cfg, 1, &icon_close, selection_cancel_cb);
+	lv_obj_set_hidden(tracks_sel_action, true);
+	lv_obj_set_hidden(tracks_sel_close, true);
 	player_sheet_attach_drag(tracks_list, true);
 	lv_obj_add_event_cb(tracks_screen, tracks_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	lv_obj_add_event_cb(tracks_list, art_scrolled_cb, LV_EVENT_SCROLL, NULL);

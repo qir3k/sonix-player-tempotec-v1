@@ -7,6 +7,7 @@
 
 #include "src/gui/board_profile.h"
 #include "src/gui/nowplaying/player.h"
+#include "src/gui/settings/langfonts.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -38,6 +39,8 @@ void plugins_init(gui_config_t *cfg) {
 	lv_obj_add_style(plugins_screen, &theme_style_screen, 0);
 	lv_obj_t *list = settingsrow_page(plugins_screen, cfg, "plugins");
 
+	langfonts_init(cfg);
+
 	for (int i = 0; i < addons_count(); i++) {
 		const addon_t *addon = addons_at(i);
 		if (!addon) {
@@ -54,6 +57,11 @@ void plugins_init(gui_config_t *cfg) {
 		}
 		lv_obj_add_event_cb(sw, addon_switch_cb, LV_EVENT_VALUE_CHANGED, (void *)addon->id);
 	}
+
+	// Languages and fonts: the other half of what a build used to give up by
+	// deleting files, as a page of its own because it is two dozen rows where
+	// this one has room for two.
+	settingsrow_add(list, "languages_fonts", NULL, switch_screen_cb, langfonts_screen);
 
 	player_sheet_attach_drag(list, true);
 	switcher_attach_back_gesture(plugins_screen);

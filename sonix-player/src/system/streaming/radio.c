@@ -15,6 +15,7 @@
 #include "src/system/audio/audio.h"
 #include "src/system/audio/eq.h"
 #include "src/system/core/config.h"
+#include "src/system/core/region.h"
 #include "src/system/decode/aacdec.h"
 #include "src/system/net/hls.h"
 #include "src/system/net/http.h"
@@ -369,7 +370,6 @@ static int result_raw_count;
 // ---------------------------------------------------------------------------
 #define RADIO_QUALITY_DEFAULT 320
 
-static char filter_region[64];	// the directory's name for the country, "" for all
 static int filter_min_kbps = RADIO_QUALITY_DEFAULT;
 static bool filters_loaded;
 
@@ -378,22 +378,19 @@ static void load_filters(void) {
 		return;
 	}
 	filters_loaded = true;
-	const char *saved = config_get("radio", "region", "");
-	snprintf(filter_region, sizeof(filter_region), "%s", saved ? saved : "");
 	long kbps = config_get_int("radio", "quality_min", RADIO_QUALITY_DEFAULT);
 	filter_min_kbps = kbps > 0 ? (int)kbps : 0;
 }
 
+// The region is no longer this file's to keep: it is the one choice every
+// service reads in core/region.h, and what comes back is that entry's ISO
+// country -- "" for Worldwide, which is this directory's "any country".
 const char *radio_region(void) {
-	load_filters();
-	return filter_region;
+	return region_country();
 }
 
-void radio_set_region(const char *name) {
-	load_filters();
-	snprintf(filter_region, sizeof(filter_region), "%s", name ? name : "");
-	config_set("radio", "region", filter_region);
-	config_save();
+void radio_set_region(const char *country) {
+	region_select_country(country);
 }
 
 int radio_min_bitrate(void) {
@@ -415,10 +412,14 @@ static void filter_query(char *out, size_t size, bool with_region) {
 	load_filters();
 	out[0] = '\0';
 	size_t used = 0;
-	if (with_region && filter_region[0]) {
-		char encoded[128];
-		http_url_encode(filter_region, encoded, sizeof(encoded));
-		used += (size_t)snprintf(out + used, size > used ? size - used : 0, "&country=%s", encoded);
+	// The two-letter code rather than the directory's spelling of the name:
+	// one code per country, and no mirror asked to quote back a name it
+	// spells its own way.
+	if (with_region) {
+		const char *country = region_country();
+		if (country[0]) {
+			used += (size_t)snprintf(out + used, size > used ? size - used : 0, "&countrycode=%s", country);
+		}
 	}
 	if (filter_min_kbps > 0 && used < size) {
 		snprintf(out + used, size - used, "&bitrateMin=%d", filter_min_kbps);

@@ -68,7 +68,34 @@ const char *lang_current(void);
 
 // The languages found in the directory, for the settings page. `names` is
 // filled with pointers that stay valid; returns how many were written.
+//
+// Only the languages switched on are listed (see below): the files all stay
+// on the card, and this is the switch over which of them the player offers.
 int lang_list(const char **names, int max);
+
+// Which of the languages in the directory this build offers at all -- the
+// switchboard under Plugins -> Languages & Fonts.
+//
+// This is what a build-time trim used to do by deleting files, which meant
+// one image for one owner and a rebuild to change it back. Here nothing is
+// deleted: a language is one config line, a barebones player can run on
+// English alone or on Polish alone, and the choice is as easily undone as it
+// was made.
+//
+// The language the interface is actually showing is never one of the ones
+// that can be off, so a screen can never be left with nothing to read, and
+// English -- the first-boot language -- answers on by default.
+bool lang_enabled(const char *name);
+void lang_set_enabled(const char *name, bool on);
+
+// The languages no switch can turn off: the one on screen, and English. The
+// Languages & Fonts page draws those rows checked and dead rather than
+// offering a switch that would snap back.
+bool lang_locked(const char *name);
+
+// The whole directory, switches aside: what the Languages & Fonts page draws
+// its rows from, so a language that is off can be switched back on.
+int lang_all(const char **names, int max);
 
 // A language's name as it is spelled, rather than as its file is named.
 //

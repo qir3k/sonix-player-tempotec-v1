@@ -209,7 +209,7 @@ static void test_ranking_priority_and_stability(void) {
 }
 
 static void test_atomic_save_and_sidecar_paths(void) {
-	char dir[] = "/tmp/sonix-lrclib-XXXXXX";
+	char dir[600] = "/tmp/sonix-lrclib-XXXXXX";
 	assert(mkdtemp(dir) != NULL);
 
 	char track_path[512], lrc_path[512], part_path[512];

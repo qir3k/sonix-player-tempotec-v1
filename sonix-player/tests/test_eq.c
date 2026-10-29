@@ -331,7 +331,7 @@ static void test_dac_path_shapes_like_the_card(void) {
 }
 
 int main(void) {
-	char dir[] = "/tmp/sonix-eq-test-XXXXXX";
+	char dir[600] = "/tmp/sonix-eq-test-XXXXXX";
 	if (!mkdtemp(dir)) {
 		perror("mkdtemp");
 		return 1;

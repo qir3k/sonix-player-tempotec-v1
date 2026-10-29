@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "src/system/core/config.h"
+#include "src/system/core/region.h"
 #include "src/system/net/http.h"
 #include "src/system/core/json.h"
 #include "src/system/core/lang.h"
@@ -288,14 +289,19 @@ int podcast_search(const char *query, podcast_feed_t *out, int max) {
 	return fetch_list(path, "feeds", out, max, false);
 }
 
+// Which chart the Trending card shows. The choice itself lives in the one
+// shared list in core/region.h -- the same row Radio and YouTube Music write --
+// so this returns that choice's language. Nobody has chosen reads as empty,
+// which the caller above has always turned into the interface's own language,
+// because the catalogue has no worldwide chart to ask for.
 const char *podcast_trending_lang(void) {
-	const char *chosen = config_get("podcast", "trending_lang", "");
-	return chosen ? chosen : "";
+	return region_language();
 }
 
+// Turn a stored code back into the choice: the entry whose language it is, or
+// Worldwide when there is none.
 void podcast_set_trending_lang(const char *code) {
-	config_set("podcast", "trending_lang", code && code[0] ? code : "");
-	config_save();
+	region_select_language(code);
 }
 
 const char *podcast_trending_lang_effective(void) {

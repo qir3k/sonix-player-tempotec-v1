@@ -118,9 +118,6 @@ static void streaming_refresh_theme(void) {
 void streaming_init(gui_config_t *cfg) {
 	streaming_cfg = cfg;
 	ytmusic_init();
-	// Where an empty page keeps its response body for a pull: the same card
-	// the player's own logs land on.
-	ytmusic_set_card_root(cfg && cfg->sd_root_path ? cfg->sd_root_path : NULL);
 	// Only the services that are switched on are built: these pages hold the
 	// lists, the rows and the artwork of a whole catalogue, and an unused one is
 	// the largest thing in the heap. The system init above (cookies, keys) stays

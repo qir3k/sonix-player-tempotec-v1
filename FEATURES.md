@@ -127,7 +127,10 @@ The search page keeps the last eight queries under the field, each with a tap
 to run it again and an x to forget it, as the Tidal tab's does. **Podcast settings →
 Region** picks the language the trending chart is asked for, so the pill shows
 what is trending where you are instead of the whole world's list (the
-catalogue has no country filter; the language is what it does have). The rows
+catalogue has no country filter; the language is what it does have). It is one
+choice for the whole player: the same row here, in Radio settings and in
+YouTube Music's settings writes the same value in `core/region.h`, and
+**Worldwide** is what all three show before anybody picks. The rows
 are drawn at the same pitch as the Tidal tab's, with the artwork a step smaller,
 so a screen of the panel holds one more of them.
 - **Episodes heard and unheard** - an episode played to its end is ticked and
@@ -146,8 +149,11 @@ a self-signed certificate), and HLS.
 directory's own popularity order cut to the country picked in **Radio
 settings → Region**, on the list's own page under Recently played (the order
 and the visibility of every row is arranged from **Radio settings → List
-reorder**). The region picker offers the sixty countries with the most stations
-behind them, alphabetically, with **Any country** first.
+reorder**). The region picker is the shared one -- **Worldwide** first, then one
+row per language the firmware ships -- and what it writes is the code the
+directory's `countrycode` parameter takes, so it is the same choice the podcast
+chart and the YouTube Music settings read. It is drawn from the firmware's own
+table, so the page opens at once and without a network.
 - **Radio → Quality filter** - **Radio settings → Quality filter** keeps every
 list to streams of 320 kbps and up, which is the default; **128 kbps and up**
 is the middle bar for a country where the high one leaves too little, and
@@ -203,11 +209,12 @@ circle opens the radio's settings page on it.
   The title bar carries three corner buttons, in Tidal's order from the left: the magnifier (search), the download tray (the songs kept on the card, opened in the music browser at `Music/YouTube Music`) and the gear (this page's settings). Search lives only there now: it used to be one of the home rows as well, which offered the same page twice, and the **Home rows** arrange page no longer lists it. The search page keeps the last eight queries under the field, each with a tap to run it again and an x to forget it, as the Tidal tab's does, and **YouTube Music settings → Clear search history** empties them at once.
   A row that plays (a song, an episode) carries no chevron: the chevron means "this opens another list", which is what an album or a show row does.
   The download is finished only on a `416`: a short range reply -- and a `206` carrying nothing, which is an instance's upstream pausing rather than an ending -- is asked for again from the byte reached, and the file is checked against the byte count the instance named. That is what used to cut a three-minute track off after a minute (a ~1 MB file the player then reported as a 35 kbit/s stream).
-  Settings gained four rows. **Sleep timer** is the music transport's own, the one the card and Tidal share, because a YouTube track plays through the same player. **Audio quality** chooses between the 256 kbit/s AAC stream (itag 141) where an instance offers one and the 128 kbit/s one everywhere else, with Standard pinning 128 for a slow instance. **Recommendations for** picks the country's store and the language of the row names -- Poland with English rows is one of the pairs -- through the InnerTube `gl` / `hl` of every request. **Home rows** opens a page where the five home rows are moved up and down and switched on or off, so Explore can be hidden or pushed below the rest.
+  Settings gained four rows. **Sleep timer** is the music transport's own, the one the card and Tidal share, because a YouTube track plays through the same player. **Audio quality** chooses between the 256 kbit/s AAC stream (itag 141) where an instance offers one and the 128 kbit/s one everywhere else, with Standard pinning 128 for a slow instance. **Recommendations for** picks the country's store and the language of the row names through the InnerTube `gl` / `hl` of every request, from the one shared region list the podcast and radio pages draw (**Worldwide** is the US store with English rows, which is what a request with no preference already gets). **Home rows** opens a page where the five home rows are moved up and down and switched on or off, so Explore can be hidden or pushed below the rest.
   A track starts playing as soon as enough of it has arrived -- an eighth of the file, between 192 kB and 1 MB, and never before the container's `moov` index is in, since without it the decoder has nothing to read -- and the rest keeps downloading behind the player, so a song begins in seconds instead of after the whole thing. The card with the spinner, the percent and the bar follows the downloader's own byte count while that happens, and swallows taps until playback starts or the download fails. **Download** in the row's menu is the explicit copy: that one waits for the whole file and puts it in `Music/YouTube Music/<artist>/<album>`.
   A track that has played can be kept for good from the now-playing menu, the same place Tidal and Qobuz offer it, and a song's row has the same Download entry behind its three dots: it is copied out of the temporary cache into `<card>/Music/YouTube Music/<artist>/<album>/<title>.m4a` with its tags and sleeve, and plays offline from the library afterwards. The album is the one the row named (`artist • album • duration`); where a page does not name it, the title of the list the song was opened from stands in, so a download lands in a named folder rather than `Unknown album`.
   A session imported from the card may be a browser's `cookies.txt` export as well as one line of `Cookie` header: the usual export was refused as invalid before, which looked exactly like a session Google had declined. The Google sign-in row says what it does not do, since the music endpoints refuse its token for the library.
-- **Plugins** - the optional modules are listed in **Settings -> Plugins**, each with a switch and a line saying what it adds: Tidal, Qobuz, YouTube Music, Podcasts, Audiobooks, Subsonic, Radio, the calculator, notes, Flappy Bird, the Game Boy emulator and the books shelf. Switching one off means it is not initialised at all -- its pages are never built, so the memory they would hold stays free -- and its rows are not drawn in Streaming or More. Everything ships on, and the change takes effect after a restart, which the row says. The model, and how to add a module, are in `sonix-player/docs/ADDONS.md`.
+- **Plugins** - the optional modules are listed in **Settings -> Plugins**, each with a switch and a line saying what it adds: Tidal, Qobuz, YouTube Music, Podcasts, Audiobooks, Subsonic, Radio, the calculator, notes, Flappy Bird, the Game Boy emulator, the metronome and the books shelf. Switching one off means it is not initialised at all -- its pages are never built, so the memory they would hold stays free -- and its rows are not drawn in Streaming or More. Everything ships on, and the change takes effect after a restart, which the row says. The model, and how to add a module, are in `sonix-player/docs/ADDONS.md`.
+- **Plugins → Languages & Fonts** - the last row of that page is not a module but a page of the same kind of switches, over what the player offers rather than over what it builds: one row per language file, one per UI face and one per script fallback (Japanese, Korean, Thai, Arabic). Nothing is deleted -- every `.ini` and every font stays in the image -- so a barebones player is English alone, or Polish alone, or English and Polish, and the same device can grow back without a rebuild. Two rows can never be switched off: the language the interface is actually in and English (the first-boot fallback), and the face in use and the default face. A language or face switched off disappears from the Language and Font rows after the restart the toast names; the script fallbacks are on by default, because they are what keeps a Korean or Arabic title from drawing as squares.
 - **USB mass storage** - connect the device to a PC or a Smartphone to manage the files on the SD Card.
 
 ## Podcasts on the card
@@ -413,7 +420,9 @@ circle opens the radio's settings page on it.
   is written through to the RTC, with a 24-hour clock option.
 - **Language** - English, Italiano, Deutsch, Español, Français, Nederlands,
   Polski, Português BR, Українська, Русский, 日本語. The eleven language files are read from the
-  resource folder, so dropping another `.ini` in beside them adds a language.
+  resource folder, so dropping another `.ini` in beside them adds a language;
+  which of them this picker lists is switched in **Plugins → Languages &
+  Fonts**, so the same image can offer all eleven or two.
   In Japanese the interface draws its kana, kanji and CJK punctuation from the
   bundled Rodin face rather than MiSans, whose kanji are the Chinese shapes.
   Titles and tags come out in whatever script the interface font covers too -

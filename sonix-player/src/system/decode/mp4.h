@@ -84,6 +84,17 @@ int mp4_audio_bitrate_kbps(const mp4_file_t *m);
 // Copies frame `index` into `buf`. Returns its length, 0 on failure, and a
 // negative number when the frame does not fit (its size, negated).
 int mp4_read_audio_frame(mp4_file_t *m, uint32_t index, unsigned char *buf, uint32_t buf_size);
+
+// The number of audio samples the file describes right now. For a file that is
+// still being downloaded this waits for the next piece and takes in whatever
+// fragments arrived, because a streamed track has more samples than the index
+// could name when the player opened it. A whole file answers what it always
+// did.
+uint32_t mp4_audio_frames_available(mp4_file_t *m);
+
+// Whether the file is still being written -- that is, whether a frame the
+// reader does not have yet could still arrive. False for every ordinary file.
+bool mp4_file_is_growing(const mp4_file_t *m);
 // The largest frame in the file, so a caller can size its buffer once.
 uint32_t mp4_max_frame_size(const mp4_file_t *m);
 

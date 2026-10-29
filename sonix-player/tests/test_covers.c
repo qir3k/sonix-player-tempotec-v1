@@ -472,7 +472,7 @@ static void test_1000_cover_cache_and_loader(const char *dir) {
 }
 
 int main(void) {
-	char dir[] = "/tmp/sonix-covers-test-XXXXXX";
+	char dir[600] = "/tmp/sonix-covers-test-XXXXXX";
 	assert(mkdtemp(dir) != NULL);
 
 	test_oversized_mapped_covers(dir);

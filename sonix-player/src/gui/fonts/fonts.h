@@ -107,7 +107,35 @@ void fonts_register_change(void (*cb)(void));
 // A family whose files are not in this firmware is left out, and so is every
 // card font while there is no card. The list therefore only ever holds faces
 // that can actually be opened.
+//
+// A family switched off in Plugins -> Languages & Fonts is left out too, and
+// so is a card font nobody has switched on; the face in force and the default
+// face are never among the ones left out.
 int fonts_choices(const char **ids, const char **labels, int max);
+
+// Which faces this build offers, and the switch over them. Nothing is
+// deleted: the files stay and this decides which the picker lists.
+bool fonts_enabled(const char *id);
+void fonts_set_enabled(const char *id, bool on);
+
+// The faces no switch can turn off: the default one, and the one in force. The
+// Languages & Fonts page draws those rows checked and dead instead of offering
+// a switch that would snap back on the next visit.
+bool fonts_locked(const char *id);
+
+// The same faces with no switch applied: what the Languages & Fonts page
+// draws its rows from, so a face that is off can be switched back on.
+int fonts_all_choices(const char **ids, const char **labels, int max);
+
+// The script fallbacks by name -- Japanese, Korean, Thai, Arabic -- in the
+// order the chain opens them, for the switches under the faces above.
+int fonts_script_names(const char **names, int max);
+
+// Whether a script's letters are chained in behind the main face at all.
+// On by default: it is what keeps a Korean or Arabic title from drawing as
+// squares, and only switching it off can take that away.
+bool fonts_script_enabled(const char *name);
+void fonts_set_script_enabled(const char *name, bool on);
 
 // The face in force -- normally the stored choice, but the default face when
 // the stored one could not be opened (a card font whose card has been taken

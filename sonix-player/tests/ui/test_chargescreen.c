@@ -211,9 +211,9 @@ static int check_strings(const char *language_dir, char names[][32], int max_nam
 int main(int argc, char **argv) {
 	assert(argc == 2);
 
-	char card[] = "/tmp/sonix-chargescreen-test-XXXXXX";
+	char card[600] = "/tmp/sonix-chargescreen-test-XXXXXX";
 	assert(mkdtemp(card));
-	char config[512];
+	char config[640];
 	snprintf(config, sizeof(config), "%s/device_config.ini", card);
 	config_init(config);
 	config_set("ui", "language", "English");

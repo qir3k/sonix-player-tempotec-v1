@@ -3,6 +3,7 @@
 
 #include "src/system/core/config.h"
 #include "src/system/core/json.h"
+#include "src/system/core/region.h"
 #include "src/system/core/sha1.h"
 #include "src/system/decode/growfile.h"
 
@@ -159,24 +160,6 @@ static void load_session(void) {
 	memset(line, 0, YTMUSIC_COOKIE_MAX);
 	free(line);
 	fclose(f);
-}
-
-// Where an empty page's body is kept for pulling: the card's root, when one
-// was named.
-static char card_root[600];
-
-void ytmusic_set_card_root(const char *path) {
-	if (!path || !path[0]) {
-		return;
-	}
-	pthread_mutex_lock(&session_lock);
-	snprintf(card_root, sizeof(card_root), "%s", path);
-	// Without a trailing slash, so the joins below cannot double one up.
-	size_t n = strlen(card_root);
-	while (n > 1 && card_root[n - 1] == '/') {
-		card_root[--n] = '\0';
-	}
-	pthread_mutex_unlock(&session_lock);
 }
 
 void ytmusic_init(void) {
@@ -979,32 +962,13 @@ static bool youtubei_post(const char *endpoint, const char *body, bool login_req
 // the market the catalogue answers in
 // ---------------------------------------------------------------------------
 
-// Two letters, or the fallback. Google takes these as ISO codes and answers a
-// malformed one with a page for somewhere else, so nothing but letters is let
-// through.
-static void two_letters(const char *in, const char *fallback, bool upper, char out[3]) {
-	char a = in && in[0] ? in[0] : fallback[0];
-	char b = in && in[0] && in[1] ? in[1] : fallback[1];
-	if (!isalpha((unsigned char)a) || !isalpha((unsigned char)b)) {
-		a = fallback[0];
-		b = fallback[1];
-	}
-	out[0] = upper ? (char)toupper((unsigned char)a) : (char)tolower((unsigned char)a);
-	out[1] = upper ? (char)toupper((unsigned char)b) : (char)tolower((unsigned char)b);
-	out[2] = '\0';
-}
-
 // YouTube Music chooses what to recommend -- Explore, Top songs, the charts --
 // from `gl`, the country's store, and `hl`, the language its labels come back
-// in. They are independent on purpose: Polish charts with English row names is
-// a real setup, and it is what somebody who lives in Poland and reads English
-// wants. Both are set on the settings page and both are only ever two letters.
+// in. Both come from the one region choice the whole player shares (region.h):
+// Poland answers Polish, and Worldwide answers the pair a request with no
+// preference gets, US and en.
 static void catalogue_bounds(char *gl, size_t gl_size, char *hl, size_t hl_size) {
-	char market[3], language[3];
-	two_letters(config_get("ytmusic", "region", ""), "US", true, market);
-	two_letters(config_get("ytmusic", "language", ""), "en", false, language);
-	snprintf(gl, gl_size, "%s", market);
-	snprintf(hl, hl_size, "%s", language);
+	region_market(gl, gl_size, hl, hl_size);
 }
 
 // Whether the best format offered is wanted, or the safe one. 140 is the
@@ -1024,54 +988,47 @@ void ytmusic_quality_set(bool high) {
 	config_save();
 }
 
-// The pairs the region row offers. The labels are tags, translated where the
-// row is drawn: a country name is the one string a language file is for.
-// "Worldwide" is the US store, which is what a request with no preference gets
-// and what most of the catalogue is indexed against.
-static const struct {
-	const char *region;
-	const char *language;
-	const char *label;
-} REGIONS[] = {
-	{"US", "en", "ytmusic_region_worldwide"},
-	{"PL", "en", "ytmusic_region_poland_english"},
-	{"PL", "pl", "ytmusic_region_poland"},
-	{"CZ", "cs", "ytmusic_region_czechia"},
-	{"DE", "de", "ytmusic_region_germany"},
-	{"GB", "en", "ytmusic_region_uk"},
-};
-
+// The region row draws the shared list: the same Worldwide-first options the
+// Tidal, Podcasts and Radio settings pages offer (region.h), in the same
+// order and with the same default. Only the pair this endpoint wants is worked
+// out here -- one entry of that list becomes the `gl` / `hl` a request carries.
 int ytmusic_regions(ytmusic_region_t *out, int limit) {
+	region_t list[REGION_LIST_MAX];
+	int have = region_list(list, REGION_LIST_MAX);
 	if (!out || limit <= 0) return 0;
-	int count = 0;
-	for (size_t i = 0; i < sizeof(REGIONS) / sizeof(REGIONS[0]) && count < limit; i++) {
-		snprintf(out[count].region, sizeof(out[count].region), "%s", REGIONS[i].region);
-		snprintf(out[count].language, sizeof(out[count].language), "%s", REGIONS[i].language);
-		snprintf(out[count].label, sizeof(out[count].label), "%s", REGIONS[i].label);
-		count++;
+	int count = have < limit ? have : limit;
+	for (int i = 0; i < count; i++) {
+		char market[3], language[3];
+		snprintf(market, sizeof(market), "%s", list[i].country[0] ? list[i].country : "US");
+		snprintf(language, sizeof(language), "%s", list[i].language[0] ? list[i].language : "en");
+		snprintf(out[i].region, sizeof(out[i].region), "%s", market);
+		snprintf(out[i].language, sizeof(out[i].language), "%s", language);
+		// A tag is put through tr() where the row is drawn; a language's own
+		// name has no translation to look for and comes back unchanged.
+		snprintf(out[i].label, sizeof(out[i].label), "%s", list[i].label);
 	}
 	return count;
 }
 
 void ytmusic_region_active(char *region, size_t region_size, char *language, size_t language_size) {
-	char market[3], lang[3];
-	two_letters(config_get("ytmusic", "region", ""), "US", true, market);
-	two_letters(config_get("ytmusic", "language", ""), "en", false, lang);
-	if (region && region_size) snprintf(region, region_size, "%s", market);
-	if (language && language_size) snprintf(language, language_size, "%s", lang);
+	region_market(region, region_size, language, language_size);
 }
 
 bool ytmusic_region_select(const char *region, const char *language) {
 	if (!region || !language) return false;
-	if (!isalpha((unsigned char)region[0]) || !isalpha((unsigned char)region[1]) || region[2]) return false;
-	if (!isalpha((unsigned char)language[0]) || !isalpha((unsigned char)language[1]) || language[2]) return false;
-	char market[3], lang[3];
-	two_letters(region, "US", true, market);
-	two_letters(language, "en", false, lang);
-	config_set("ytmusic", "region", market);
-	config_set("ytmusic", "language", lang);
-	config_save();
-	return true;
+	region_t list[REGION_LIST_MAX];
+	int count = region_list(list, REGION_LIST_MAX);
+	// The pair the caller holds is the pair this entry presents, Worldwide
+	// included (US / en), so the row that was tapped is the row that sticks.
+	for (int i = 0; i < count; i++) {
+		char market[3], language_code[3];
+		snprintf(market, sizeof(market), "%s", list[i].country[0] ? list[i].country : "US");
+		snprintf(language_code, sizeof(language_code), "%s", list[i].language[0] ? list[i].language : "en");
+		if (strcmp(market, region) == 0 && strcmp(language_code, language) == 0) {
+			return region_select(i);
+		}
+	}
+	return false;
 }
 
 static bool android_player(const char *video_id, char **response, char *error, size_t error_size) {
@@ -1679,6 +1636,47 @@ static bool read_thumbnail(const json_doc_t *doc, int renderer, char *out, size_
 	return false;
 }
 
+// Is this text a listen count rather than a name? YouTube writes one where an
+// album's track list would name the artist ("1,2 mln plays", "12K plays"), and
+// on a row that plays it is noise: the row is a song, not a chart position. The
+// stored pages are not all English, so both the word and the bare number are
+// recognised: a leading count followed by a short unit is a count whatever
+// language the unit is in, and a name does not start that way.
+static bool text_is_play_count(const char *text) {
+	if (!text || !text[0]) {
+		return false;
+	}
+	static const char *const words[] = {
+		" play", "play count", "odtworz", "wyswietl", "wy\xC5\x9Bwietl", "reproduc",
+		"wiedergabe", "visualizz", "visualizac", "afspil", "soittok", "aflspr",
+	};
+	char lower[128];
+	size_t n = 0;
+	for (; text[n] && n + 1 < sizeof(lower); n++) {
+		char c = text[n];
+		lower[n] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+	}
+	lower[n] = '\0';
+	for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+		if (strstr(lower, words[i])) {
+			return true;
+		}
+	}
+	// A number, then a short unit: "1,2 mln", "12K", "3.4M", "1 234". A name
+	// that happens to start with a digit ("2Pac") has more than five letters
+	// after it and is left alone.
+	const char *p = text;
+	while (*p == ' ') p++;
+	if (!isdigit((unsigned char)*p)) {
+		return false;
+	}
+	while (isdigit((unsigned char)*p) || *p == ',' || *p == '.' || *p == ' ' || *p == '\'' ||
+		   (unsigned char)*p == 0xC2 || (unsigned char)*p == 0xA0) {
+		p++;
+	}
+	return p != text && strlen(p) <= 5;
+}
+
 // The album of a song row.
 //
 // The second column is "artist <bullet> album <bullet> duration", one run per
@@ -1700,6 +1698,7 @@ static void read_album(const json_doc_t *doc, int renderer, ytmusic_item_t *item
 			continue;
 		}
 		if (!past_artist) continue; // the artist, and the "&" / "," between names
+		if (text_is_play_count(text)) continue; // a chart position, not this song's album
 		size_t used = strlen(album);
 		snprintf(album + used, sizeof(album) - used, "%s", text);
 	}
@@ -1728,12 +1727,27 @@ static bool read_item(const json_doc_t *doc, int renderer, ytmusic_item_t *item)
 	if (!item->title[0]) json_str(doc, json_path(doc, renderer, "title.runs.0.text"), item->title, sizeof(item->title));
 	// The second column is the artist, or the show for an episode; the third
 	// holds the album, or a play count on an album page. The first one that says
-	// something is the subtitle.
-	json_str(doc, json_path(doc, renderer, "flexColumns.1.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), item->subtitle, sizeof(item->subtitle));
-	if (!item->subtitle[0]) {
-		json_str(doc, json_path(doc, renderer, "flexColumns.2.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"), item->subtitle, sizeof(item->subtitle));
+	// something is the subtitle -- unless what it says is a play count, which is
+	// what an album's or a chart's track list puts where a song puts its artist.
+	// The next column is tried instead; a row that only ever offers counts keeps
+	// its name and its sleeve and says nothing else, which is how the Tidal rows
+	// read.
+	static const char *const subtitle_paths[] = {
+		"flexColumns.1.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text",
+		"flexColumns.2.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text",
+		"subtitle.runs.0.text",
+	};
+	for (size_t i = 0; i < sizeof(subtitle_paths) / sizeof(subtitle_paths[0]); i++) {
+		char text[YTMUSIC_NAME_MAX] = "";
+		if (!json_str(doc, json_path(doc, renderer, subtitle_paths[i]), text, sizeof(text)) || !text[0]) {
+			continue;
+		}
+		if (text_is_play_count(text)) {
+			continue;
+		}
+		snprintf(item->subtitle, sizeof(item->subtitle), "%s", text);
+		break;
 	}
-	if (!item->subtitle[0]) json_str(doc, json_path(doc, renderer, "subtitle.runs.0.text"), item->subtitle, sizeof(item->subtitle));
 	if (item->kind == YTMUSIC_ITEM_TRACK) read_album(doc, renderer, item);
 	read_thumbnail(doc, renderer, item->thumbnail, sizeof(item->thumbnail));
 	char duration[32] = "";
@@ -1831,83 +1845,23 @@ static bool item_renderer_key(const char *key, size_t len) {
 	return false;
 }
 
-// Parse each item renderer on its own instead of materializing the entire
-// page as one token tree. This uses much less RAM and still returns complete
-// early rows if YouTube sends a response larger than our bounded HTTP buffer.
-//
-// A public page that came back with nothing is the one failure a log can
-// diagnose from an armchair: what the body holds says whether Google sent
-// results nobody read (the renderers would be there), a consent or bot wall
-// ("consent", "Sign in to confirm"), or nothing at all. The head and the tail
-// say the rest -- a body cut off mid-transfer ends mid-string, and that tail
-// is the fingerprint of a connection that died on the way.
+// A public page that came back with nothing is worth one line in the
+// developer log -- the length alone tells a consent wall (a big HTML page)
+// from a transfer that died (a stub) from a request that never went out. The
+// body itself is not kept anywhere: a working player has no use for whole
+// search JSONs on the card, and the developer log switch is the only way
+// anything is collected.
 static void ytmusic_log_empty_body(const char *what, const char *body) {
 	if (!body) {
 		fprintf(stderr, "ytmusic: %s page empty: no body at all\n", what);
 		return;
 	}
-	static const char *const markers[] = {
-		"musicResponsiveListItemRenderer",
-		"musicTwoRowItemRenderer",
-		"musicShelfRenderer",
-		"musicCarouselShelfRenderer",
-		"consent",
-		"Sign in to confirm",
-		"playabilityStatus",
-	};
-	fprintf(stderr, "ytmusic: %s page empty, %zu bytes:", what, strlen(body));
-	for (size_t i = 0; i < sizeof(markers) / sizeof(markers[0]); i++) {
-		int hits = 0, as_keys = 0;
-		const char *at = body;
-		size_t len = strlen(markers[i]);
-		while ((at = strstr(at, markers[i])) != NULL) {
-			hits++;
-			// A key occurrence carries a closing quote and a colon; anything
-			// else is the name inside some other string.
-			if (at[len] == '"' && at[len + 1] == ':') {
-				as_keys++;
-			}
-			at += len;
-		}
-		if (hits) {
-			fprintf(stderr, " %s=%d(key %d)", markers[i], hits, as_keys);
-		}
-	}
-	// The head names what the page actually is; the tail is where a cut-off
-	// transfer shows itself.
-	fprintf(stderr, "\nytmusic: %s head: %.200s\n", what, body);
-	size_t n = strlen(body);
-	fprintf(stderr, "ytmusic: %s tail: %.160s\n", what, n > 160 ? body + n - 160 : body);
-
-	// And the whole body lands beside the player's own files for a pull, if
-	// the log is not enough: <card>/.local/ytmusic/ when a card was named
-	// (it survives reboots), the tmpfs when it was not. One file per kind,
-	// rewritten on every empty answer.
-	char folder[640], path[700];
-	if (card_root[0]) {
-		char parent[620];
-		snprintf(parent, sizeof(parent), "%s/.local", card_root);
-		mkdir(parent, 0755);
-		snprintf(folder, sizeof(folder), "%s/ytmusic", parent);
-		mkdir(folder, 0755);
-		snprintf(path, sizeof(path), "%s/empty-%s.json", folder, what);
-	} else {
-		mkdir(playback_cache_dir(), 0700);
-		snprintf(folder, sizeof(folder), "%s", playback_cache_dir());
-		snprintf(path, sizeof(path), "%s/empty-%s.json", folder, what);
-	}
-	FILE *f = fopen(path, "wb");
-	if (f) {
-		size_t dumped = strlen(body);
-		if (dumped > 1024 * 1024) {
-			dumped = 1024 * 1024;
-		}
-		fwrite(body, 1, dumped, f);
-		fclose(f);
-		fprintf(stderr, "ytmusic: %s body kept at %s\n", what, path);
-	}
+	fprintf(stderr, "ytmusic: %s page empty, %zu bytes\n", what, strlen(body));
 }
 
+// Parse each item renderer on its own instead of materializing the entire
+// page as one token tree. This uses much less RAM and still returns complete
+// early rows if YouTube sends a response larger than our bounded HTTP buffer.
 static int collect_items_compact(const char *response, ytmusic_item_t *items, int limit) {
 	const char *json = youtubei_json_start(response);
 	if (!json || (*json != '{' && *json != '[')) return -1;
@@ -2090,13 +2044,11 @@ int ytmusic_search_items(const char *query, ytmusic_filter_t filter,
 	// music catalogue can answer an OAuth request with a successful but empty
 	// page, even though the same query works for a signed-out visitor.
 	if (!youtubei_post_ex("search", request, false, true, &body, NULL, error, error_size)) return -1;
-	size_t response_bytes = strlen(body);
 	int count = collect_items_compact(body, items, limit);
 	if (count <= 0) {
 		ytmusic_log_empty_body("search", body);
 	}
 	free(body);
-	fprintf(stderr, "ytmusic: public search returned %d rows from %zu response bytes\n", count, response_bytes);
 	if (count < 0) set_error(error, error_size, "ytmusic_unreadable_reply");
 	return count;
 }
@@ -2212,13 +2164,11 @@ int ytmusic_explore_sections(ytmusic_section_t *sections, int limit,
 	// Explore is public too; keep it independent of an attached account just
 	// like search, so a rejected token cannot turn the front page empty.
 	if (!youtubei_post_ex("browse", request, false, true, &body, NULL, error, error_size)) return -1;
-	size_t response_bytes = strlen(body);
 	int count = collect_sections(body, sections, limit);
 	if (!count) {
 		ytmusic_log_empty_body("explore", body);
 	}
 	free(body);
-	fprintf(stderr, "ytmusic: public Explore returned %d sections from %zu response bytes\n", count, response_bytes);
 	if (!count) set_error(error, error_size, "ytmusic_explore_empty");
 	return count;
 }
@@ -2587,16 +2537,19 @@ static void stream_note(stream_hook_t *hook, uint64_t done) {
 	if (hook->ready) hook->ready(hook->path, hook->user);
 }
 
-// How many bytes before the decoder is given the file. A fraction of the whole
-// when the instance said how big it is -- an eighth, so a long track is not
-// held back for longer than a short one -- with a floor and a ceiling: under
+// How many bytes before the decoder is given the file. A small fraction of the
+// whole when the instance said how big it is, with a floor and a ceiling: under
 // the floor the header and the first frames are not there yet, and above the
 // ceiling the wait stops being about latency and starts being the download.
+//
+// The rest of the track arrives behind the player (see mp4.c's growth support),
+// so this is only "enough to open", not "enough to hear the song": waiting for
+// a larger slice of it was time spent looking at a card.
 static uint64_t stream_threshold(uint64_t expected) {
-	uint64_t at = expected ? expected / 8 : 0;
-	if (at < 196608) at = 196608;
+	uint64_t at = expected ? expected / 24 : 0;
+	if (at < 131072) at = 131072;
 	if (expected && at > expected / 2) at = expected / 2;
-	if (at > 1048576) at = 1048576;
+	if (at > 393216) at = 393216;
 	return at;
 }
 
@@ -2779,6 +2732,30 @@ static void prune_playback_cache(const char *keep_id) {
 		remove(path);
 	}
 	closedir(dir);
+}
+
+// The cached copy of a song, when there is a whole one.
+//
+// The tags are written beside the audio only once the transfer finished, so a
+// `.tags` file is the record of "this one is complete": a track whose download
+// stopped half way keeps its audio and never gets one. That is what makes this
+// test honest -- the file exists is not the question, the file is whole is.
+bool ytmusic_cached_track(const char *id, char *out, size_t out_size) {
+	if (!id || strlen(id) != 11 || !out || out_size == 0) {
+		return false;
+	}
+	const char *cache = playback_cache_dir();
+	char final[512], tags[520];
+	if (snprintf(final, sizeof(final), "%s/%s.m4a", cache, id) >= (int)sizeof(final) ||
+		snprintf(tags, sizeof(tags), "%s.tags", final) >= (int)sizeof(tags) ||
+		strlen(final) >= out_size) {
+		return false;
+	}
+	if (growfile_is_growing(final) || access(final, R_OK) != 0 || access(tags, R_OK) != 0) {
+		return false;
+	}
+	snprintf(out, out_size, "%s", final);
+	return true;
 }
 
 // Whether a path is one of this module's own finished downloads -- the file the

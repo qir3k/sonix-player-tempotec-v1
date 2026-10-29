@@ -42,6 +42,12 @@
 #include "src/system/streaming/streamkeys.h"
 #include "src/system/streaming/ytmusic.h"
 
+// The shared region list asks lang.c for a row's label. That file is the whole
+// translation tree -- it relabels every widget in the interface -- so it is not
+// part of this suite; the identity tr() the interface falls back to when no
+// language file is readable is what stands in its place here.
+const char *tr(const char *text) { return text; }
+
 static int failures;
 
 #define CHECK(cond)                                                         \
@@ -854,16 +860,23 @@ static void test_region_choice(void) {
 	CHECK(strcmp(region, "US") == 0);
 	CHECK(strcmp(language, "en") == 0);
 
-	// Poland's charts with English row names, which is the pair the settings
-	// page offers first after Worldwide.
-	CHECK(ytmusic_region_select("pl", "en"));
+	// Poland, the pair the shared region list offers for Polish
+	// (core/region.h): one entry per language the player speaks, so the
+	// charts and the row names move together.
+	CHECK(ytmusic_region_select("PL", "pl"));
 	ytmusic_region_active(region, sizeof(region), language, sizeof(language));
 	CHECK(strcmp(region, "PL") == 0);
-	CHECK(strcmp(language, "en") == 0);
+	CHECK(strcmp(language, "pl") == 0);
 
+	// A pair the shared list does not offer, and two codes that are not
+	// codes: both are refused rather than stored.
+	CHECK(!ytmusic_region_select("PL", "en"));
 	CHECK(!ytmusic_region_select("P", "en"));
 	CHECK(!ytmusic_region_select("PL", "english"));
 	CHECK(ytmusic_region_select("US", "en"));
+	ytmusic_region_active(region, sizeof(region), language, sizeof(language));
+	CHECK(strcmp(region, "US") == 0);
+	CHECK(strcmp(language, "en") == 0);
 }
 
 static void test_cache_owns_its_own_downloads(void) {

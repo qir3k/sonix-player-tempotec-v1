@@ -662,11 +662,13 @@ static bool open_chain(const ui_font_t *ui, int size, font_set_t *set, size_t in
 	lv_font_t *tail = head;
 
 	lv_font_t *rodin = NULL;
-	if (ui->bold && japanese.bold) {
-		rodin = chain_open(set, index, japanese.bold, size);
-	}
-	if (!rodin && japanese.regular) {
-		rodin = chain_open(set, index, japanese.regular, size);
+	if (fonts_script_enabled(japanese.name)) {
+		if (ui->bold && japanese.bold) {
+			rodin = chain_open(set, index, japanese.bold, size);
+		}
+		if (!rodin && japanese.regular) {
+			rodin = chain_open(set, index, japanese.regular, size);
+		}
 	}
 	if (rodin) {
 		head->get_glyph_dsc = main_glyph_dsc;
@@ -678,6 +680,12 @@ static bool open_chain(const ui_font_t *ui, int size, font_set_t *set, size_t in
 
 	for (size_t i = 0; i < SCRIPT_COUNT; i++) {
 		script_face_t *script = &scripts[i];
+		if (!fonts_script_enabled(script->name)) {
+			// Off, so the file is not opened and no size of it is kept in
+			// the chain: a script somebody switched off costs nothing.
+			script->used = false;
+			continue;
+		}
 		lv_font_t *face = NULL;
 		if (ui->bold && script->bold) {
 			face = chain_open(set, index, script->bold, size);
@@ -919,10 +927,96 @@ bool fonts_set_text_size(int setting) {
 
 const char *fonts_choice(void) { return active.id; }
 
+static int scan_choices(const char **ids, const char **labels, int max, bool only_enabled);
+
+// ---------------------------------------------------------------------------
+// Which faces and which script fallbacks this build offers
+// (Plugins -> Languages & Fonts)
+//
+// Nothing is deleted: the files stay where they are and this is the switch
+// over which of them the picker lists and the chain opens. It is what a build
+// that used to be trimmed by a script now does at runtime, so the same device
+// can run barebones and then grow again without a rebuild.
+//
+// It starts on, as every addon does: a face the image already carries must
+// keep being offered until somebody switches it off. Two rules keep a switch
+// from breaking the screen in front of somebody: the face in use answers on
+// whatever the switch says, and so does the default face -- the one every page
+// draws with before anyone has chosen.
+// ---------------------------------------------------------------------------
+bool fonts_locked(const char *id) {
+	if (!id || !id[0]) {
+		return false;
+	}
+	return strcmp(id, FACE_DEFAULT_ID) == 0 || (active.id[0] && strcmp(id, active.id) == 0);
+}
+
+bool fonts_enabled(const char *id) {
+	if (!id || !id[0]) {
+		return false;
+	}
+	if (fonts_locked(id)) {
+		return true;
+	}
+	return config_get_bool("fonts", id, true);
+}
+
+void fonts_set_enabled(const char *id, bool on) {
+	if (!id || !id[0]) {
+		return;
+	}
+	config_set_bool("fonts", id, on);
+	config_save();
+}
+
+// The script faces, in the order they are chained: the four names the page
+// offers a switch for, each with its own file behind it or not.
+int fonts_script_names(const char **names, int max) {
+	int count = 0;
+	if (names && max > 0) {
+		names[count++] = japanese.name;
+	}
+	for (size_t i = 0; i < SCRIPT_COUNT && names && count < max; i++) {
+		names[count++] = scripts[i].name;
+	}
+	return count;
+}
+
+// On by default, unlike the faces: this is what keeps a Korean song title or
+// an Arabic book from drawing as squares, which is a correctness matter
+// rather than a taste one. Switched off, the letters are simply not offered.
+bool fonts_script_enabled(const char *name) {
+	if (!name || !name[0]) {
+		return false;
+	}
+	return config_get_bool("font_scripts", name, true);
+}
+
+void fonts_set_script_enabled(const char *name, bool on) {
+	if (!name || !name[0]) {
+		return;
+	}
+	config_set_bool("font_scripts", name, on);
+	config_save();
+}
+
 int fonts_choices(const char **ids, const char **labels, int max) {
+	return scan_choices(ids, labels, max, true);
+}
+
+// The same faces with no switch applied, for the switchboard: a page that
+// only listed what is already on could never turn anything back on.
+int fonts_all_choices(const char **ids, const char **labels, int max) {
+	return scan_choices(ids, labels, max, false);
+}
+
+static int scan_choices(const char **ids, const char **labels, int max, bool only_enabled) {
 	int count = 0;
 	for (size_t i = 0; i < FACE_COUNT && count < max; i++) {
 		if (!first_present(faces[i].regular_files)) {
+			continue;
+		}
+		if (only_enabled && !fonts_enabled(faces[i].id)) {
 			continue;
 		}
 		ids[count] = faces[i].id;
@@ -932,6 +1026,9 @@ int fonts_choices(const char **ids, const char **labels, int max) {
 
 	card_scan();
 	for (int i = 0; i < card_count && count < max; i++) {
+		if (only_enabled && !fonts_enabled(card_ids[i])) {
+			continue;
+		}
 		ids[count] = card_ids[i];
 		labels[count] = card_labels[i];
 		count++;

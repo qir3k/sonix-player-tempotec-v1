@@ -372,7 +372,8 @@ UI_CFLAGS = $(CFLAGS) -MMD -MP
 # The Wi-Fi page and its manual-entry page for hidden networks, on the same
 # renderer; the radio under it is a recording stub (see test_wifi_pages.c).
 WIFIPAGE_SRC = $(ROOT)/tests/ui/test_wifi_pages.c $(ROOT)/src/gui/wireless/wifisettings.c \
-            $(ROOT)/src/gui/settings/plugins.c $(ROOT)/src/gui/shell/settingsrow.c $(ROOT)/src/gui/shell/keyboard.c \
+            $(ROOT)/src/gui/settings/plugins.c $(ROOT)/src/gui/settings/langfonts.c \
+            $(ROOT)/src/gui/shell/settingsrow.c $(ROOT)/src/gui/shell/keyboard.c \
             $(ROOT)/src/gui/shell/popover.c $(ROOT)/src/gui/shell/spinner.c \
 			$(wildcard $(ROOT)/src/system/input/swipedict.c) \
             $(ROOT)/src/gui/shell/theme.c $(ROOT)/src/gui/shell/icons.c \
@@ -394,6 +395,7 @@ SAVER_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(SAVER_SRC)) \
 # The Calculator and Notes pages on the same renderer, at both panel sizes:
 # every key, every row and every note inside the panel they are drawn on.
 TOOLS_SRC = $(ROOT)/tests/ui/test_tools_pages.c \
+            $(ROOT)/src/gui/settings/plugins.c $(ROOT)/src/gui/settings/langfonts.c \
             $(ROOT)/src/gui/calculator/calculator.c $(ROOT)/src/gui/calculator/calcmodel.c \
             $(ROOT)/src/gui/notes/notes.c $(ROOT)/src/gui/notes/noteeditor.c \
             $(ROOT)/src/gui/metronome/metronome.c \
@@ -473,6 +475,7 @@ YTM_KEY_FLAG = -DYTMUSIC_API_KEY='"test-key-not-a-credential"'
 YTM_SRC = test_ytmusic.c win_compat_host.c $(ROOT)/src/system/streaming/ytmusic.c \
           $(ROOT)/src/system/streaming/streamkeys.c \
           $(ROOT)/src/system/core/json.c $(ROOT)/src/system/core/config.c \
+          $(ROOT)/src/system/core/region.c \
           $(ROOT)/src/system/core/sha1.c $(ROOT)/src/system/decode/growfile.c
 .PHONY: ytmusic
 ytmusic: $(BUILD)/test_ytmusic $(BUILD)/test_ytmusic_keyless

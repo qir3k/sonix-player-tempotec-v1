@@ -29,6 +29,7 @@
 #include "src/system/playback/device_state.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
+#include "src/system/core/region.h"
 #include "src/system/playback/playlist.h"
 #include "src/system/streaming/podcast.h"
 #include "src/system/streaming/podcastcache.h"
@@ -3833,22 +3834,17 @@ static void build_order_card(lv_obj_t *parent) {
 // The catalogue's trending list takes one filter that means "somewhere": a
 // language. There is no country parameter to ask for -- that was checked against
 // its documentation rather than assumed -- so the region offered here is its
-// language, with the interface's own first: English, Italian, German and the
-// rest of the languages the player already speaks. Choosing one changes which
-// chart the Trending pill shows, and the copy on the card is dropped with it.
+// language, with Worldwide first: every region page in the player -- this one,
+// Radio, YouTube Music and the sort order here -- writes the same shared choice
+// in system/core/region.h, and reads it back from it, so there is one list and
+// one default instead of five copies. Choosing one changes which chart the
+// Trending pill shows, and the copy on the card is dropped with it.
 // ---------------------------------------------------------------------------
 
-typedef struct {
-	const char *code;  // ISO 639, "" for the interface's own language
-	const char *label; // a translation key, or a name that reads the same everywhere
-} region_t;
-
-static const region_t REGIONS[] = {
-	{"", "podcast_region_interface"}, {"en", "English"},   {"it", "Italiano"}, {"de", "Deutsch"},
-	{"es", "Español"},              {"fr", "Français"},  {"nl", "Nederlands"}, {"pl", "Polski"},
-	{"pt", "Português"},             {"ru", "Русский"}, {"zh", "中文"},     {"ja", "日本語"},
-};
-#define REGION_COUNT ((int)(sizeof(REGIONS) / sizeof(REGIONS[0])))
+// The shared list, read here on every rebuild rather than cached: the choice
+// may have been made on another page of the same session.
+static region_t region_rows[REGION_LIST_MAX];
+static int region_count;
 
 static lv_obj_t *region_screen;
 static lv_obj_t *region_container;
@@ -3869,13 +3865,21 @@ static void region_value_set(const char *label) {
 
 static void region_pick_cb(lv_event_t *e);
 
+// The row whose language this is. Nobody's choice reads as the first row,
+// which region.h keeps as Worldwide.
 static int region_index_of(const char *code) {
-	for (int i = 0; i < REGION_COUNT; i++) {
-		if (strcmp(REGIONS[i].code, code ? code : "") == 0) {
+	for (int i = 0; i < region_count; i++) {
+		if (strcmp(region_rows[i].language, code ? code : "") == 0) {
 			return i;
 		}
 	}
 	return 0;
+}
+
+// A built-in region names itself in its own language -- Polski, not Polish --
+// and arrives from region.h already final; the rest are translation keys.
+static const char *region_row_label(int i) {
+	return region_rows[i].translated ? region_rows[i].label : tr(region_rows[i].label);
 }
 
 static void region_rows_rebuild(void) {
@@ -3885,14 +3889,15 @@ static void region_rows_rebuild(void) {
 	int keep_scroll = (int)lv_obj_get_scroll_y(region_container);
 	lv_obj_clean(region_container);
 
+	region_count = region_list(region_rows, REGION_LIST_MAX);
 	int active = region_index_of(podcast_trending_lang());
-	for (int i = 0; i < REGION_COUNT; i++) {
+	for (int i = 0; i < region_count; i++) {
 		lv_obj_t *value = NULL;
-		lv_obj_t *row = settingsrow_add(region_container, REGIONS[i].label, &value, region_pick_cb,
+		lv_obj_t *row = settingsrow_add(region_container, region_row_label(i), &value, region_pick_cb,
 										(void *)(intptr_t)i);
 		if (i == active) {
-			// The chosen one, and only it: a tick says which of twelve rows the
-			// chart is coming from without a second word on every row.
+			// The chosen one, and only it: a tick says which row the chart is
+			// coming from without a second word on every row.
 			settingsrow_add_icon(row, &icon_check, THEME_SEMANTIC_GREEN);
 		}
 	}
@@ -3905,14 +3910,15 @@ static void region_pick_cb(lv_event_t *e) {
 		return;
 	}
 	int index = (int)(intptr_t)lv_event_get_user_data(e);
-	if (index < 0 || index >= REGION_COUNT) {
+	if (index < 0 || index >= region_count) {
 		return;
 	}
-	podcast_set_trending_lang(REGIONS[index].code);
-	// The chart on the card is from the region that was chosen a moment ago.
+	// The shared choice, so Radio, YouTube Music and the sort order here all
+	// move together; the podcast chart drops its copy with it.
+	podcast_set_trending_lang(region_rows[index].language);
 	listcache_drop(podcast_trending_cache_key());
 	trending_stale = true;
-	region_value_set(tr(REGIONS[index].label));
+	region_value_set(region_row_label(index));
 	region_rows_rebuild();
 }
 
@@ -3937,7 +3943,8 @@ static lv_obj_t *stop_episode_switch;
 static settingsrow_duration_t sleep_row;
 
 static void refresh_settings_rows(void) {
-	region_value_set(tr(REGIONS[region_index_of(podcast_trending_lang())].label));
+	region_count = region_list(region_rows, REGION_LIST_MAX);
+	region_value_set(region_row_label(region_index_of(podcast_trending_lang())));
 	if (stop_episode_switch) {
 		if (podcast_stop_at_episode_end()) {
 			lv_obj_add_state(stop_episode_switch, LV_STATE_CHECKED);

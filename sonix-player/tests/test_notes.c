@@ -364,7 +364,7 @@ static void test_fits_editor(void) {
 }
 
 int main(void) {
-	char root[] = "/tmp/sonix-notes-XXXXXX";
+	char root[600] = "/tmp/sonix-notes-XXXXXX";
 	assert(mkdtemp(root));
 	assert(notes_dir(dir, sizeof(dir), root));
 
