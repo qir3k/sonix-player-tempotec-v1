@@ -212,6 +212,23 @@ bool ytmusic_stream_for_playback(const ytmusic_track_t *track, char *path, size_
 								 ytmusic_ready_cb ready, void *user,
 								 char *error, size_t error_size);
 
+// The name that song's cache file has, whether or not anything has been
+// downloaded yet. This is what the page builds its queue from: YouTube Music
+// has no files of its own until the cache makes them, so the list the listener
+// tapped in becomes a queue of the paths those songs will have. False when the
+// id is not eleven characters or the path does not fit.
+bool ytmusic_cache_path_for(const char *id, char *out, size_t out_size);
+
+// Whether that cache file is whole -- downloaded to its end, with the marker
+// that says so. A file still arriving is playable and answers false here.
+bool ytmusic_cache_whole(const char *path);
+
+// Writes the track's title, artist and album beside its cache file before any
+// of it is downloaded, so a queued song that has not arrived yet still has a
+// name in the player and in the queue. Text only; the sleeve comes with the
+// audio.
+bool ytmusic_cache_write_sidecars(const ytmusic_track_t *track, const char *path);
+
 // Whether `path` is a finished download of that cache -- what the player was
 // handed for a YouTube Music song, and the only kind of file the "save to the
 // card" action copies out of it.

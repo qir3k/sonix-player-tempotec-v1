@@ -433,8 +433,11 @@ static void queue_persist(void) {
 
 void device_state_queue_changed(void) { queue_persist(); }
 
-// Four streaming preparations: Qobuz, Tidal, podcasts and Subsonic.
-#define PREPARE_CB_MAX 4
+// The streaming preparations: Qobuz, Tidal, podcasts, Subsonic and YouTube
+// Music -- one per service, and two spare for the next ones. A service that
+// cannot register is a service whose queue stops at its first song that has not
+// been downloaded, so the count is here rather than "four, and that is enough".
+#define PREPARE_CB_MAX 7
 static device_state_prepare_cb prepare_cbs[PREPARE_CB_MAX];
 static int prepare_cb_count;
 

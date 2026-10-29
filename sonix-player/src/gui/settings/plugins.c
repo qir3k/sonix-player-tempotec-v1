@@ -10,7 +10,6 @@
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/settings/homeslot.h"
 #include "src/gui/settings/langfonts.h"
-#include "src/gui/shell/favmark.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -66,9 +65,6 @@ static void build_fav_mark_row(lv_obj_t *list) {
 	lv_obj_t *star_pill = settingsrow_pill(pills, "fav_mark_star", 1, fav_glyph_pill_cb);
 	settingsrow_pill_active(heart, !star);
 	settingsrow_pill_active(star_pill, star);
-	// The glyph the row is about, beside its name, so the choice reads as a
-	// picture and not only as two words.
-	settingsrow_add_icon(row, favmark_filled(), THEME_SEMANTIC_AMBER);
 }
 
 void plugins_init(gui_config_t *cfg) {

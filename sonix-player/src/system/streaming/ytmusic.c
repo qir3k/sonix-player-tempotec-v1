@@ -2462,6 +2462,59 @@ static bool write_playback_tags(const char *path, const ytmusic_track_t *track) 
 // title and an artist on screen, and a half-downloaded track carrying them
 // would pass for a whole one. A marker of its own says only that: the audio is
 // all here.
+// The name a song's cache file has, whether or not it is there yet.
+//
+// The queue needs this before anything is downloaded. YouTube Music has no
+// files of its own until the cache makes them, so the list the listener tapped
+// in becomes a queue of the paths those songs will have -- exactly the shape
+// Tidal's queue has, and the reason next and previous stay inside the service
+// instead of walking whatever folder the last song happened to live in.
+bool ytmusic_cache_path_for(const char *id, char *out, size_t out_size) {
+	if (!id || strlen(id) != 11 || !out || out_size == 0) {
+		return false;
+	}
+	const char *cache = playback_cache_dir();
+	char name[512];
+	if (snprintf(name, sizeof(name), "%s/%s.m4a", cache, id) >= (int)sizeof(name)) {
+		return false;
+	}
+	if (strlen(name) >= out_size) {
+		return false;
+	}
+	snprintf(out, out_size, "%s", name);
+	return true;
+}
+
+// Whether that cache file is whole: its end was reached and the .done marker
+// says so. A file that is still arriving answers false -- it is playable, just
+// not finished, and the difference matters to whoever is deciding whether to
+// start a transfer.
+bool ytmusic_cache_whole(const char *path) {
+	char id[16], name[512], done[520];
+	if (!ytmusic_cache_track_id(path, id, sizeof(id))) {
+		return false;
+	}
+	if (!ytmusic_cache_path_for(id, name, sizeof(name))) {
+		return false;
+	}
+	if (snprintf(done, sizeof(done), "%s.done", name) >= (int)sizeof(done)) {
+		return false;
+	}
+	return !growfile_is_growing(name) && access(name, R_OK) == 0 && access(done, R_OK) == 0;
+}
+
+// The title, artist and album of a queued song, written beside the file before
+// any of it is downloaded. The queue holds the whole list, so playback can
+// reach a song that has not arrived; without this its row and the player would
+// show the video id until the transfer began. Text only: a sleeve is a
+// download per track, and arrives with the audio.
+bool ytmusic_cache_write_sidecars(const ytmusic_track_t *track, const char *path) {
+	if (!track || !path || !path[0]) {
+		return false;
+	}
+	return write_playback_tags(path, track);
+}
+
 static void mark_complete(const char *path, bool done) {
 	char marker[700];
 	if (snprintf(marker, sizeof(marker), "%s.done", path) >= (int)sizeof(marker)) {
@@ -2680,11 +2733,14 @@ static uint64_t stream_threshold(uint64_t expected) {
 
 // The file in ranged chunks. False when Range is not honoured (or nothing came
 // back), which is the caller's cue to download it in one piece instead.
-static bool download_ranged(const char *url, const char *part, uint64_t *downloaded, bool *complete,
-							stream_hook_t *hook) {
-	*downloaded = 0;
+static bool download_ranged(const char *url, const char *part, uint64_t from, uint64_t *downloaded,
+							bool *complete, stream_hook_t *hook) {
+	// `from` is not always zero: a transfer that stopped early is continued by
+	// another source at the byte it reached (see download_for_playback), and
+	// that continuation appends to the file the decoder is already reading.
+	*downloaded = from;
 	*complete = false;
-	FILE *f = fopen(part, "wb");
+	FILE *f = fopen(part, from > 0 ? "ab" : "wb");
 	if (!f) {
 		fprintf(stderr, "ytmusic: the cache file %.64s cannot be written (%s)\n", part,
 				strerror(errno));
@@ -3058,6 +3114,15 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 	int count = play_sources(sources, YTMUSIC_SOURCES_MAX);
 	char last[192] = "";
 	bool kept_any = false;
+	// A song that is already playing must not stop where its first instance
+	// lost interest. `resume_from` is how many bytes are on disk when a source
+	// stops early; the next one is asked for the rest, from that byte, and
+	// appends to the same growing file. `resume_expected` is the length the
+	// first source stated, because a second instance that picks a different
+	// audio stream would splice two files together: the continuation is only
+	// offered to one that says the stream is the same size.
+	uint64_t resume_from = 0;
+	uint64_t resume_expected = 0;
 	for (int i = 0; i < count; i++) {
 		char label[YTMUSIC_SOURCE_MAX], reason[192] = "", url[YTMUSIC_URL_MAX];
 		bool proxied = false;
@@ -3083,36 +3148,58 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 			// file is already being written for a player that is reading it.
 			// Starting the transfer over would truncate it under the decoder,
 			// so the same growing file is handed over instead.
-			if (growfile_is_growing(final)) {
+			//
+			// Only on the first pass: past `resume_from` the file is growing
+			// because this loop is still writing it, and handing it back here
+			// would be answering "it is arriving" without ever finishing it.
+			if (resume_from == 0 && growfile_is_growing(final)) {
 				hook->called = true;
 				snprintf(path, path_size, "%s", final);
 				if (hook->ready) hook->ready(final, hook->user);
 				return true;
 			}
-			hook->path = final;
-			hook->ready_at = stream_threshold(expected);
-			// Announced before the first byte, because the reader registers
-			// itself from the player the moment playback starts, and an
-			// unannounced path is an ordinary -- empty -- file to it.
-			remove(final);
-			// The title, the artist and the sleeve before the first byte. The
-			// player is handed this file the moment the index has landed, and
-			// whatever is not beside it by then is what it shows: a YouTube
-			// Music song used to come up nameless, artistless and without a
-			// picture, because both were written only once the transfer ended.
-			// The metadata is not a claim that the file is whole any more --
-			// that is what the .done marker is for.
-			write_playback_tags(final, track);
-			save_cover(final, track->thumbnail);
-			mark_complete(final, false);
-			growfile_announce(final, (long)expected);
+			if (resume_from == 0) {
+				hook->path = final;
+				hook->ready_at = stream_threshold(expected);
+				// Announced before the first byte, because the reader registers
+				// itself from the player the moment playback starts, and an
+				// unannounced path is an ordinary -- empty -- file to it.
+				remove(final);
+				// The title, the artist and the sleeve before the first byte. The
+				// player is handed this file the moment the index has landed, and
+				// whatever is not beside it by then is what it shows: a YouTube
+				// Music song used to come up nameless, artistless and without a
+				// picture, because both were written only once the transfer ended.
+				// The metadata is not a claim that the file is whole any more --
+				// that is what the .done marker is for.
+				write_playback_tags(final, track);
+				save_cover(final, track->thumbnail);
+				mark_complete(final, false);
+				growfile_announce(final, (long)expected);
+			} else if (!hook->path) {
+				hook->path = final;
+			}
 		} else {
 			remove(part);
 		}
 		uint64_t downloaded = 0;
 		bool complete = false;
-		bool ok = download_ranged(url, target, &downloaded, &complete, hook);
-		if (!ok && !(hook && hook->called)) {
+		if (resume_from > 0) {
+			if (expected && resume_expected && expected != resume_expected) {
+				// A different audio stream: its bytes would not line up with what
+				// is already on disk, and a file spliced from two streams is not
+				// a song. Left alone rather than made into corruption.
+				printf("ytmusic: %.11s: %s serves a %llu-byte stream, not the %llu-byte one being continued\n",
+					   track->id, label, (unsigned long long)expected,
+					   (unsigned long long)resume_expected);
+				break;
+			}
+			printf("ytmusic: %.11s: %s carries on from byte %llu\n", track->id, label,
+				   (unsigned long long)resume_from);
+		}
+		uint64_t from = streaming ? resume_from : 0;
+		bool ok = download_ranged(url, target, from, &downloaded, &complete, hook);
+		if (!ok && from == 0 && !(hook && hook->called)) {
 			// A server that will not answer a Range keeps the old behaviour: one
 			// transfer, started over, with the signature problem to live with.
 			// Not once playback has begun: starting the file over would truncate
@@ -3168,6 +3255,30 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 			return true;
 		}
 		if (streaming) {
+			// Playback is running on what arrived and the transfer has stopped.
+			// Another source is asked for the rest first, from the byte it
+			// reached: that is the difference between a song that ends after a
+			// minute and one that plays to its end when one instance of several
+			// is having a bad day.
+			// Only a source that stated the same length can continue it: two
+			// instances can pick different audio streams for one video, and a file
+			// spliced from two of them is not a song. A length nobody stated is
+			// no promise at all, so that case is not continued either.
+			bool same_stream = expected != 0 && (resume_expected == 0 || expected == resume_expected);
+			if (hook->called && downloaded > from && same_stream) {
+				if (resume_expected == 0) resume_expected = expected;
+				resume_from = downloaded;
+				kept_any = true;
+				snprintf(last, sizeof(last), "%s", "ytmusic_download_incomplete");
+				printf("ytmusic: %.11s: %s stopped at %llu bytes; continuing from there\n",
+					   track->id, label, (unsigned long long)downloaded);
+				continue;
+			}
+			// Nothing more is coming. The file has to be *finished*, not just
+			// left: its reader is waiting on the download, and a path nobody
+			// will write again that still says "growing" makes every read wait
+			// out the whole timeout -- a track that stands still instead of
+			// ending, which is what stopping after fifty seconds looked like.
 			growfile_finish(final, false);
 			if (hook->called) {
 				// Playback is already running on what arrived. The file is left as
@@ -3192,6 +3303,12 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 			kept_any = true;
 			snprintf(last, sizeof(last), "%s", "ytmusic_download_incomplete");
 		}
+	}
+	// Reaching here with a file still being written means every source gave up
+	// on it: the readers are told, so the decoder ends the track instead of
+	// waiting on a download that is not there.
+	if (streaming) {
+		growfile_finish(final, false);
 	}
 	set_error(error, error_size,
 			  last[0] ? last : (kept_any ? "ytmusic_download_incomplete" : "ytmusic_no_source"));

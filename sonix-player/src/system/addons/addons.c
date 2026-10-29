@@ -33,7 +33,7 @@ static const addon_t ADDONS[] = {
 	// Beside the search rather than inside it: writing into a file's tags
 	// rewrites the song, and somebody may well want the sleeve looked up and
 	// put beside the files without ever letting the player do that.
-	{"artwork_tag", "write_artwork_tags", "addon_artwork_tag_note", "plugins_section_features"},
+	{"artwork_tag", "addon_artwork_tag", "addon_artwork_tag_note", "plugins_section_features"},
 	{"autoeq", "autoeq", "addon_autoeq_note", "plugins_section_features"},
 	{"lastfm", "last_fm", "addon_lastfm_note", "plugins_section_features"},
 	{"listenbrainz", "listenbrainz", "addon_listenbrainz_note", "plugins_section_features"},

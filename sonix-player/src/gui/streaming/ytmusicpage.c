@@ -33,6 +33,7 @@
 #include "src/system/playback/sleeptimer.h"
 #include "src/system/net/wifi.h"
 #include "src/system/decode/growfile.h"
+#include "src/system/playback/device_state.h"
 #include "src/system/playback/playlist.h"
 #include "src/system/streaming/streamkeep.h"
 #include "src/system/streaming/ytmusic.h"
@@ -244,6 +245,9 @@ typedef struct {
 	// open it: from then on the page is playing, and the completion post must
 	// not play the song a second time.
 	bool started;
+	// Where the song sits in the queue the tap built. Playback is started on
+	// the queue, not on the file: see the note above yt_queue_paths.
+	int slot;
 } play_result_t;
 
 typedef struct {
@@ -1356,6 +1360,70 @@ static void fill_item_list(lv_obj_t *list, const ytmusic_item_t *items, int coun
 // playing a row
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// the queue
+// ---------------------------------------------------------------------------
+//
+// What plays after a song is the list it was tapped in, not whatever folder
+// the playback cache happens to hold. A YouTube Music song has no file of its
+// own until the cache writes one, but its name is known before any of it is
+// downloaded -- <cache>/<id>.m4a -- so the whole list goes into the queue up
+// front and each song is fetched as playback reaches it. That is the same
+// arrangement Tidal uses, and it is what makes next, previous and the queue
+// page stay inside YouTube Music instead of walking the card.
+//
+// The queue also carries names: the title, artist and album of every entry are
+// written beside its cache file first (as text, no downloads), so a song that
+// has not arrived yet is still a name and an artist on the player and in the
+// queue page rather than eleven characters of video id.
+
+#define YT_QUEUE_MAX YTMUSIC_PAGE_RESULTS
+
+static char yt_queue_paths[YT_QUEUE_MAX][512];
+static const char *yt_queue_ptrs[YT_QUEUE_MAX];
+static ytmusic_track_t yt_queue_tracks[YT_QUEUE_MAX];
+static int yt_queue_count;
+static int yt_queue_slot = -1;
+// A transfer the queue is waiting on: the entry playback stopped at, being
+// fetched. One at a time, because there is one of it to wait for.
+static bool yt_fetching;
+
+// The tapped song's list becomes the queue. Returns the slot the song sits in,
+// or -1 when the list holds no playable song at all.
+static int build_queue(const ytmusic_item_t *items, int count, int index) {
+	yt_queue_count = 0;
+	yt_queue_slot = -1;
+	for (int i = 0; i < count && yt_queue_count < YT_QUEUE_MAX; i++) {
+		if (items[i].kind != YTMUSIC_ITEM_TRACK || !items[i].id[0]) {
+			continue;
+		}
+		if (!ytmusic_cache_path_for(items[i].id, yt_queue_paths[yt_queue_count],
+									sizeof(yt_queue_paths[0]))) {
+			continue;
+		}
+		if (i == index) {
+			yt_queue_slot = yt_queue_count;
+		}
+		track_from_item(&items[i], &yt_queue_tracks[yt_queue_count]);
+		ytmusic_cache_write_sidecars(&yt_queue_tracks[yt_queue_count], yt_queue_paths[yt_queue_count]);
+		yt_queue_ptrs[yt_queue_count] = yt_queue_paths[yt_queue_count];
+		yt_queue_count++;
+	}
+	return yt_queue_slot;
+}
+
+// Hands the queue to the player at `slot`. device_state asks this page whether
+// the entry is there before opening it (see ytmusicpage_prepare_track), which
+// is where a song nobody has played yet starts downloading.
+static void play_queued(int slot) {
+	if (slot < 0 || slot >= yt_queue_count) {
+		return;
+	}
+	device_state_play_list((const char *const *)yt_queue_ptrs, yt_queue_count, slot);
+	player_refresh_now_playing();
+	player_sheet_open(true);
+}
+
 // The song is on its way: the file has enough of it for the decoder to open,
 // and the rest keeps arriving behind the player. Runs on the GUI thread.
 static void playback_begin(void *data) {
@@ -1363,9 +1431,8 @@ static void playback_begin(void *data) {
 	if (!result) return;
 	loading_hide();
 	end_busy();
-	player_play_file(result->path);
-	player_refresh_now_playing();
-	player_sheet_open(true);
+	yt_fetching = false;
+	play_queued(result->slot);
 }
 
 // Called from the download thread, once, at the byte the track can start from.
@@ -1385,13 +1452,12 @@ static void playback_ready(const char *path, void *user) {
 static void playback_done(void *data) {
 	play_result_t *result = data;
 	if (!result) return;
+	yt_fetching = false;
 	if (!result->started) {
 		loading_hide();
 		end_busy();
 		if (result->ok) {
-			player_play_file(result->path);
-			player_refresh_now_playing();
-			player_sheet_open(true);
+			play_queued(result->slot);
 		} else {
 			toast_error(result->error[0] ? result->error : "ytmusic_playback_failed");
 		}
@@ -1415,41 +1481,110 @@ static void *playback_worker(void *arg) {
 	return NULL;
 }
 
-static void play_item(const ytmusic_item_t *item) {
-	if (!item || item->kind != YTMUSIC_ITEM_TRACK || !item->id[0]) return;
+// One queue entry, fetched on its own thread. Both callers need exactly this:
+// the tap on a row, and the queue reaching a song that is not there yet.
+static bool start_transfer(const ytmusic_track_t *track, int slot) {
+	play_result_t *result = calloc(1, sizeof(*result));
+	if (!result) {
+		toast_error("ytmusic_out_of_memory");
+		return false;
+	}
+	result->track = *track;
+	result->slot = slot;
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, playback_worker, result) != 0) {
+		free(result);
+		toast_error("ytmusic_playback_failed");
+		return false;
+	}
+	pthread_detach(thread);
+	return true;
+}
+
+// A song in a list was tapped: that list becomes the queue, and the song is
+// fetched if the cache does not already hold it whole.
+static void play_item_at(const ytmusic_item_t *items, int count, int index) {
+	if (!items || index < 0 || index >= count) return;
+	const ytmusic_item_t *item = &items[index];
+	if (item->kind != YTMUSIC_ITEM_TRACK || !item->id[0]) return;
+	int slot = build_queue(items, count, index);
+	if (slot < 0) return;
 	// A song played a moment ago is still in the cache, whole. Playing it again
 	// is a local file: no transfer, and no card about one -- which is what a
 	// prompt on the second play of the same song was.
-	char cached[512];
-	if (ytmusic_cached_track(item->id, cached, sizeof(cached))) {
-		player_play_file(cached);
-		player_refresh_now_playing();
-		player_sheet_open(true);
+	if (ytmusic_cache_whole(yt_queue_paths[slot])) {
+		play_queued(slot);
 		return;
 	}
 	if (!begin_busy()) return;
-	play_result_t *result = calloc(1, sizeof(*result));
-	if (!result) {
-		end_busy();
-		toast_error("ytmusic_out_of_memory");
-		return;
-	}
-	track_from_item(item, &result->track);
+	yt_fetching = true;
 	loading_transfer = false;
 	loading_show();
-	pthread_t thread;
-	if (pthread_create(&thread, NULL, playback_worker, result) != 0) {
+	if (!start_transfer(&yt_queue_tracks[slot], slot)) {
+		yt_fetching = false;
 		loading_hide();
 		end_busy();
-		free(result);
-		toast_error("ytmusic_playback_failed");
-		return;
 	}
-	pthread_detach(thread);
 	// Nothing else is said here: loading_show() is already the card with the
 	// spinner, the percentage and the bar. The "downloading" popup that used to
 	// be raised on top of it said the same thing twice, and the older of the two
 	// covered the progress it was announcing.
+}
+
+// Which list a row belongs to. The row menu carries the item's own address and
+// playing needs the list around it, because the queue is the list.
+static void play_item(const ytmusic_item_t *item) {
+	if (!item) return;
+	for (int i = 0; i < result_count; i++) {
+		if (&result_items[i] == item) {
+			play_item_at(result_items, result_count, i);
+			return;
+		}
+	}
+	for (int i = 0; i < track_count; i++) {
+		if (&track_items[i] == item) {
+			play_item_at(track_items, track_count, i);
+			return;
+		}
+	}
+}
+
+// device_state is about to open a queue entry: "is it there yet?".
+//
+// A song nobody has played has no cache file, only a name in the queue. The
+// answer is "not yet", the previous track is stopped and the missing one is
+// fetched; when enough of it has arrived the queue is started again at that
+// entry, which this time answers "yes, arriving". That is what lets next and
+// previous walk a whole album without every song having been played first.
+bool ytmusicpage_prepare_track(char *path, size_t path_size) {
+	(void)path_size;
+	char id[16];
+	if (!path || !ytmusic_cache_track_id(path, id, sizeof(id))) {
+		return true; // not one of this page's files
+	}
+	if (ytmusic_cache_whole(path) || growfile_is_growing(path)) {
+		return true; // here, or well on its way
+	}
+	if (yt_fetching) {
+		return false; // one is already on its way, and it is this one
+	}
+	for (int i = 0; i < yt_queue_count; i++) {
+		if (strcmp(yt_queue_paths[i], path) != 0) {
+			continue;
+		}
+		// Stopped first, and not out of politeness: the entry before this one is
+		// reading a growing file, and taking that file out from under the audio
+		// thread makes it report "finished" -- the queue would then advance
+		// onto another missing song and start over.
+		printf("ytmusic: %.11s: queued but not downloaded; fetching it now\n", id);
+		device_state_stop();
+		yt_fetching = true;
+		if (!start_transfer(&yt_queue_tracks[i], i)) {
+			yt_fetching = false;
+		}
+		return false;
+	}
+	return true; // left over from another list: the player may try it
 }
 
 // ---------------------------------------------------------------------------
@@ -1710,12 +1845,21 @@ static void list_done(void *data) {
 static void item_clicked_cb(lv_event_t *e) {
 	int index = (int)(intptr_t)lv_event_get_user_data(e);
 	const ytmusic_item_t *item = NULL;
+	// The list a row was drawn in, kept so that playing it can queue the rest
+	// of that same list: a tap is "play this and what follows", not "play one
+	// file and fall back to whatever was queued before".
+	const ytmusic_item_t *list_items = NULL;
+	int list_count = 0;
 	if (lv_obj_get_parent(lv_event_get_target(e)) == results_list) {
 		if (index < 0 || index >= result_count) return;
 		item = &result_items[index];
+		list_items = result_items;
+		list_count = result_count;
 	} else {
 		if (index < 0 || index >= track_count) return;
 		item = &track_items[index];
+		list_items = track_items;
+		list_count = track_count;
 	}
 	if (selecting) {
 		// A tap chooses in this mode. A card is not a song, and has nothing to
@@ -1731,7 +1875,7 @@ static void item_clicked_cb(lv_event_t *e) {
 		snprintf(list_album, sizeof(list_album), "%s", item->title);
 		start_list_request(LIST_BROWSE, true, YTMUSIC_FILTER_SONGS, NULL, item->browse_id, item->title);
 	} else {
-		play_item(item);
+		play_item_at(list_items, list_count, index);
 	}
 }
 
@@ -2891,5 +3035,10 @@ void ytmusicpage_init(gui_config_t *cfg) {
 	if (art_timer) {
 		lv_timer_pause(art_timer);
 	}
+	// "Is this queued song there yet?", asked by the player each time the
+	// queue moves. The Tidal page registers the same kind of callback; it is
+	// what keeps a queue of songs that have never been played from emptying
+	// itself into silence.
+	device_state_add_prepare_cb(ytmusicpage_prepare_track);
 	switcher_attach_back_gesture(ytmusic_screen);
 }
