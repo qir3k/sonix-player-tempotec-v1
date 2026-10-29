@@ -139,12 +139,13 @@ carrying such a token comes back empty instead of failing, which is why a
 session signed in that way used to make search return nothing. If a player was
 set up before this change, sign in again so the new scope is granted.
 
-**This token alone does not fill Favourites.** The music endpoints refuse a
-Google sign-in token when it is asked for the library and answer with an empty
-page rather than an error, so the liked songs and your own playlists need the
-imported session of Option 1. Where the player is signed in that way and
-Favourites is opened, it now says what is missing instead of showing an empty
-list.
+This whole step is **optional**, and a build with no `client_id` / `client_secret`
+simply hides the row: nothing about listening needs it. What the token buys is
+the account's own pages — your playlists and your liked songs. The music
+endpoints refuse that token when it is asked for the library and answer with an
+empty page rather than an error, so those pages need the imported session of
+Option 1; where the player holds only a token, the page says so instead of
+listing nothing.
 
 ## What the page does
 
@@ -152,11 +153,16 @@ list.
 - **Explore** — the store's front page, one row per carousel ("New albums &
   singles", "Trending", …). Tapping a carousel lists its cards without another
   request.
-- **Top songs** — the charts page.
-- **Favourites** — the liked songs of the account. Needs Option 1: the imported
-  browser session is the only credential Google's music endpoints accept for the
-  library, and where it is missing the player says so rather than listing
-  nothing.
+- **Top songs** — the charts page.- **Favourites** — two answers, and it picks without being told. With a session
+  imported (Option 1) it is your account's liked songs, the list only that
+  credential can reach. Without one it is the player's own list of songs you
+  hearted here, with no account, no sign-in and no network involved: the heart
+  on now-playing and the row menu's *Add to favourites* both write it, and it
+  lives in `/usr/data/ytmusic_likes.tsv` beside `device_config.ini` — on the
+  internal storage, so it survives reboots and updates. A like is a record of
+  the song (video id, title, artist, album), not of a cache file, which is why
+  it no longer disappears when the playback cache is swept. The list holds up to
+  a hundred songs, newest first.
 - **Podcasts** — a podcast search. A show opens its episode list.
 - **Artwork** — every row draws the sleeve its entry came with, the same shared
   cover loader the Tidal, Qobuz and Podcasts tabs use. The images are kept on

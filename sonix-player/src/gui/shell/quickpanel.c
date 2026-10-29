@@ -51,6 +51,8 @@
 #include "src/system/streaming/tidalcache.h"
 #include "src/system/streaming/tidalsync.h"
 #include "src/system/streaming/radio.h"
+#include "src/system/streaming/ytmusic.h"
+#include "src/system/streaming/ytlikes.h"
 #include "src/system/remote/dlna.h"
 #include "src/system/remote/sonixlink.h"
 #include "src/system/net/wifi.h"
@@ -460,6 +462,7 @@ static void refresh_now_playing_card(void) {
 	bool fav;
 	long qobuz_id = 0;
 	long tidal_id = 0;
+	char yt_id[YTLIKES_ID_MAX] = "";
 	if (radio_current_station(&station)) {
 		fav = radio_fav_contains(station.uuid);
 	} else if (podcast) {
@@ -482,6 +485,10 @@ static void refresh_now_playing_card(void) {
 		// Reading the local database here would draw a heart that disagrees with
 		// the one a tap fills.
 		fav = qobuzsync_is_favorite(qobuz_id);
+	} else if (state.current_file[0] && ytmusic_cache_track_id(state.current_file, yt_id, sizeof(yt_id))) {
+		// A YouTube Music song: the heart reports this player's own list, which
+		// is where a like goes when no account session is imported.
+		fav = ytlikes_contains(yt_id);
 	} else {
 		fav = state.current_file[0] && library_fav_contains(state.current_file);
 	}
@@ -1350,6 +1357,26 @@ static void star_cb(lv_event_t *e) {
 	if (tidal_id > 0) {
 		bool want = !tidalsync_is_favorite(tidal_id);
 		tidalsync_favorite_toggle(tidal_id, want, qp_tidal_fav_done, NULL);
+		refresh_now_playing_card();
+		player_refresh_now_playing();
+		return;
+	}
+
+	// A YouTube Music song: the like is this player's own record of it -- id,
+	// title, artist -- so it survives the cache being swept and needs no
+	// account. The music database would keep a path to a file that is gone.
+	char yt_id[YTLIKES_ID_MAX];
+	if (ytmusic_cache_track_id(state.current_file, yt_id, sizeof(yt_id))) {
+		ytlike_t like;
+		const char *name = strrchr(state.current_file, '/');
+		memset(&like, 0, sizeof(like));
+		snprintf(like.id, sizeof(like.id), "%s", yt_id);
+		snprintf(like.title, sizeof(like.title), "%s",
+				 state.metadata.title[0] ? state.metadata.title : (name ? name + 1 : state.current_file));
+		snprintf(like.artist, sizeof(like.artist), "%s", state.metadata.artist);
+		snprintf(like.album, sizeof(like.album), "%s", state.metadata.album);
+		like.duration = (int)state.progress_total_secs;
+		ytlikes_toggle(&like);
 		refresh_now_playing_card();
 		player_refresh_now_playing();
 		return;

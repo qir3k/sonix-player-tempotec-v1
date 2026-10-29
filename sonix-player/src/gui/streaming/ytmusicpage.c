@@ -36,6 +36,7 @@
 #include "src/system/playback/playlist.h"
 #include "src/system/streaming/streamkeep.h"
 #include "src/system/streaming/ytmusic.h"
+#include "src/system/streaming/ytlikes.h"
 
 #define YTMUSIC_PAGE_RESULTS YTMUSIC_ITEMS_MAX
 #define YTMUSIC_LOGIN_QR_SIZE 190
@@ -105,6 +106,12 @@ static unsigned login_generation;
 // then.
 static char list_album[YTMUSIC_TITLE_MAX];
 
+// Whether the tracks screen is showing the favourites this player keeps itself
+// rather than a card opened from the store. Only that list has to be rebuilt
+// when one of its rows is unliked; everywhere else a heart changes nothing that
+// is on screen.
+static bool tracks_are_likes;
+
 // The rows of the home page: which of them are there, and in what order. Both
 // are the page's own setting, kept in the config as the numbers below -- the
 // order as one list, the switched-off ones as another -- so somebody who opens
@@ -171,6 +178,10 @@ static void home_build(void);
 // playing code below, used where the rows are built.
 static lv_obj_t *row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item);
 static void track_from_item(const ytmusic_item_t *item, ytmusic_track_t *track);
+// Fills the tracks screen from the player's own liked songs; defined with the
+// Favourites row, called from the row menu and from itself.
+static void favourites_refill(void);
+static void favourites_refill_async(void *user);
 
 // Whether the network is really there. Every row on this page is a request to
 // YouTube, and with no IP address each one ends in a generic error that does
@@ -568,7 +579,12 @@ static void open_downloads_cb(lv_event_t *e) {
 
 static void home_refresh_session_rows(void) {
 	bool logged_in = ytmusic_logged_in();
-	if (sign_in_row) lv_obj_set_hidden(sign_in_row, logged_in);
+	// Google's sign-in is offered only when this build was given the OAuth
+	// client it needs, and it is not needed for anything the player does on its
+	// own: playback comes from the instances, and the heart keeps a song in
+	// this player's own list. A row that can only answer "no key configured"
+	// is worse than no row.
+	if (sign_in_row) lv_obj_set_hidden(sign_in_row, logged_in || !ytmusic_oauth_configured());
 	if (sign_out_row) lv_obj_set_hidden(sign_out_row, !logged_in);
 }
 
@@ -1529,14 +1545,44 @@ static void row_menu_play(void *user) {
 	play_item((const ytmusic_item_t *)user);
 }
 
+// One row's heart, from the row itself rather than from the player: a song can
+// be liked without being played, which is what a list is for. The like is the
+// player's own record -- id, title, artist -- so it survives the cache being
+// swept and needs no account.
+static void row_menu_like(void *user) {
+	const ytmusic_item_t *item = user;
+	if (!item || item->kind != YTMUSIC_ITEM_TRACK || !item->id[0]) return;
+	if (ytlikes_contains(item->id)) {
+		ytlikes_remove(item->id);
+	} else {
+		ytlike_t like;
+		memset(&like, 0, sizeof(like));
+		snprintf(like.id, sizeof(like.id), "%s", item->id);
+		snprintf(like.title, sizeof(like.title), "%s", item->title);
+		snprintf(like.artist, sizeof(like.artist), "%s", item->subtitle);
+		snprintf(like.album, sizeof(like.album), "%s", item->album[0] ? item->album : list_album);
+		like.duration = item->duration;
+		if (ytlikes_add(&like)) toast_success("added_to_favourites");
+	}
+	// The favourites list is the one screen that shows what just changed, and
+	// rebuilding it deletes the very row this menu was opened on: the work is
+	// queued so it runs once the event has returned.
+	if (tracks_are_likes) gui_post(favourites_refill_async, NULL);
+}
+
 static void row_menu_cb(lv_event_t *e) {
 	const ytmusic_item_t *item = lv_event_get_user_data(e);
 	if (!item) return;
-	popover_item_t items[] = {
-		{"ytmusic_play", row_menu_play, (void *)item, false},
-		{"trackmenu_keep_on_card", row_menu_save, (void *)item, false},
-	};
-	popover_show(lv_event_get_target(e), items, 2);
+	popover_item_t items[3];
+	int count = 0;
+	items[count++] = (popover_item_t){"ytmusic_play", row_menu_play, (void *)item, false};
+	items[count++] = (popover_item_t){"trackmenu_keep_on_card", row_menu_save, (void *)item, false};
+	if (item->kind == YTMUSIC_ITEM_TRACK && item->id[0]) {
+		bool liked = ytlikes_contains(item->id);
+		items[count++] = (popover_item_t){liked ? "remove_from_favourites" : "medialist_add_to_favourites",
+										  row_menu_like, (void *)item, false};
+	}
+	popover_show(lv_event_get_target(e), items, count);
 }
 
 static lv_obj_t *row_kebab_add(lv_obj_t *row, const ytmusic_item_t *item) {
@@ -1637,6 +1683,9 @@ static void list_done(void *data) {
 	int count = result->count;
 	if (count > YTMUSIC_PAGE_RESULTS) count = YTMUSIC_PAGE_RESULTS;
 	if (result->to_tracks) {
+		// Whatever a card opened, the tracks screen is a page of the store
+		// again: only the Favourites row sets this.
+		tracks_are_likes = false;
 		track_count = count;
 		memcpy(track_items, result->items, sizeof(track_items[0]) * (size_t)count);
 		lv_label_set_text(tracks_title, tr(result->title[0] ? result->title : "ytmusic_browse"));
@@ -1767,6 +1816,7 @@ static void section_clicked_cb(lv_event_t *e) {
 	int index = (int)(intptr_t)lv_event_get_user_data(e);
 	if (index < 0 || index >= explore_section_count) return;
 	const ytmusic_section_t *section = &explore_sections[index];
+	tracks_are_likes = false;
 	result_count = section->count;
 	memcpy(result_items, section->items, sizeof(result_items[0]) * (size_t)result_count);
 	lv_label_set_text(results_title, tr(section->title[0] ? section->title : "ytmusic_explore"));
@@ -2060,14 +2110,66 @@ static void charts_cb(lv_event_t *e) {
 	start_list_request(LIST_BROWSE, false, YTMUSIC_FILTER_SONGS, NULL, "FEmusic_charts", "ytmusic_charts");
 }
 
-// The liked songs are a playlist the account owns, so this one needs a session.
+// The rows of the player's own list, in the shape the lists draw.
+//
+// The sleeve is derived from the video id rather than stored: YouTube serves
+// the same frame for every id at i.ytimg.com, so a song liked months ago still
+// has its artwork after the cache was swept.
+static void favourites_fill_items(void) {
+	track_count = 0;
+	int count = ytlikes_count();
+	for (int i = 0; i < count && track_count < YTMUSIC_PAGE_RESULTS; i++) {
+		const ytlike_t *like = ytlikes_at(i);
+		if (!like || !like->id[0]) continue;
+		ytmusic_item_t *item = &track_items[track_count++];
+		memset(item, 0, sizeof(*item));
+		item->kind = YTMUSIC_ITEM_TRACK;
+		snprintf(item->id, sizeof(item->id), "%s", like->id);
+		snprintf(item->title, sizeof(item->title), "%s", like->title[0] ? like->title : like->id);
+		snprintf(item->subtitle, sizeof(item->subtitle), "%s", like->artist);
+		snprintf(item->album, sizeof(item->album), "%s", like->album);
+		snprintf(item->thumbnail, sizeof(item->thumbnail), "https://i.ytimg.com/vi/%s/hqdefault.jpg",
+				 like->id);
+		item->duration = like->duration;
+	}
+}
+
+// Repaints the list after a heart changed it. A row that was just unliked is
+// gone here, which is the point: the screen is the list.
+static void favourites_refill(void) {
+	favourites_fill_items();
+	lv_label_set_text(tracks_title, tr("ytmusic_favourites"));
+	fill_item_list(tracks_list, track_items, track_count, item_clicked_cb);
+}
+
+static void favourites_refill_async(void *user) {
+	(void)user;
+	if (tracks_are_likes) favourites_refill();
+}
+
+// Favourites, the two ways there are.
+//
+// With a browser session imported, this is the account's own liked songs -- the
+// only credential Google's music endpoints accept for that list. Without one it
+// is the player's own list of what was hearted here, which is why a heart now
+// works with no account at all: it used to write a cache path into the music
+// database and disappear when the cache was swept.
 static void favourites_cb(lv_event_t *e) {
 	(void)e;
-	if (!ytmusic_logged_in()) {
-		toast_error("ytmusic_sign_in_for_favourites");
+	if (ytmusic_session_cookie_attached()) {
+		tracks_are_likes = false;
+		start_list_request(LIST_BROWSE, false, YTMUSIC_FILTER_SONGS, NULL, "VLLM", "ytmusic_favourites");
 		return;
 	}
-	start_list_request(LIST_BROWSE, false, YTMUSIC_FILTER_SONGS, NULL, "VLLM", "ytmusic_favourites");
+	list_album[0] = '\0';
+	favourites_fill_items();
+	if (track_count <= 0) {
+		toast_error("ytmusic_favourites_empty");
+		return;
+	}
+	tracks_are_likes = true;
+	favourites_refill();
+	switch_screen(tracks_screen);
 }
 
 static void logout_cb(lv_event_t *e) {

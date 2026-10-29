@@ -61,6 +61,7 @@
 #include "src/system/streaming/tidalcache.h"
 #include "src/system/streaming/tidalsync.h"
 #include "src/system/streaming/ytmusic.h"
+#include "src/system/streaming/ytlikes.h"
 #include "src/system/core/utils.h"
 #include "src/system/audio/waveform.h"
 #include "src/system/net/wifi.h"
@@ -82,6 +83,14 @@ static lv_obj_t *fav_btn_icon; // the heart, in every layout
 
 static void update_fav_button(void);
 static void update_speed_button(void);
+
+// Whether what the player holds is a YouTube Music song, and its video id: the
+// key the player keeps its likes under.
+static bool current_yt_song(char *id, size_t size) {
+	device_state_t state;
+	device_state_get(&state);
+	return state.current_file[0] && ytmusic_cache_track_id(state.current_file, id, size);
+}
 static void update_format_label(const device_state_t *state);
 static void update_repeat_button(void);
 
@@ -5318,6 +5327,7 @@ static void update_fav_button(void) {
 	long qobuz_id = 0;
 	long tidal_id = 0;
 	long long feed_id = 0;
+	char yt_id[YTLIKES_ID_MAX] = "";
 	if (radio_current_station(&station)) {
 		starred = radio_fav_contains(station.uuid);
 	} else if (podcast_current_feed(&feed_id, NULL)) {
@@ -5335,6 +5345,10 @@ static void update_fav_button(void) {
 	} else if ((tidal_id = current_tidal_track()) > 0) {
 		starred = tidalsync_is_favorite(tidal_id);
 		tidalsync_favorites_refresh(tidal_favorites_changed);
+	} else if (current_yt_song(yt_id, sizeof(yt_id))) {
+		// A YouTube Music song: the player's own list. A heart with no account
+		// imported is still a heart, and this is where it is read back.
+		starred = ytlikes_contains(yt_id);
 	} else {
 		// device_state, not audio_get_current_file(): the star is drawn from
 		// one source and toggled from another, and when the two disagreed the
@@ -5444,6 +5458,26 @@ static void fav_btn_event_cb(lv_event_t *e) {
 	device_state_t state;
 	device_state_get(&state);
 	if (!state.current_file[0]) {
+		return;
+	}
+
+	// A YouTube Music song: the heart fills its own list on the player. There is
+	// no account to write to unless a browser session was imported, and the
+	// cache file it is playing from is swept on a later play -- so the like is
+	// recorded here, by id, and stays.
+	char yt_id[YTLIKES_ID_MAX];
+	if (ytmusic_cache_track_id(state.current_file, yt_id, sizeof(yt_id))) {
+		ytlike_t like;
+		const char *leaf = strrchr(state.current_file, '/');
+		memset(&like, 0, sizeof(like));
+		snprintf(like.id, sizeof(like.id), "%s", yt_id);
+		snprintf(like.title, sizeof(like.title), "%s",
+				 state.metadata.title[0] ? state.metadata.title : (leaf ? leaf + 1 : state.current_file));
+		snprintf(like.artist, sizeof(like.artist), "%s", state.metadata.artist);
+		snprintf(like.album, sizeof(like.album), "%s", state.metadata.album);
+		like.duration = (int)state.progress_total_secs;
+		ytlikes_toggle(&like);
+		update_fav_button();
 		return;
 	}
 

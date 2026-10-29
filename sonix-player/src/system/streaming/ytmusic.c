@@ -12,6 +12,7 @@
 static const char *playback_cache_dir(void);
 #include "src/system/net/http.h"
 #include "src/system/streaming/streamkeys.h"
+#include "src/system/streaming/ytlikes.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -176,6 +177,10 @@ void ytmusic_init(void) {
 	pthread_mutex_unlock(&session_lock);
 	snprintf(oauth_client_id, sizeof(oauth_client_id), "%s", streamkeys_ytmusic_client_id() ? streamkeys_ytmusic_client_id() : "");
 	snprintf(oauth_client_secret, sizeof(oauth_client_secret), "%s", streamkeys_ytmusic_client_secret() ? streamkeys_ytmusic_client_secret() : "");
+	// The songs hearted on this player. Read here because this is where the
+	// other YouTube Music state beside device_config.ini is read, and because a
+	// heart has to answer at once -- it cannot wait for a page.
+	ytlikes_init();
 }
 
 bool ytmusic_logged_in(void) {
@@ -642,6 +647,8 @@ static bool session_cookie_attached(void) {
 	memset(cookie, 0, sizeof(cookie));
 	return has;
 }
+
+bool ytmusic_session_cookie_attached(void) { return session_cookie_attached(); }
 
 // True when the player holds something it can send as an account: the
 // imported browser session or the OAuth refresh token.
@@ -2928,6 +2935,22 @@ bool ytmusic_cached_track(const char *id, char *out, size_t out_size) {
 // player was handed when a YouTube Music song started. That is what the
 // now-playing menu's "save to the card" copies out, and nothing else may be
 // treated as such: a file the user put on the card is already theirs.
+bool ytmusic_cache_track_id(const char *path, char *out, size_t out_size) {
+	if (!out || !out_size) return false;
+	out[0] = '\0';
+	const char *cache = playback_cache_dir();
+	size_t prefix_len = strlen(cache);
+	if (!path || strncmp(path, cache, prefix_len) != 0 || path[prefix_len] != '/') return false;
+	const char *leaf = path + prefix_len + 1;
+	// Eleven characters and the extension: "dQw4w9WgXcQ.m4a".
+	if (strlen(leaf) != 11 + 4 || strcmp(leaf + 11, ".m4a") != 0) return false;
+	for (int i = 0; i < 11; i++) {
+		if (!isalnum((unsigned char)leaf[i]) && leaf[i] != '-' && leaf[i] != '_') return false;
+	}
+	snprintf(out, out_size, "%.11s", leaf);
+	return true;
+}
+
 bool ytmusic_cache_owns(const char *path) {
 	const char *cache = playback_cache_dir();
 	size_t prefix_len = strlen(cache);

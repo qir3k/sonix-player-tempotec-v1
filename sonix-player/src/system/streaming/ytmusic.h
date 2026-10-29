@@ -104,6 +104,11 @@ bool ytmusic_set_session_cookie(const char *cookie, char *error, size_t error_si
 // helper. Successful import removes the card copy after saving it internally.
 bool ytmusic_import_session_file(const char *card_root, char *error, size_t error_size);
 void ytmusic_session_cookie(char *out, size_t size);
+// Whether the imported browser session is what the player holds. Google's
+// music endpoints accept nothing else for an account's own pages, so this is
+// the honest answer to "will the Favourites page show the account's list" --
+// ytmusic_logged_in() also counts an OAuth token, which those pages refuse.
+bool ytmusic_session_cookie_attached(void);
 bool ytmusic_logout(void);
 
 // Blocking network operations. Call only from a service worker, never from
@@ -211,6 +216,10 @@ bool ytmusic_stream_for_playback(const ytmusic_track_t *track, char *path, size_
 // handed for a YouTube Music song, and the only kind of file the "save to the
 // card" action copies out of it.
 bool ytmusic_cache_owns(const char *path);
+
+// The video id of one of those cache files ("<id>.m4a"), which is what a like
+// is kept under. False when `path` is not one.
+bool ytmusic_cache_track_id(const char *path, char *out, size_t out_size);
 
 // Where the playback cache lives: the card's own .local folder, so a song being
 // streamed is never held in RAM. Told once the storage has looked for the card;

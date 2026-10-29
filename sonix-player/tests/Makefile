@@ -477,6 +477,7 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 # one says.
 YTM_KEY_FLAG = -DYTMUSIC_API_KEY='"test-key-not-a-credential"'
 YTM_SRC = test_ytmusic.c win_compat_host.c $(ROOT)/src/system/streaming/ytmusic.c \
+          $(ROOT)/src/system/streaming/ytlikes.c \
           $(ROOT)/src/system/streaming/streamkeys.c \
           $(ROOT)/src/system/core/json.c $(ROOT)/src/system/core/config.c \
           $(ROOT)/src/system/core/region.c \
