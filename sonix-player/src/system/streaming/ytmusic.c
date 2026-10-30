@@ -2554,6 +2554,12 @@ static bool download_ranged(const char *url, const char *part, uint64_t from, ui
 		progress_note(*downloaded);
 		stream_note(hook, *downloaded);
 		empty_ms = 0;
+		if (hook && hook->called) {
+			// A short pause between chunk downloads gives the single-core CPU,
+			// memory bus and SD card I/O headroom so the playback thread and Bluetooth
+			// encoder never suffer buffer starvation or audio stuttering.
+			usleep(8 * 1000);
+		}
 		// The last byte the server promised has arrived: nothing left to ask
 		// for, and no 416 needed to say so.
 		if (total > 0 && *downloaded >= total) {

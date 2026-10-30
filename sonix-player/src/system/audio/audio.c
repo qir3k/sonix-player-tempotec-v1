@@ -2165,12 +2165,14 @@ static snd_pcm_sframes_t pcm_write_bluetooth(snd_pcm_t *pcm, const void *buf, sn
 	const char *from = (const char *)buf;
 	snd_pcm_uframes_t done = 0;
 	long last_progress_ms = log_ms();
+	int retries_without_progress = 0;
 
 	while (done < frames) {
 		snd_pcm_sframes_t n = snd_pcm_writei(pcm, from + done * (size_t)frame_bytes, frames - done);
 		if (n > 0) {
 			done += (snd_pcm_uframes_t)n;
 			last_progress_ms = log_ms();
+			retries_without_progress = 0;
 			continue;
 		}
 		if (n < 0 && n != -EAGAIN) {
@@ -2179,6 +2181,8 @@ static snd_pcm_sframes_t pcm_write_bluetooth(snd_pcm_t *pcm, const void *buf, sn
 			// already gone out, so anything written so far is reported first.
 			return done > 0 ? (snd_pcm_sframes_t)done : n;
 		}
+
+		retries_without_progress++;
 
 		// No room -- either -EAGAIN, or a write that took nothing and said so
 		// without complaining. A command waiting is a better reason to come
@@ -2210,12 +2214,11 @@ static snd_pcm_sframes_t pcm_write_bluetooth(snd_pcm_t *pcm, const void *buf, sn
 		if (ready < 0) {
 			return done > 0 ? (snd_pcm_sframes_t)done : (snd_pcm_sframes_t)ready;
 		}
-		if (ready > 0) {
-			// Told there is room by a poll the write has just contradicted.
-			// Ten milliseconds, so a disagreement that lasts becomes a wait and
-			// not a thread spinning on one core against a device that is not
-			// listening.
-			usleep(10 * 1000);
+		// If poll reported room but writei has repeatedly failed without making
+		// any progress, sleep briefly (1ms) to yield the CPU and avoid a tight spin.
+		// When progress is being made, write immediately to keep the Bluetooth buffer full.
+		if (ready > 0 && retries_without_progress > 2) {
+			usleep(1000);
 		}
 	}
 	return (snd_pcm_sframes_t)done;
@@ -4751,9 +4754,7 @@ static bool external_wait_room(long *last_progress_ms) {
 	// The same guard pcm_write_bluetooth() has: bluealsa's poll follows its
 	// FIFO and the write follows the transport, so a poll that says "room"
 	// against a write that takes nothing becomes a short sleep, not a spin.
-	if (snd_pcm_wait(external_pcm, 100) > 0) {
-		usleep(10 * 1000);
-	}
+	(void)snd_pcm_wait(external_pcm, 100);
 	return true;
 }
 

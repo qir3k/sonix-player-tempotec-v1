@@ -88,6 +88,7 @@
 #include "src/gui/shell/toast.h"
 #include "src/gui/shell/topbar.h"
 #include "src/gui/shell/volume_overlay.h"
+#include "src/gui/shell/noise_overlay.h"
 #include "src/gui/wireless/wifisettings.h"
 #include "src/gui/wireless/wifitransfer.h"
 #include "src/gui/wireless/wireless.h"
@@ -950,6 +951,7 @@ void gui_init(gui_config_t *cfg) {
 
 	// Volume HUD and the power menu, both above every page.
 	volume_overlay_init(cfg);
+	noise_overlay_init(cfg);
 	powermenu_init(cfg);
 
 	// Build the date/time panel before Wi-Fi onboarding: after a network sync it
