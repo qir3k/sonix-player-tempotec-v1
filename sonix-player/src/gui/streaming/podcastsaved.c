@@ -999,8 +999,8 @@ void podcastsaved_init(gui_config_t *cfg) {
 	order_btn = corner_button(cfg, episodes_screen, 0, &icon_sort_date_new, order_cb);
 	// While rows are chosen these two take the corner: the sheet of what the
 	// selection can be used for, and the way out.
-	sel_act_btn = corner_button(cfg, episodes_screen, 0, &icon_check, sel_sheet_cb);
-	sel_close_btn = corner_button(cfg, episodes_screen, 1, &icon_close, sel_close_cb);
+	sel_close_btn = corner_button(cfg, episodes_screen, 0, &icon_close, sel_close_cb);
+	sel_act_btn = corner_button(cfg, episodes_screen, 1, &icon_check, sel_sheet_cb);
 	lv_obj_set_hidden(sel_act_btn, true);
 	lv_obj_set_hidden(sel_close_btn, true);
 	player_sheet_attach_drag(episodes_list, true);

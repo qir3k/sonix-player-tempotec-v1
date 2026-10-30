@@ -4990,11 +4990,11 @@ static void build_list_page(gui_config_t *cfg) {
 
 	// The list's corner, empty until rows are chosen: the bulk action and the
 	// way out of the mode. Placed and shown by update_corner_buttons().
-	// The tick confirms a selection, as in the file browser and on the podcast
-	// pages; the x abandons it. The plain check, not a circled one: at the
+	// The x leaves selection mode; the tick confirms it, matching the other
+	// multi-select lists. The plain check, not a circled one: at the
 	// corner's size the ring reads as a filled disc around the mark.
-	sel_action_btn = corner_button_on(list_screen, cfg, 0, &icon_check, bulk_sheet_cb);
-	sel_close_btn = corner_button_on(list_screen, cfg, 1, &icon_close, bulk_cancel_cb);
+	sel_close_btn = corner_button_on(list_screen, cfg, 0, &icon_close, bulk_cancel_cb);
+	sel_action_btn = corner_button_on(list_screen, cfg, 1, &icon_check, bulk_sheet_cb);
 	lv_obj_set_hidden(sel_action_btn, true);
 	lv_obj_set_hidden(sel_close_btn, true);
 

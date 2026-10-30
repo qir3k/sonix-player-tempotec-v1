@@ -2317,11 +2317,11 @@ static void build_search_page(void) {
 	lv_obj_add_style(results_screen, &theme_style_screen, 0);
 	results_list = settingsrow_page(results_screen, page_cfg, "YouTube Music");
 	results_title = settingsrow_page_title(results_screen);
-	// The corner is empty until rows are chosen: the tick queues them onto the
-	// card, the cross leaves the mode. The same pair as on the Tidal page.
+	// The corner is empty until rows are chosen: the cross leaves the mode and
+	// the tick opens the action sheet, in the same order as other list pages.
 	settingsrow_title_corner_slots(results_title, page_cfg, 2);
-	results_sel_action = page_corner_button(results_screen, page_cfg, 0, &icon_check, selection_sheet_cb);
-	results_sel_close = page_corner_button(results_screen, page_cfg, 1, &icon_close, selection_cancel_cb);
+	results_sel_close = page_corner_button(results_screen, page_cfg, 0, &icon_close, selection_cancel_cb);
+	results_sel_action = page_corner_button(results_screen, page_cfg, 1, &icon_check, selection_sheet_cb);
 	lv_obj_set_hidden(results_sel_action, true);
 	lv_obj_set_hidden(results_sel_close, true);
 	player_sheet_attach_drag(results_list, true);
@@ -2335,8 +2335,8 @@ static void build_search_page(void) {
 	tracks_list = settingsrow_page(tracks_screen, page_cfg, "YouTube Music");
 	tracks_title = settingsrow_page_title(tracks_screen);
 	settingsrow_title_corner_slots(tracks_title, page_cfg, 2);
-	tracks_sel_action = page_corner_button(tracks_screen, page_cfg, 0, &icon_check, selection_sheet_cb);
-	tracks_sel_close = page_corner_button(tracks_screen, page_cfg, 1, &icon_close, selection_cancel_cb);
+	tracks_sel_close = page_corner_button(tracks_screen, page_cfg, 0, &icon_close, selection_cancel_cb);
+	tracks_sel_action = page_corner_button(tracks_screen, page_cfg, 1, &icon_check, selection_sheet_cb);
 	lv_obj_set_hidden(tracks_sel_action, true);
 	lv_obj_set_hidden(tracks_sel_close, true);
 	player_sheet_attach_drag(tracks_list, true);

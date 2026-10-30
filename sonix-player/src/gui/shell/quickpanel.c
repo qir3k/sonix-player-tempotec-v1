@@ -15,7 +15,6 @@
 #include "src/gui/shell/icons.h"
 #include "src/gui/settings/musicsettings.h"
 #include "src/gui/audio/peqpage.h"
-#include "src/gui/library/audiobooks.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/scrolltext.h"
 #include "src/gui/streaming/podcastpage.h"
@@ -129,7 +128,6 @@ static lv_obj_t *sonixlink_btn;
 static lv_obj_t *peq_btn;
 static lv_obj_t *dlna_btn;
 static lv_obj_t *sleep_music_btn;
-static lv_obj_t *sleep_audiobook_btn;
 static lv_obj_t *wifi_transfer_btn;
 static lv_obj_t *gapless_btn;
 
@@ -1499,6 +1497,26 @@ static void order_load(void) {
 	hidden_n = parse_list(config_get("quickpanel", "hidden", ""), hidden, QP_BTN_COUNT, placed);
 	hidden_n += parse_list(config_get("quickpanel", "hidden_more", ""), hidden + hidden_n,
 						   (uint8_t)(QP_BTN_COUNT - hidden_n), placed);
+	// The old audiobook shortcut is retired now that it controls the same
+	// countdown as the shared sleep button. Keep its enum and config key so old
+	// layouts still parse, then drop it from both editable lists.
+	placed[QP_BTN_SLEEP_AUDIOBOOK] = true;
+	for (int i = 0; i < line_n;) {
+		if (line[i] == QP_BTN_SLEEP_AUDIOBOOK) {
+			memmove(&line[i], &line[i + 1], (size_t)(line_n - i - 1));
+			line_n--;
+		} else {
+			i++;
+		}
+	}
+	for (int i = 0; i < hidden_n;) {
+		if (hidden[i] == QP_BTN_SLEEP_AUDIOBOOK) {
+			memmove(&hidden[i], &hidden[i + 1], (size_t)(hidden_n - i - 1));
+			hidden_n--;
+		} else {
+			i++;
+		}
+	}
 
 	// Anything the file did not mention: a fresh install, or a button that did
 	// not exist when it was written. It goes into the panel, because a control
@@ -1636,7 +1654,7 @@ static lv_obj_t *button_widget(quickpanel_button_t which) {
 	case QP_BTN_SLEEP_MUSIC:
 		return sleep_music_btn;
 	case QP_BTN_SLEEP_AUDIOBOOK:
-		return sleep_audiobook_btn;
+		return NULL;
 	case QP_BTN_WIFI_TRANSFER:
 		return wifi_transfer_btn;
 	case QP_BTN_GAPLESS:
@@ -1962,7 +1980,6 @@ static void refresh_audio_buttons(void) {
 	circle_button_set_on(dlna_btn, dlna_get_enabled());
 	circle_button_set_on(peq_btn, peq_get_enabled());
 	circle_button_set_on(sleep_music_btn, sleep_timer_armed(SLEEPTIMER_MUSIC));
-	circle_button_set_on(sleep_audiobook_btn, sleep_timer_armed(SLEEPTIMER_AUDIOBOOK));
 	circle_button_set_on(wifi_transfer_btn, wifitransfer_get_enabled());
 
 	bool high = musicsettings_high_gain();
@@ -2179,10 +2196,8 @@ static void sonixlink_clicked_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 // The sleep timers
 //
-// Two switches for two timers -- one for everything you listen to, one for the
-// book -- and what they are for is the switching OFF: "it is later than I
-// thought, do not stop" is a thing somebody thinks with the player already in
-// their hand (see sleeptimer.h for why it is two and not four).
+// One switch for the shared timer. Its quick control is for switching it off
+// when the listener has changed their mind (see sleeptimer.h).
 //
 // Lit means it will actually stop the music, which is the switch AND a length:
 // the switch on with the wheels at 00:00 arms nothing (see sleeptimer.h), and a
@@ -2216,30 +2231,12 @@ static void sleep_music_clicked_cb(lv_event_t *e) {
 	sleep_timer_clicked(SLEEPTIMER_MUSIC);
 }
 
-static void sleep_audiobook_clicked_cb(lv_event_t *e) {
-	(void)e;
-	sleep_timer_clicked(SLEEPTIMER_AUDIOBOOK);
-}
-
 static void open_page(lv_obj_t *screen);
 
-// A hold opens the page that sets the length: the playback options for music,
-// the audiobook options, the podcast settings, the radio settings. Looked up at
-// the press rather than when the buttons are made, since not every one of those
-// pages exists by then.
+// A hold opens the shared timer's settings in Music playback options.
 static void sleep_page_cb(lv_event_t *e) {
-	sleeptimer_kind_t kind = (sleeptimer_kind_t)(intptr_t)lv_event_get_user_data(e);
-	// Music's own page sets the shared length; the book has its own page and
-	// its own switch. The podcast and radio pages set the same shared timer,
-	// so there is nothing for their buttons to open here.
-	lv_obj_t *screen = kind == SLEEPTIMER_AUDIOBOOK ? audiobooksettings_screen : musicsettings_playback_screen();
-	// The audiobook options are built with the rest of that module: with it
-	// off in Plugins there is no page behind the hold, and opening the empty
-	// screen the shell pre-allocates would show nothing at all.
-	if (kind == SLEEPTIMER_AUDIOBOOK && !addons_enabled("audiobooks")) {
-		screen = NULL;
-	}
-	open_page(screen);
+	(void)e;
+	open_page(musicsettings_playback_screen());
 }
 
 // DLNA, the third of the same family: a phone pushes music at the player over
@@ -2581,17 +2578,11 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_add_event_cb(dlna_btn, dlna_clicked_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_add_event_cb(dlna_btn, open_page_cb, LV_EVENT_LONG_PRESSED, dlna_screen);
 
-	// Two sleep buttons now, not four: one countdown covers everything you
-	// listen to (see sleeptimer.h), and the book keeps its own. A long press
-	// opens the page where that length is chosen.
+	// One sleep button covers every kind of playback, including audiobooks.
+	// A long press opens the shared timer settings.
 	sleep_music_btn = make_circle_button(row, &icon_sleep_music_quick);
 	lv_obj_add_event_cb(sleep_music_btn, sleep_music_clicked_cb, LV_EVENT_CLICKED, NULL);
 	lv_obj_add_event_cb(sleep_music_btn, sleep_page_cb, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)SLEEPTIMER_MUSIC);
-
-	sleep_audiobook_btn = make_circle_button(row, &icon_sleep_audiobook_quick);
-	lv_obj_add_event_cb(sleep_audiobook_btn, sleep_audiobook_clicked_cb, LV_EVENT_CLICKED, NULL);
-	lv_obj_add_event_cb(sleep_audiobook_btn, sleep_page_cb, LV_EVENT_LONG_PRESSED,
-						(void *)(intptr_t)SLEEPTIMER_AUDIOBOOK);
 
 	// A tap opens the page with the server starting; a hold opens it as it is.
 	wifi_transfer_btn = make_circle_button(row, &icon_wifi_transfer_quick);

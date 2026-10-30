@@ -4109,8 +4109,8 @@ void podcastpage_init(gui_config_t *cfg) {
 	// The tick confirms the selection and opens the sheet of what can be done
 	// with it; the x abandons it. The plain check and not the circled one: at
 	// the corner's size the ring fills the button and reads as a stray disc.
-	sel_confirm_btn = corner_button(cfg, 0, &icon_check, bulk_sheet_cb);
-	sel_close_btn = corner_button(cfg, 1, &icon_close, bulk_close_cb);
+	sel_close_btn = corner_button(cfg, 0, &icon_close, bulk_close_cb);
+	sel_confirm_btn = corner_button(cfg, 1, &icon_check, bulk_sheet_cb);
 	lv_obj_set_hidden(sel_confirm_btn, true);
 	lv_obj_set_hidden(sel_close_btn, true);
 

@@ -70,7 +70,7 @@ struct sockaddr_rc {
 #define BATTERY_EVERY_MS 15000 // three requests, so not on every tick
 #define SETTINGS_EVERY_MS 20000
 #define RETRY_MS 6000	   // between attempts to open a session
-#define GIVE_UP_AFTER 3	   // consecutive failures for one address
+#define GIVE_UP_AFTER 3	   // first retry notice for one address
 #define CHANNEL_MAX 30	   // the RFCOMM channel range SDP may name
 #define CONNECT_TIMEOUT_MS 400
 #define PROBE_TIMEOUT_MS 900
@@ -571,10 +571,9 @@ static void *worker_main(void *arg) {
 		// to: a battery reading cannot come from a speaker or a car kit, and
 		// asking would be a socket every few seconds for nothing.
 		bool wanted = earfun_name_supported(want_name);
-		bool exhausted = strcmp(mac, failed_mac) == 0 && failures >= GIVE_UP_AFTER;
 		pthread_mutex_unlock(&lock);
 
-		if (!wanted || exhausted) {
+		if (!wanted) {
 			pthread_mutex_lock(&lock);
 			if (!stopping && strcmp(want_mac, mac) == 0) {
 				pthread_cond_wait(&wake, &lock);
@@ -591,10 +590,11 @@ static void *worker_main(void *arg) {
 				failures = 0;
 			}
 			failures++;
-			bool announce = failures == GIVE_UP_AFTER;
+			bool announce = failures == GIVE_UP_AFTER ||
+				(failures > GIVE_UP_AFTER && failures % 10 == 0);
 			pthread_mutex_unlock(&lock);
 			if (announce) {
-				printf("earfun: %s does not answer on the serial port profile; not asking again\n", mac);
+				printf("earfun: %s does not answer on the serial port profile; will retry\n", mac);
 			}
 			sleep_ms(RETRY_MS);
 			continue;

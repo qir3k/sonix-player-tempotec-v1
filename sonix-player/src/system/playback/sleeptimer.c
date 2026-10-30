@@ -10,10 +10,8 @@
 // config cannot arm something that never expires.
 #define SLEEP_MAX_MINUTES (23 * 60 + 59)
 
-// Where each one is written down. The audiobook pair are the keys the audiobook
-// timer has always used, so an existing config keeps its switch and its length.
-// A length of nought there means no time chosen: "at the end of the chapter" is
-// a switch of its own on the audiobook page, not a timer length.
+// The shared timer keeps the long-standing music keys so existing settings
+// continue to work.
 static const struct {
 	const char *section;
 	const char *key_on;
@@ -23,8 +21,6 @@ static const struct {
 	// Everything you listen to, in the player's own corner of the config: it
 	// used to be "music", and the name in the log says so still.
 	[SLEEPTIMER_MUSIC] = {"player", "sleep_timer", "sleep_minutes", "music"},
-	// The book, which keeps its own switch and its own length.
-	[SLEEPTIMER_AUDIOBOOK] = {"audiobook", "sleep_timer", "sleep_minutes", "audiobook"},
 };
 
 typedef struct {
@@ -60,6 +56,18 @@ static int clamp_minutes(int minutes) {
 }
 
 void sleeptimer_init(void) {
+	// Before the timers were shared, the audiobook page stored a separate
+	// switch and duration. Preserve that choice on an install that has never
+	// configured the shared music timer.
+	bool music_configured = config_get_bool("player", "sleep_timer", false) ||
+		config_get_int("player", "sleep_minutes", 0) > 0;
+	bool book_enabled = config_get_bool("audiobook", "sleep_timer", false);
+	int book_minutes = clamp_minutes((int)config_get_int("audiobook", "sleep_minutes", 0));
+	if (!music_configured && (book_enabled || book_minutes > 0)) {
+		config_set_bool("player", "sleep_timer", book_enabled);
+		config_set_int("player", "sleep_minutes", book_minutes);
+		config_save();
+	}
 	for (int i = 0; i < SLEEPTIMER_COUNT; i++) {
 		timers[i].enabled = config_get_int(PROFILES[i].section, PROFILES[i].key_on, 0) != 0;
 		timers[i].minutes = clamp_minutes((int)config_get_int(PROFILES[i].section, PROFILES[i].key_minutes, 0));
