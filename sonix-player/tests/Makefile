@@ -430,6 +430,29 @@ TOOLS_SRC = $(ROOT)/tests/ui/test_tools_pages.c \
 TOOLS_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(TOOLS_SRC)) \
             $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
 
+# The charger screen on a dead player: the percentage, the battery box and the
+# prompt the power button answers. The suite supplies the gauge, the cable and
+# the panel's wake bracket itself, so the page and the pieces it draws with are
+# all that is linked.
+CHARGE_SRC = $(ROOT)/tests/ui/test_chargescreen.c \
+             $(ROOT)/src/gui/shell/chargescreen.c \
+             $(ROOT)/src/gui/shell/theme.c $(ROOT)/src/gui/shell/settingsrow.c \
+             $(ROOT)/src/gui/shell/icons.c \
+             $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
+CHARGE_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(CHARGE_SRC)) \
+             $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
+
+# The lyrics search page and the rows a result is chosen from. The suite stubs
+# the player, the toasts, the switcher and the HTTP call the client would make,
+# so this links the page, the card helpers and the stores, nothing else.
+LYRICSEARCH_SRC = $(ROOT)/tests/ui/test_lyricsearch.c \
+                  $(ROOT)/src/gui/nowplaying/lyricsearch.c \
+                  $(ROOT)/src/gui/shell/settingsrow.c $(ROOT)/src/gui/shell/theme.c \
+                  $(ROOT)/src/gui/shell/icons.c \
+                  $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
+LYRICSEARCH_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(LYRICSEARCH_SRC)) \
+                  $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
+
 # One board, one language directory: the V1 image is the only thing this tree
 # builds, so each page is rendered once and once saved.
 UI_LANG = ../../sonix-packer/assets/V1/usr/resource/sonix/language
@@ -475,7 +498,7 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 
 -include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(LYRICSEARCH_OBJ:.o=.d))
 
--include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d))
+-include $(sort $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(CHARGE_OBJ:.o=.d))
 
 # The EarFun control protocol, driven by replies instead of by earbuds: the
 # frame encoder and the decoders, with every socket call in the worker stubbed.
