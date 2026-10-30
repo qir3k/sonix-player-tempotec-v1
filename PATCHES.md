@@ -568,6 +568,54 @@ must first be captured from the actual V1 firmware. Once that report is known,
 the device-specific runtime branch belongs in the launcher/input path rather
 than in the screen-layout profile.
 
+### The pointer is positioned from one source, not two
+
+The screen-layout profile does not name the panel, but the input path has to
+say *something* about it, and for a long time it said the wrong thing by not
+saying anything at all: it used LVGL's evdev driver, which takes the pointer
+position from `ABS_X` and `ABS_MT_POSITION_X` alike -- whichever event came
+last -- while taking the range it scales with from `ABS_X` alone.
+
+On a Goodix panel those two carry different units. `ABS_X` is the position
+scaled to the panel's idea of the screen; `ABS_MT_POSITION_X` is the
+controller's raw count. So every multi-touch event divided a raw count by a
+pixel range: a finger resting still jittered by a few counts and the pointer
+moved several pixels (a list that drifted under the finger and came back), a
+tap landed wherever the scaled count pointed (a row that was never touched, a
+button that did nothing), and a drag never engaged because its first movement
+was a leap. It looked like a slow, flaky touchscreen. It was arithmetic.
+
+`src/system/input/touch.{c,h}` is the replacement. It is plain C with no
+kernel headers and no LVGL: `main.c` translates `struct input_event` into its
+tokens and folds the stream in, then LVGL asks it where the finger is. The
+rules it keeps are:
+
+* **One source per point.** A position from `ABS_X/ABS_Y` is scaled with the
+  `ABS_X/ABS_Y` range; one from the multi-touch pair with the multi-touch
+  range. They are never mixed, which is the whole bug above.
+* **A press owns its coordinate.** Both protocol A (`BTN_TOUCH`) and protocol B
+  (a tracking id) are understood. A press reports nothing until a coordinate
+  for *that* press has arrived, so it cannot reuse where the last finger was.
+* **Only the first contact is followed.** A second finger's slot is ignored
+  rather than allowed to drag the pointer away from the finger being used.
+* **The ranges come from the kernel.** `EVIOCGABS` is asked at open, the node
+  is chosen by what it reports rather than by its number, and a device with
+  absolute axes that describes no contact (an accelerometer, a wheel) is never
+  taken for the panel. The chosen source, both ranges and the screen they are
+  scaled to are printed once at startup.
+
+`make -C sonix-player/tests touch` drives synthetic streams through the filter:
+the two coordinate pairs in different units, protocol A and protocol B, a
+press with no coordinate of its own, a second finger, the 180-degree rotation,
+clamping, and a panel that reports only the multi-touch pair.
+
+What this player no longer does is tune LVGL's scrolling of its own accord
+(`scroll_limit`/`scroll_throw` were 4 and 5, then 10 and 7) or swallow clicks
+with a "tap guard" when a release was more than 12 px from its press. Both were
+attempts to explain the pointer landing in the wrong place, and the guard in
+particular was a way for a firmly tapped row to do nothing when the finger had
+a little wander in it.
+
 
 ## Touchscreen multitouch
 

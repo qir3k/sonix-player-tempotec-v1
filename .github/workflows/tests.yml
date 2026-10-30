@@ -99,6 +99,12 @@ jobs:
       - name: The battery guard (warning at five, shutdown at one)
         run: make -C sonix-player/tests batteryguard
 
+      # The panel's event stream, with the panel taken out: two coordinate pairs
+      # in different units, protocol A and protocol B, a press that must wait
+      # for its own coordinate, a second finger, and the rotated screen.
+      - name: Where the touch pointer is
+        run: make -C sonix-player/tests touch
+
       - name: The Screensaver folder's picture rules
         run: make -C sonix-player/tests pictures
 

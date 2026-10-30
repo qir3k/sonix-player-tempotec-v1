@@ -6,6 +6,7 @@
 #include "lvgl/src/misc/lv_timer_private.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <malloc.h>
 #include <poll.h>
 #include <sys/mman.h>
@@ -49,6 +50,7 @@
 #include "src/system/audio/eq.h"
 #include "src/system/audio/headset.h"
 #include "src/system/input/keymap.h"
+#include "src/system/input/touch.h"
 #include "src/system/streaming/qobuz.h"
 #include "src/system/streaming/tidal.h"
 #include "src/system/remote/dlna.h"
@@ -1060,90 +1062,19 @@ static void install_signal_guards(void) {
 #define MAIN_LOOP_MAX_SLEEP_MS 250
 
 // ---------------------------------------------------------------------------
-// Kinetic scroll tuning.
-//
-// LVGL has kinetic scrolling of its own -- the list glides and brakes when the
-// finger lifts -- but with the factory values it is barely noticeable on this
-// screen. Two knobs, both per-indev:
-//
-//   * scroll_throw: the percentage the velocity drops on each frame of the
-//     throw animation. The default 10 kills the glide in half a second; at 5
-//     it lasts about twice as long and travels about twice as far.
-//   * scroll_limit: how many pixels the finger must move before LVGL calls it
-//     a scroll rather than a tap. The default 10 is a lot on a 480x720 panel
-//     and the scroll starts late; at 4 the list latches on immediately.
-//
-// 7 and 10 were tried on the device to soften the jitter that turned a tap
-// into a drag. They were part of a build whose touch screen was unusable, so
-// they are back to the values that release was tested with -- these two are
-// only about feel, but a change here is not worth a second unverifiable
-// variable on top of the one below.
-//
-// Applied to both the device touch panel and the simulator mouse, so the two
-// feel the same.
-// ---------------------------------------------------------------------------
-
-#define SCROLL_THROW_DECAY_PCT 5
-#define SCROLL_START_LIMIT_PX 4
-
-// ---------------------------------------------------------------------------
-// A drag is not a tap.
+// Pointer tuning: none.
 // ---------------------------------------------------------------------------
 //
-// LVGL drops the click only when a scrollable container claimed the gesture.
-// This drops it for every other drag too: an indev event callback remembers
-// where the finger landed and, when SHORT_CLICKED or CLICKED arrives more than
-// TAP_SLOP_PX away from there, lv_indev_stop_processing() keeps the object from
-// receiving it. RELEASED still arrives, for the handlers that drive a drag.
-//
-// The distance is from the press point to the release point; the indev
-// callback is not offered PRESSING, so the path in between is not seen.
-#define TAP_SLOP_PX 12
-
-static void tap_guard_cb(lv_event_t *e) {
-	lv_indev_t *indev = lv_indev_active();
-	if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) {
-		return;
-	}
-
-	// One point for all pointers: there is only ever one pointer pressed.
-	static lv_point_t press_at;
-
-	lv_point_t p;
-	lv_indev_get_point(indev, &p);
-
-	lv_event_code_t code = lv_event_get_code(e);
-	if (code == LV_EVENT_PRESSED) {
-		press_at = p;
-		return;
-	}
-	if (code != LV_EVENT_SHORT_CLICKED && code != LV_EVENT_CLICKED) {
-		return;
-	}
-
-	int32_t dx = p.x - press_at.x;
-	int32_t dy = p.y - press_at.y;
-	if (dx * dx + dy * dy > TAP_SLOP_PX * TAP_SLOP_PX) {
-		lv_indev_stop_processing(indev);
-	}
-}
-
-static void tune_kinetic_scroll(lv_indev_t *indev) {
-	if (!indev) {
-		return;
-	}
-	lv_indev_set_scroll_throw(indev, SCROLL_THROW_DECAY_PCT);
-	lv_indev_set_scroll_limit(indev, SCROLL_START_LIMIT_PX);
-}
-
-// Kinetic scrolling and the tap guard, for the touch panel and the simulator mouse.
-static void tune_pointer(lv_indev_t *indev) {
-	if (!indev) {
-		return;
-	}
-	tune_kinetic_scroll(indev);
-	lv_indev_add_event_cb(indev, tap_guard_cb, LV_EVENT_ALL, NULL);
-}
+// This used to carry two things of its own: scroll_throw/scroll_limit of its
+// own choosing (4 and 5 in one release, 10 and 7 in the next) and a tap guard
+// that swallowed a click whenever the release point was more than 12 px from
+// the press point. Both were attempts to explain touch that did not land where
+// it was put, and the fault was underneath them the whole time: the pointer was
+// positioned from one coordinate source and scaled with the range of another
+// (see src/system/input/touch.h). With the position right, LVGL's own values
+// are the ones its scrolling was designed around, and the guard was only a way
+// for a tap to disappear -- which is what a press with a little wander in it
+// did, and why a firmly tapped row sometimes did nothing at all.
 
 // The panel of the player this binary was first written for, and what an
 // unrecognised device-name falls back to.
@@ -1265,7 +1196,6 @@ static lv_display_t *init_host_display(void) {
 	lv_indev_t *mouse = lv_sdl_mouse_create();
 	if (mouse) {
 		lv_indev_set_display(mouse, disp);
-		tune_pointer(mouse);
 	}
 
 	host_display = disp;
@@ -1444,8 +1374,13 @@ static struct fb_var_screeninfo fb_var;
 // ---------------------------------------------------------------------------
 
 static lv_display_t *fb_display;   // the page-flipping display, NULL on the fallback
-static lv_indev_t *fb_touch;	   // so the calibration can be flipped with the screen
+static lv_indev_t *fb_touch;	   // so it can be parked while an emulator reads the panel
 static bool fb_rotated;
+
+// The panel, read by this player rather than by lv_evdev (see touch.h).
+static touch_filter_t fb_touch_state;
+static int fb_touch_fd = -1;
+static lv_point_t fb_touch_last; // where the finger was last seen
 static uint8_t *rot_page;		   // the RAM page LVGL draws into while rotated
 
 // What this frame touched, and what each framebuffer page has not been given
@@ -1802,15 +1737,12 @@ void display_set_rotated(bool rotated) {
 		lv_async_call(free_rot_pages_cb, NULL);
 	}
 
-	// The touch panel turns with the picture: an inverted calibration maps
-	// the top-left corner of the glass to the bottom-right of the screen.
-	if (fb_touch) {
-		if (fb_rotated) {
-			lv_evdev_set_calibration(fb_touch, (int)fb_var.xres - 1, (int)fb_var.yres - 1, 0, 0);
-		} else {
-			lv_evdev_set_calibration(fb_touch, 0, 0, (int)fb_var.xres - 1, (int)fb_var.yres - 1);
-		}
-	}
+	// The touch panel turns with the picture: the same finger is now at the
+	// opposite corner of the screen. The filter does that from the panel's own
+	// units rather than from the framebuffer's -- the two are not the same
+	// number, and assuming they were is what put a calibration in the wrong
+	// scale in the first place.
+	touch_set_rotated(&fb_touch_state, fb_rotated);
 
 	// Both framebuffer pages still hold the picture the other way up. One
 	// invalidation is enough: the page bookkeeping above already has each
@@ -1842,6 +1774,22 @@ static bool input_bit(const unsigned long *bits, int bit) {
 	return (bits[bit / (8 * (int)sizeof(long))] >> (bit % (8 * (int)sizeof(long)))) & 1UL;
 }
 
+// Whether a node describes a contact at all.
+//
+// A touchscreen says so one of two ways: BTN_TOUCH (protocol A, one contact at
+// a time) or ABS_MT_POSITION_X (the multi-touch protocol). A device with
+// absolute axes and neither of those is something else that reports a number
+// -- an accelerometer, a wheel, a light sensor -- and opening it as the pointer
+// is how the interface ends up being touched somewhere nobody put a finger.
+static bool node_reports_contact(int fd) {
+	unsigned long keys[(KEY_MAX + 8 * sizeof(long)) / (8 * sizeof(long))] = {0};
+	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keys)), keys) >= 0 && input_bit(keys, BTN_TOUCH)) {
+		return true;
+	}
+	struct input_absinfo info;
+	return ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &info) == 0;
+}
+
 // What the panel reports about itself: the ranges its coordinates use, and
 // whether it speaks the multi-touch protocol at all. Printed once, because the
 // two questions a wrong-looking touch asks first are "which controller is
@@ -1869,7 +1817,7 @@ static void log_touch_ranges(int fd) {
 
 static bool find_touch_node(char *out, size_t out_size) {
 	for (int waited = 0; waited <= TOUCH_PROBE_WAIT_MS; waited += 100) {
-		int fallback = -1;
+		int candidate = -1;
 		for (int n = 0; n < 16; n++) {
 			char node[32];
 			snprintf(node, sizeof(node), "/dev/input/event%d", n);
@@ -1882,6 +1830,7 @@ static bool find_touch_node(char *out, size_t out_size) {
 			char name[64] = {0};
 			bool abs = ioctl(fd, EVIOCGBIT(0, sizeof(types)), types) >= 0 && input_bit(types, EV_ABS);
 			bool direct = ioctl(fd, EVIOCGPROP(sizeof(props)), props) >= 0 && input_bit(props, INPUT_PROP_DIRECT);
+			bool contact = node_reports_contact(fd);
 			ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name);
 			close(fd);
 			if (!abs || strncmp(name, "earpods_", 8) == 0) {
@@ -1899,13 +1848,17 @@ static bool find_touch_node(char *out, size_t out_size) {
 				}
 				return true;
 			}
-			if (fallback < 0) {
-				fallback = n;
+			// No INPUT_PROP_DIRECT on this one, but it does describe contacts:
+			// a panel whose driver leaves the property out. The first device
+			// with absolute axes would also match here, which is why only this
+			// test is allowed to.
+			if (candidate < 0 && contact) {
+				candidate = n;
 			}
 		}
-		if (fallback >= 0) {
-			snprintf(out, out_size, "/dev/input/event%d", fallback);
-			printf("input: %s is the touch panel (absolute axes, no direct property)\n", out);
+		if (candidate >= 0) {
+			snprintf(out, out_size, "/dev/input/event%d", candidate);
+			printf("input: %s is the touch panel (reports contacts, no direct property)\n", out);
 			int again = open(out, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 			if (again >= 0) {
 				log_touch_ranges(again);
@@ -1919,18 +1872,156 @@ static bool find_touch_node(char *out, size_t out_size) {
 	return false;
 }
 
-// The panel's coordinate range is LVGL's to read, and nobody else's to guess.
+// The panel as an LVGL pointer, read here instead of by lv_evdev.
 //
-// A build of this player set that range from ABS_X/ABS_Y itself, falling back
-// to the multi-touch axes when a controller answered neither. The reasoning
-// was that a panel reporting only MT has no range for lv_evdev_create() to
-// find -- true, but the conclusion was wrong: on this panel the values the
-// driver emits are already in the units LVGL expected, so the override scaled
-// good coordinates a second time and every touch landed somewhere else. There
-// is no way to tell a "no range" device from a "range in different units"
-// device from here, so the calibration stays exactly as lv_evdev_create()
-// leaves it. log_touch_ranges() below prints both ranges, which is what the
-// next report needs.
+// lv_evdev_create() takes the pointer position from ABS_X and
+// ABS_MT_POSITION_X alike -- whichever event came last -- while the range it
+// scales with is read from ABS_X alone. A controller that reports scaled pixel
+// positions on ABS_X and raw sensor counts on the multi-touch axes therefore
+// gets a raw count divided by a pixel range every time the MT pair arrives: a
+// few counts of finger jitter become several pixels of pointer movement (the
+// list that drifts under a resting finger), a press lands on whatever row the
+// scaled count happened to point at (the tap that does nothing, or opens the
+// wrong thing), and a drag never engages because its first movement is a leap.
+//
+// src/system/input/touch.h holds the filter that fixes this: one source per
+// point, each scaled with its own range, a press that does not report a
+// position until its own coordinate has arrived, and only the first contact
+// followed. The evdev driver is kept for the case where the node cannot be
+// read and has no usable range -- a screen that is awkward to touch beats one
+// that cannot be touched at all.
+
+// The kernel's event, as the filter's tokens. This is the only place that knows
+// what the numbers in <linux/input.h> are, which is what keeps the filter
+// testable on a machine without them.
+static bool touch_token(const struct input_event *in, touch_event_t *out) {
+	out->value = in->value;
+	if (in->type == EV_ABS) {
+		out->type = TOUCH_EV_ABS;
+		switch (in->code) {
+		case ABS_X:
+			out->code = TOUCH_ABS_X;
+			return true;
+		case ABS_Y:
+			out->code = TOUCH_ABS_Y;
+			return true;
+		case ABS_MT_POSITION_X:
+			out->code = TOUCH_MT_X;
+			return true;
+		case ABS_MT_POSITION_Y:
+			out->code = TOUCH_MT_Y;
+			return true;
+		case ABS_MT_SLOT:
+			out->code = TOUCH_MT_SLOT;
+			return true;
+		case ABS_MT_TRACKING_ID:
+			out->code = TOUCH_MT_ID;
+			return true;
+		default:
+			return false;
+		}
+	}
+	if (in->type == EV_KEY && in->code == BTN_TOUCH) {
+		out->type = TOUCH_EV_KEY;
+		out->code = TOUCH_BTN_TOUCH;
+		return true;
+	}
+	return false;
+}
+
+// LVGL asks where the finger is every LV_DEF_REFR_PERIOD. Everything the panel
+// has sent since the last ask is read here and folded into the filter, and the
+// state it is left in is the answer. The lift keeps reporting the last place
+// the finger was, so a handler that acts on release acts where the finger was.
+static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
+	(void)indev;
+	if (fb_touch_fd < 0) {
+		data->state = LV_INDEV_STATE_RELEASED;
+		return;
+	}
+
+	struct input_event in;
+	while (read(fb_touch_fd, &in, sizeof(in)) == (ssize_t)sizeof(in)) {
+		touch_event_t ev;
+		if (touch_token(&in, &ev)) {
+			touch_feed(&fb_touch_state, &ev);
+		}
+	}
+
+	// A press only counts as pressed once it has a position of its own. Without
+	// that, the tick between a finger landing and its coordinate arriving would
+	// report a press at wherever the previous touch ended -- the tap that lands
+	// on the row above the one that was actually touched.
+	int x = 0, y = 0;
+	bool placed = touch_point(&fb_touch_state, &x, &y);
+	if (placed) {
+		fb_touch_last.x = x;
+		fb_touch_last.y = y;
+	}
+
+	data->point = fb_touch_last;
+	data->state = touch_pressed(&fb_touch_state) && placed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+// Opens the node and registers it as the pointer. NULL when the node cannot be
+// opened or reports no range worth scaling with.
+static lv_indev_t *open_panel_touch(lv_display_t *disp, const char *node) {
+	int fd = open(node, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0) {
+		fprintf(stderr, "input: cannot open %s: %s\n", node, strerror(errno));
+		return NULL;
+	}
+
+	struct input_absinfo ax, ay, mx, my;
+	touch_range_t abs = {0}, mt = {0};
+	bool have_abs = ioctl(fd, EVIOCGABS(ABS_X), &ax) == 0 && ioctl(fd, EVIOCGABS(ABS_Y), &ay) == 0;
+	bool have_mt = ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &mx) == 0 && ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &my) == 0;
+	if (have_abs) {
+		abs.min_x = ax.minimum;
+		abs.max_x = ax.maximum;
+		abs.min_y = ay.minimum;
+		abs.max_y = ay.maximum;
+	}
+	if (have_mt) {
+		mt.min_x = mx.minimum;
+		mt.max_x = mx.maximum;
+		mt.min_y = my.minimum;
+		mt.max_y = my.maximum;
+	}
+	have_abs = have_abs && abs.max_x > abs.min_x && abs.max_y > abs.min_y;
+	have_mt = have_mt && mt.max_x > mt.min_x && mt.max_y > mt.min_y;
+	if (!have_abs && !have_mt) {
+		fprintf(stderr, "input: %s reports no usable coordinate range, leaving it to the evdev driver\n", node);
+		close(fd);
+		return NULL;
+	}
+
+	int width = (int)lv_display_get_horizontal_resolution(disp);
+	int height = (int)lv_display_get_vertical_resolution(disp);
+	touch_init(&fb_touch_state, width, height, have_abs, abs, have_mt, mt);
+	touch_set_rotated(&fb_touch_state, fb_rotated);
+
+	lv_indev_t *indev = lv_indev_create();
+	if (!indev) {
+		close(fd);
+		return NULL;
+	}
+	fb_touch_fd = fd;
+	lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+	lv_indev_set_read_cb(indev, touch_read_cb);
+	lv_indev_set_display(indev, disp);
+
+	printf("input: %s scaling to %dx%d from %s", node, width, height, touch_source_name(&fb_touch_state));
+	if (have_abs) {
+		printf(", ABS_X/Y %d..%d x %d..%d", abs.min_x, abs.max_x, abs.min_y, abs.max_y);
+	}
+	if (have_mt) {
+		printf(", ABS_MT %d..%d x %d..%d", mt.min_x, mt.max_x, mt.min_y, mt.max_y);
+	}
+	printf("\n");
+	return indev;
+}
+
 static lv_display_t *init_target_display(void) {
 	// Tear-free page flipping when the framebuffer supports it...
 	lv_display_t *disp = try_panned_display();
@@ -1949,33 +2040,43 @@ static lv_display_t *init_target_display(void) {
 	// The panel as the kernel describes it, not by its number; event1 and then
 	// event0, as before, only when nothing answers to that description.
 	char found[sizeof(fb_touch_node)];
-	lv_indev_t *touch = NULL;
 	if (find_touch_node(found, sizeof(found))) {
-		touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, found);
-		if (touch) {
-			snprintf(fb_touch_node, sizeof(fb_touch_node), "%s", found);
+		snprintf(fb_touch_node, sizeof(fb_touch_node), "%s", found);
+	} else {
+		// The last resort, and still only for a node that describes contacts.
+		static const char *FALLBACKS[] = {"/dev/input/event1", "/dev/input/event0"};
+		for (size_t i = 0; i < sizeof(FALLBACKS) / sizeof(FALLBACKS[0]); i++) {
+			int fd = open(FALLBACKS[i], O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+			if (fd < 0) {
+				continue;
+			}
+			bool contact = node_reports_contact(fd);
+			close(fd);
+			if (contact) {
+				snprintf(fb_touch_node, sizeof(fb_touch_node), "%s", FALLBACKS[i]);
+				printf("input: %s reports contacts, using it as the touch panel\n", FALLBACKS[i]);
+				break;
+			}
 		}
 	}
-	if (!touch) {
-		touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, "/dev/input/event1");
-		if (touch) {
-			snprintf(fb_touch_node, sizeof(fb_touch_node), "%s", "/dev/input/event1");
-		}
-	}
-	if (!touch) {
-		fprintf(stderr, "Warning: Failed to open /dev/input/event1. Trying event0...\n");
-		touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, "/dev/input/event0");
-		if (touch) {
-			snprintf(fb_touch_node, sizeof(fb_touch_node), "%s", "/dev/input/event0");
+
+	lv_indev_t *touch = NULL;
+	if (fb_touch_node[0]) {
+		touch = open_panel_touch(disp, fb_touch_node);
+		if (!touch) {
+			touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, fb_touch_node);
+			if (touch) {
+				printf("input: %s opened by the evdev driver\n", fb_touch_node);
+			}
 		}
 	}
 
 	if (touch) {
 		lv_indev_set_display(touch, disp);
-		tune_pointer(touch);
 		fb_touch = touch;
 		printf("Touch screen input driver successfully registered.\n");
 	} else {
+		fb_touch_node[0] = '\0';
 		fprintf(stderr, "Warning: No touch input device found.\n");
 	}
 
