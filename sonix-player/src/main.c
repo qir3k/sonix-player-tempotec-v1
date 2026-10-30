@@ -1077,43 +1077,6 @@ static void install_signal_guards(void) {
 // while allowing normal finger roll (up to 16 px).
 #define SCROLL_THROW_DECAY_PCT 10
 #define SCROLL_START_LIMIT_PX 8
-#define TAP_SLOP_PX 16
-
-static void tap_guard_cb(lv_event_t *e) {
-	lv_indev_t *indev = lv_indev_active();
-	if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) {
-		return;
-	}
-
-	static lv_point_t press_at;
-	static bool armed;
-
-	lv_point_t p;
-	lv_indev_get_point(indev, &p);
-
-	lv_event_code_t code = lv_event_get_code(e);
-	if (code == LV_EVENT_PRESSED) {
-		press_at = p;
-		armed = true;
-		return;
-	}
-	if (code == LV_EVENT_RELEASED) {
-		armed = false;
-		return;
-	}
-	if (code != LV_EVENT_SHORT_CLICKED && code != LV_EVENT_CLICKED) {
-		return;
-	}
-	if (!armed) {
-		return;
-	}
-
-	int32_t dx = p.x - press_at.x;
-	int32_t dy = p.y - press_at.y;
-	if (dx * dx + dy * dy > TAP_SLOP_PX * TAP_SLOP_PX) {
-		lv_indev_stop_processing(indev);
-	}
-}
 
 static void tune_pointer(lv_indev_t *indev) {
 	if (!indev) {
@@ -1121,7 +1084,6 @@ static void tune_pointer(lv_indev_t *indev) {
 	}
 	lv_indev_set_scroll_throw(indev, SCROLL_THROW_DECAY_PCT);
 	lv_indev_set_scroll_limit(indev, SCROLL_START_LIMIT_PX);
-	lv_indev_add_event_cb(indev, tap_guard_cb, LV_EVENT_ALL, NULL);
 }
 
 // The panel of the player this binary was first written for, and what an
@@ -2753,3 +2715,4 @@ int main(int argc, char **argv) {
 
 	return 0;
 }
+

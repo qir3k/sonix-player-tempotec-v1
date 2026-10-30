@@ -833,7 +833,7 @@ static void refresh_content(void) {
 	shown_cover = player_cover_image();
 
 	if (!spectrum_now()) {
-		lv_color_t page = (theme_is_monochrome() || theme_is_tokyo_night()) ? theme()->screen_bg : lv_color_black();
+		lv_color_t page = theme_is_monochrome() ? theme()->screen_bg : lv_color_black();
 		lv_obj_set_style_bg_color(saver, page, 0);
 	}
 	lv_obj_set_hidden(spectrum, !spectrum_now());

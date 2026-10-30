@@ -916,9 +916,6 @@ bool theme_reload_custom(void) {
 	}
 	return true;
 }
-	}
-	return true;
-}
 
 void theme_set_kind(theme_kind_t kind) {
 	if (kind < THEME_KIND_DARK || kind > THEME_KIND_CUSTOM) {
@@ -930,7 +927,6 @@ void theme_set_kind(theme_kind_t kind) {
 	// A theme that has been switched off is not a palette this player has.
 	if (kind < THEME_KIND_COUNT && !theme_kind_enabled(kind)) {
 		kind = theme_first_enabled();
-	}
 	}
 	if (selected_kind == kind) {
 		return;
