@@ -15,11 +15,11 @@
 
 static char g_cpufreq_dir[128] = "";
 static bool g_cpufreq_available = false;
+static bool g_profile_initialized = false;
 
 static unsigned long g_max_freq = 1008000;
 static unsigned long g_min_freq = 240000;
-static unsigned long g_audio_freq = 648000;
-static unsigned long g_low_bat_freq = 600000;
+static unsigned long g_low_bat_freq = 800000;
 static char g_best_governor[32] = "ondemand";
 
 static cpupower_profile_t g_current_profile = CPU_PROFILE_ACTIVE;
@@ -35,6 +35,7 @@ static int g_cached_load_percent = 0;
 static uint64_t g_last_load_check_ms = 0;
 static unsigned long long g_prev_active_jiffies = 0;
 static unsigned long long g_prev_total_jiffies = 0;
+static uint64_t g_last_yield_ms = 0;
 
 static uint64_t now_ms(void) {
 	struct timeval tv;
@@ -107,8 +108,13 @@ static void apply_kernel_panic_guards(void) {
 }
 
 static void apply_profile(cpupower_profile_t profile) {
+	if (g_profile_initialized && g_current_profile == profile) {
+		return; // No change needed; avoid unnecessary sysfs writes on periodic timer ticks
+	}
+
 	if (!g_cpufreq_available) {
 		g_current_profile = profile;
+		g_profile_initialized = true;
 		return;
 	}
 
@@ -123,14 +129,19 @@ static void apply_profile(cpupower_profile_t profile) {
 		gov = g_best_governor;
 		break;
 	case CPU_PROFILE_AUDIO_STANDBY:
-		target_max_freq = g_audio_freq;
+		// When audio is playing with screen off, allow ondemand governor to scale up to full
+		// clock if heavy codecs (e.g. 24/192 FLAC / DSD / LDAC) demand it, but enable powersave_bias
+		// so it prefers lower frequencies (240-400 MHz) for standard audio.
+		target_max_freq = g_max_freq;
 		gov = g_best_governor;
 		break;
 	case CPU_PROFILE_DEEP_STANDBY:
+		// Screen off, nothing playing: cap to minimum frequency for maximum power savings
 		target_max_freq = g_min_freq > 0 ? g_min_freq : 240000;
 		gov = (strcmp(g_best_governor, "conservative") == 0) ? "conservative" : g_best_governor;
 		break;
 	case CPU_PROFILE_LOW_BATTERY:
+		// Low battery (<=15%): cap peak frequency to prevent high-current voltage sag brownouts
 		target_max_freq = g_low_bat_freq;
 		gov = g_best_governor;
 		break;
@@ -158,11 +169,10 @@ static void apply_profile(cpupower_profile_t profile) {
 		}
 	}
 
-	if (g_current_profile != profile) {
-		fprintf(stderr, "cpupower: profile changed to %d (max_freq=%lu kHz, gov=%s)\n",
-				(int)profile, target_max_freq, gov);
-	}
+	fprintf(stderr, "cpupower: profile %d -> %d (max_freq=%lu kHz, gov=%s)\n",
+			(int)g_current_profile, (int)profile, target_max_freq, gov);
 	g_current_profile = profile;
+	g_profile_initialized = true;
 }
 
 static void update_profile_locked(void) {
@@ -200,20 +210,17 @@ void cpupower_init(void) {
 		g_min_freq = read_node_ulong(path, 240000);
 
 		if (g_max_freq > g_min_freq) {
-			// Budget audio standby at ~65% of max frequency (e.g. ~650 MHz on 1 GHz)
-			g_audio_freq = g_min_freq + ((g_max_freq - g_min_freq) * 65) / 100;
-			// Low battery frequency capped at ~60%
-			g_low_bat_freq = g_min_freq + ((g_max_freq - g_min_freq) * 60) / 100;
+			// Low battery frequency capped at ~80%
+			g_low_bat_freq = g_min_freq + ((g_max_freq - g_min_freq) * 80) / 100;
 		} else {
-			g_audio_freq = g_max_freq;
 			g_low_bat_freq = g_max_freq;
 		}
 
 		select_governor();
-		fprintf(stderr, "cpupower: initialized (sysfs=%s, min=%lu, max=%lu, audio_standby=%lu, gov=%s)\n",
-				g_cpufreq_dir, g_min_freq, g_max_freq, g_audio_freq, g_best_governor);
+		fprintf(stderr, "cpupower: initialized (sysfs=%s, min=%lu, max=%lu, low_bat=%lu, gov=%s)\n",
+				g_cpufreq_dir, g_min_freq, g_max_freq, g_low_bat_freq, g_best_governor);
 	} else {
-		fprintf(stderr, "cpupower: cpufreq sysfs not available; software power throttling active\n");
+		fprintf(stderr, "cpupower: cpufreq sysfs not available; software load yielding active\n");
 	}
 
 	pthread_mutex_lock(&g_power_mutex);
@@ -229,6 +236,10 @@ void cpupower_set_profile(cpupower_profile_t profile) {
 
 void cpupower_screen_state(bool screen_on, bool audio_active) {
 	pthread_mutex_lock(&g_power_mutex);
+	if (g_screen_on == screen_on && g_audio_active == audio_active) {
+		pthread_mutex_unlock(&g_power_mutex);
+		return;
+	}
 	g_screen_on = screen_on;
 	g_audio_active = audio_active;
 	update_profile_locked();
@@ -237,6 +248,10 @@ void cpupower_screen_state(bool screen_on, bool audio_active) {
 
 void cpupower_battery_state(int percent, bool charging) {
 	pthread_mutex_lock(&g_power_mutex);
+	if (g_battery_percent == percent && g_charging == charging) {
+		pthread_mutex_unlock(&g_power_mutex);
+		return;
+	}
 	g_battery_percent = percent;
 	g_charging = charging;
 	update_profile_locked();
@@ -300,9 +315,15 @@ bool cpupower_is_stressed(void) {
 }
 
 void cpupower_yield_if_stressed(void) {
-	if (cpupower_is_stressed()) {
-		// Yield the single-core CPU for 12 ms to allow audio PCM writes and UI events to breathe,
-		// cool down the SoC, and prevent overpowering the battery rail.
-		usleep(12000);
+	if (!cpupower_is_stressed()) {
+		return;
 	}
+	uint64_t now = now_ms();
+	// Yield at most once every 30 ms to avoid stalling overall throughput
+	if (now - g_last_yield_ms < 30) {
+		return;
+	}
+	g_last_yield_ms = now;
+	// Release the CPU timeslice for 6 ms to let audio PCM writes and UI events breathe
+	usleep(6000);
 }
