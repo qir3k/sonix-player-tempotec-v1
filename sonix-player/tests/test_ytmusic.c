@@ -173,6 +173,12 @@ bool http_get_ex(const char *url, const char *extra_headers, bool want_error_bod
 	return true;
 }
 
+// What the last Content-Range said the whole file was. The fake network above
+// answers from canned bodies and keeps no such record, so this says "not
+// known", which is what a server without Content-Range leaves behind -- and
+// exactly the case the downloader has to keep working without.
+uint64_t http_last_content_range_total(void) { return 0; }
+
 // A ranged request against a canned body behaves the way a server honouring
 // Range does: the bytes asked for, or 416 once the offset runs past the end.
 // The downloader relies on that -- a short chunk is not an ending, and only
