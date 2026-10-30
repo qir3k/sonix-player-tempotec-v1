@@ -8,6 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Defined with the theme switches further down; theme_init() reads it to put a
+// config that names a theme the card has since switched off back on one that
+// is there.
+static const char *theme_config_value(theme_kind_t kind);
+
 lv_style_t theme_style_screen;
 lv_style_t theme_style_panel;
 lv_style_t theme_style_card;
@@ -434,6 +439,15 @@ void theme_init(void) {
 		selected_kind = config_get_bool("ui", "dark_theme", true) ? THEME_KIND_DARK : THEME_KIND_LIGHT;
 	}
 
+	// A theme switched off since the card was written is not the one to boot
+	// into: the fallback is the first one still enabled, and the saved key is
+	// put right here so the next boot does not work it out again.
+	if (!theme_kind_enabled(selected_kind)) {
+		selected_kind = theme_first_enabled();
+		config_set("ui", "theme", theme_config_value(selected_kind));
+		config_save();
+	}
+
 	// The marker the boot script reads has to agree with the setting too, not
 	// only with the theme. The added palettes use the dark variant of that
 	// legacy light/dark boot-logo switch.
@@ -738,8 +752,81 @@ static const char *theme_config_value(theme_kind_t kind) {
 	}
 }
 
+// The config key behind one theme's switch. The four are separate booleans
+// rather than a list: a theme added later starts on without a migration, which
+// is the same bargain the [addons] section makes.
+static const char *theme_enabled_key(theme_kind_t kind) {
+	switch (kind) {
+	case THEME_KIND_LIGHT:
+		return "theme_light";
+	case THEME_KIND_AMBER_ON_BLACK:
+		return "theme_amber";
+	case THEME_KIND_OLED:
+		return "theme_oled";
+	case THEME_KIND_DARK:
+	default:
+		return "theme_dark";
+	}
+}
+
+bool theme_kind_enabled(theme_kind_t kind) {
+	if (kind < THEME_KIND_DARK || kind >= THEME_KIND_COUNT) {
+		return false;
+	}
+	return config_get_bool("ui", theme_enabled_key(kind), true);
+}
+
+theme_kind_t theme_first_enabled(void) {
+	for (int i = THEME_KIND_DARK; i < THEME_KIND_COUNT; i++) {
+		if (theme_kind_enabled((theme_kind_t)i)) {
+			return (theme_kind_t)i;
+		}
+	}
+	// Unreachable: the last switch refuses to go off. Answered with the default
+	// rather than by returning an invalid kind.
+	return THEME_KIND_DARK;
+}
+
+static int themes_enabled_count(void) {
+	int count = 0;
+	for (int i = THEME_KIND_DARK; i < THEME_KIND_COUNT; i++) {
+		if (theme_kind_enabled((theme_kind_t)i)) {
+			count++;
+		}
+	}
+	return count;
+}
+
+bool theme_set_kind_enabled(theme_kind_t kind, bool on) {
+	if (kind < THEME_KIND_DARK || kind >= THEME_KIND_COUNT) {
+		return false;
+	}
+	if (theme_kind_enabled(kind) == on) {
+		return true;
+	}
+	// The last one stays: an interface with no palette is not an interface.
+	if (!on && themes_enabled_count() <= 1) {
+		return false;
+	}
+	config_set_bool("ui", theme_enabled_key(kind), on);
+	config_save();
+	// Turning off the one on screen hands over to the first still enabled, which
+	// is also what the next boot would choose.
+	if (!on && selected_kind == kind) {
+		theme_set_kind(theme_first_enabled());
+	}
+	return true;
+}
+
 void theme_set_kind(theme_kind_t kind) {
-	if (kind < THEME_KIND_DARK || kind >= THEME_KIND_COUNT || selected_kind == kind) {
+	if (kind < THEME_KIND_DARK || kind >= THEME_KIND_COUNT) {
+		return;
+	}
+	// A theme that has been switched off is not a palette this player has.
+	if (!theme_kind_enabled(kind)) {
+		kind = theme_first_enabled();
+	}
+	if (selected_kind == kind) {
 		return;
 	}
 

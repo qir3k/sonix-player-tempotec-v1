@@ -28,12 +28,22 @@ static const addon_t ADDONS[] = {
 	// What the player does WITH the music: words on screen, a curve for a pair
 	// of headphones, a line to two scrobblers. Four features, not four places,
 	// which is why the heading says so.
-	{"lyrics", "lyrics_search", "addon_lyrics_note", "plugins_section_features"},
-	{"artwork", "find_artwork", "addon_artwork_note", "plugins_section_features"},
-	// Beside the search rather than inside it: writing into a file's tags
-	// rewrites the song, and somebody may well want the sleeve looked up and
-	// put beside the files without ever letting the player do that.
-	{"artwork_tag", "addon_artwork_tag", "addon_artwork_tag_note", "plugins_section_features"},
+	{"lyrics", "lyrics_fetcher", "addon_lyrics_note", "plugins_section_features"},
+	// One artwork module, one switch: the search and the writing of what it
+	// found into a file's tags are one act from where the user sits, and two
+	// toggles for it only asked which of the two was holding the feature back.
+	{"artwork", "cover_art_fetcher", "addon_artwork_note", "plugins_section_features"},
+	// The three ways this player shapes the sound, each a module of its own:
+	// the graphic equaliser, the parametric one and MSEB. Switched off, their
+	// pages are never built, their rows leave Music settings and their buttons
+	// leave the control centre.
+	{"eq", "equaliser", "addon_eq_note", "plugins_section_features"},
+	{"peq", "peq", "addon_peq_note", "plugins_section_features"},
+	{"mseb", "mseb", "addon_mseb_note", "plugins_section_features"},
+	// The sleep timers belong to the music transport rather than to a service,
+	// so they are switched here like any other module: off, no timer is drawn
+	// anywhere and nothing counts down.
+	{"sleep_timer", "sleep_timer", "addon_sleep_timer_note", "plugins_section_features"},
 	{"autoeq", "autoeq", "addon_autoeq_note", "plugins_section_features"},
 	{"lastfm", "last_fm", "addon_lastfm_note", "plugins_section_features"},
 	{"listenbrainz", "listenbrainz", "addon_listenbrainz_note", "plugins_section_features"},

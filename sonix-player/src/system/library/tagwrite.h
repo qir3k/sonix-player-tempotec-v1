@@ -34,9 +34,9 @@ bool tagwrite_supported(const char *path);
 // sniffed, not trusted. True when the file was rewritten; false with a tag in
 // `error` otherwise, the original file untouched.
 //
-// The interface this backs is the "Write artwork into tags" module in Settings
-// -> Plugins: with it off the artwork search writes a cover file beside a track
-// that has none and refuses on one that carries its own.
+// The interface this backs is the "Find artwork" module in Settings
+// -> Plugins: with it off the artwork search never runs at all, and a track
+// that carries its own artwork is left alone.
 bool tagwrite_set_cover(const char *path, const void *data, size_t size, char *error,
 						size_t error_size);
 

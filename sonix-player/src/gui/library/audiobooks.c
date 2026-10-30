@@ -9,6 +9,7 @@
 
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
+#include "src/system/addons/addons.h"
 #include "src/gui/nowplaying/coverloader.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/confirm.h"
@@ -1631,7 +1632,11 @@ static void build_settings_page(gui_config_t *cfg) {
 	// The same wheels as the music page. "End of chapter" is not among the
 	// choices here -- it is not a length, and the row above is the switch for
 	// it.
-	settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
+	// The sleep timer is a module of its own (Plugins): off, the row leaves the
+	// page and nothing counts down here or on the control centre.
+	if (addons_enabled("sleep_timer")) {
+		settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
+	}
 	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_AUDIOBOOK));
 
 	build_toggle_pills(container, "audiobook_rewind_after_pause", rewind_toggle_cb, &rewind_card);

@@ -10,6 +10,7 @@
 
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
+#include "src/system/addons/addons.h"
 #include "src/system/playback/sleeptimer.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
@@ -3992,8 +3993,11 @@ static void build_settings_page(gui_config_t *cfg) {
 	build_order_card(container);
 	settingsrow_toggle(container, "podcast_stop_at_end_of_episode", &stop_episode_switch, stop_episode_cb);
 	// Its own, and not the music one: a stretch set for falling asleep to a
-	// podcast should not be counting down over an album the next morning.
-	settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
+	// podcast should not be counting down over an album the next morning. The
+	// module switched off in Plugins takes the row away from every page.
+	if (addons_enabled("sleep_timer")) {
+		settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
+	}
 	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_PODCAST));
 
 	refresh_settings_rows();

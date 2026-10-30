@@ -16,6 +16,7 @@
 #include "src/gui/nowplaying/artworkpage.h"
 #include "src/gui/wireless/airplay.h"
 #include "src/gui/bluetooth/airpodspage.h"
+#include "src/gui/bluetooth/earfunpage.h"
 #include "src/gui/settings/appearance.h"
 #include "src/gui/bluetooth/btaudio.h"
 #include "src/gui/settings/bootpicpage.h"
@@ -679,6 +680,7 @@ void gui_init(gui_config_t *cfg) {
 	btaudio_screen = lv_obj_create(NULL);
 	btreceiverpage_screen = lv_obj_create(NULL);
 	airpodspage_screen = lv_obj_create(NULL);
+	earfunpage_screen = lv_obj_create(NULL);
 	wifitransfer_screen = lv_obj_create(NULL);
 	airplay_screen = lv_obj_create(NULL);
 	dlna_screen = lv_obj_create(NULL);
@@ -726,6 +728,7 @@ void gui_init(gui_config_t *cfg) {
 	dlna_page_init(cfg);		 // likewise: its "no Wi-Fi" row points there too
 	sonixlink_page_init(cfg);	 // likewise
 	airpodspage_init(cfg);		 // before btaudio: its AirPods row points at this page
+	earfunpage_init(cfg);		 // ... and its EarFun row at this one
 	btaudio_init(cfg);			 // before btsettings: its gear points at this page
 	btreceiverpage_init(cfg);	 // likewise, for the button beside the gear
 	btsettings_init(cfg);
@@ -856,7 +859,7 @@ void gui_init(gui_config_t *cfg) {
 		lyricsearch_screen,
 		wireless_screen,
 		wifisettings_screen,
-		btsettings_screen, btaudio_screen,	 airpodspage_screen, airplay_screen,   streaming_screen,
+		btsettings_screen, btaudio_screen,	 airpodspage_screen, earfunpage_screen, airplay_screen,   streaming_screen,
 		radiopage_screen,  radiolist_screen, radiosearch_screen,
 		dlna_screen,	   sonixlink_screen,	 morepage_screen,	  gearboypage_screen,
 	};

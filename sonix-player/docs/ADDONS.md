@@ -29,6 +29,15 @@ screen's library tile while Audiobooks is off, and the Languages & Fonts page.
 They cost one bitmap or one config line and apply at once, and the page says so
 rather than putting them beside switches that need a restart.
 
+**Themes** has a heading of its own at the bottom of the page, with a switch for
+each palette this build carries. A theme is not a module either: nothing is
+built for one, so its switch applies at once. It is the one list where a switch
+cannot go off freely -- an interface with no palette has nothing to draw with --
+so the last enabled theme refuses to be switched off, and turning off the one on
+screen hands over to the first still enabled straight away. A card whose theme
+has since been switched off is put right at startup by `theme_init()`, which is
+what makes a hand-edited config safe.
+
 ## The modules
 
 | id | what it brings | where it is offered |
@@ -39,16 +48,17 @@ rather than putting them beside switches that need a restart.
 | `podcasts` | Podcast search, subscriptions, saved episodes | Streaming |
 | `audiobooks` | The Audiobooks section: books, series, authors, its settings | Library |
 | `ebook` | The Books shelf and the EPUB reader | Library |
-| `lyrics` | The lyrics pane and the online lyrics search | Music features |
+| `lyrics` | The lyrics pane and the online lyrics search (Lyrics Fetcher) | Music features |
+| `artwork` | Cover Art Fetcher: the online sleeve search and its tag writing | Music features |
+| `eq` | The graphic equaliser page and the tone controls built on it | Music features |
+| `peq` | The parametric equaliser and its presets | Music features |
+| `mseb` | The MSEB sliders | Music features |
+| `sleep_timer` | The sleep timers of every page and the control centre's | Music features |
 | `autoeq` | AutoEQ and its headphone curves | Music features |
 | `lastfm` | Scrobbling to Last.fm | Music features |
 | `listenbrainz` | Scrobbling to ListenBrainz, on its own switch | Music features |
 | `subsonic` | A Subsonic / Navidrome server | Streaming |
 | `radio` | Internet radio and the station directory | Streaming |
-| `lyrics` | The player's lyrics pane and its online search | Player |
-| `autoeq` | AutoEQ headphone corrections in the parametric equaliser | Audio |
-| `lastfm` | Scrobbling to Last.fm | Settings -> Last.fm |
-| `listenbrainz` | Scrobbling to ListenBrainz, independent of Last.fm | Settings -> ListenBrainz |
 | `metronome` | The metronome | More |
 | `calculator` | The calculator | More |
 | `notes` | The notes shelf and its editor | More |

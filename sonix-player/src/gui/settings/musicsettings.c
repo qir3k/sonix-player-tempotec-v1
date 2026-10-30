@@ -2577,7 +2577,11 @@ static void build_playback_page(gui_config_t *cfg) {
 
 	// The sleep timer, directly under it, with its two wheels revealed by the
 	// switch the way the screensaver's two pills are.
-	settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
+	// A module of its own, switched in Plugins: off, the row is not drawn and
+	// the control centre's timer tile goes with it.
+	if (addons_enabled("sleep_timer")) {
+		settingsrow_toggle_duration(container, "sleep_timer", sleep_toggle_cb, sleep_wheel_cb, &sleep_row);
+	}
 	settingsrow_duration_set_minutes(&sleep_row, sleeptimer_minutes(SLEEPTIMER_MUSIC));
 	sleep_refresh();
 	theme_register_refresh(sleep_refresh);
@@ -2652,17 +2656,26 @@ void musicsettings_init(gui_config_t *cfg) {
 		settingsrow_add(container, "listenbrainz", NULL, switch_screen_cb, listenbrainzsettings_screen());
 	}
 
-	build_eq_page(cfg);
-	eq_row = settingsrow_add(container, "equaliser", NULL, switch_screen_cb, eq_screen);
+	// Each of the three is a module of its own (Plugins -> Music features): off,
+	// its page is never built and its row goes with it, rather than opening a
+	// screen that was never made.
+	if (addons_enabled("eq")) {
+		build_eq_page(cfg);
+		eq_row = settingsrow_add(container, "equaliser", NULL, switch_screen_cb, eq_screen);
+	}
 
 	// PEQ right below: the same thing said more precisely, so whoever comes
 	// looking for the equaliser finds the slider one first and the parametric
 	// one next to it.
-	peqpage_init(cfg);
-	peq_row = settingsrow_add(container, "peq", NULL, switch_screen_cb, peqpage_screen());
+	if (addons_enabled("peq")) {
+		peqpage_init(cfg);
+		peq_row = settingsrow_add(container, "peq", NULL, switch_screen_cb, peqpage_screen());
+	}
 
-	build_mseb_page(cfg);
-	mseb_row = settingsrow_add(container, "mseb", NULL, switch_screen_cb, mseb_screen);
+	if (addons_enabled("mseb")) {
+		build_mseb_page(cfg);
+		mseb_row = settingsrow_add(container, "mseb", NULL, switch_screen_cb, mseb_screen);
+	}
 
 	build_soundfield_page(cfg);
 	soundfield_row = settingsrow_add(container, "musicsettings_soundfield", NULL, switch_screen_cb, soundfield_screen);

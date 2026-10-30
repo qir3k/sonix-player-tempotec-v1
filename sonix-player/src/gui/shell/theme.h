@@ -187,6 +187,28 @@ void theme_set_dark(bool dark);
 // Picks a specific built-in theme, saves it, and repaints the visible UI.
 void theme_set_kind(theme_kind_t kind);
 
+// Which of the built-in themes this player offers.
+//
+// A theme is not a module: nothing is built for one and nothing is saved by
+// turning one off, so the switches live in the Plugins page beside the other
+// "what does this player have" answers. All four start on, and at least one
+// always stays on -- a player with no theme has no interface to draw, so the
+// last switch refuses to move rather than leaving a screen with no palette.
+//
+// A theme that is turned off while it is the one on screen hands over to the
+// first one still enabled, and a config that names a theme which has since been
+// switched off is put right at startup (see theme_init), so a card edited by
+// hand cannot boot into a palette that is not there.
+bool theme_kind_enabled(theme_kind_t kind);
+
+// Turns one on or off. False when the answer is refused -- the last enabled
+// theme asked to go off -- and nothing is written in that case.
+bool theme_set_kind_enabled(theme_kind_t kind, bool on);
+
+// The first theme still enabled, in the order the Appearance page lists them:
+// the one a disabled choice falls back to.
+theme_kind_t theme_first_enabled(void);
+
 // The picture the next power-on shows (Appearance > Boot screen):
 // BOOTLOGO_STOCK, the firmware's own light/dark pair, one of the three added
 // pictures -- BOOTLOGO_RETROSPACE, BOOTLOGO_SPACE, BOOTLOGO_TRAVELLING -- or

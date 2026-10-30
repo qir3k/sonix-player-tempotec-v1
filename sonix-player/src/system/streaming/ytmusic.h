@@ -73,41 +73,20 @@ typedef enum {
 	YTMUSIC_FILTER_PODCASTS,
 } ytmusic_filter_t;
 
-typedef struct {
-	char device_code[512];
-	char user_code[32];
-	char verification_url[256];
-	int interval_secs;
-	int expires_secs;
-} ytmusic_device_login_t;
-
-typedef enum {
-	YTMUSIC_LOGIN_PENDING = 0,
-	YTMUSIC_LOGIN_OK,
-	YTMUSIC_LOGIN_EXPIRED,
-	YTMUSIC_LOGIN_ERROR,
-} ytmusic_login_state_t;
-
-// Call after config_init() and streamkeys_init(). OAuth tokens or the optional
-// imported cookie are stored in a private sidecar beside device_config.ini,
-// outside config.c's small per-value limit, and survive player reboots.
+// Call after config_init(). The imported cookie is stored in a private sidecar
+// beside device_config.ini, outside config.c's small per-value limit, and
+// survives player reboots.
 void ytmusic_init(void);
 
-bool ytmusic_logged_in(void);
-bool ytmusic_oauth_configured(void);
-bool ytmusic_login_device_begin(ytmusic_device_login_t *login, char *error, size_t error_size);
-ytmusic_login_state_t ytmusic_login_device_poll(ytmusic_device_login_t *login,
-											   char *error, size_t error_size);
 bool ytmusic_set_session_cookie(const char *cookie, char *error, size_t error_size);
 // One-time import from <card_root>/ytmusic_session.txt. The file contains a
 // single Cookie header value exported by a trusted YouTube Music sign-in
 // helper. Successful import removes the card copy after saving it internally.
 bool ytmusic_import_session_file(const char *card_root, char *error, size_t error_size);
 void ytmusic_session_cookie(char *out, size_t size);
-// Whether the imported browser session is what the player holds. Google's
-// music endpoints accept nothing else for an account's own pages, so this is
-// the honest answer to "will the Favourites page show the account's list" --
-// ytmusic_logged_in() also counts an OAuth token, which those pages refuse.
+// Whether an account is attached at all, which is whether the imported browser
+// session is: it is the only kind there is, and the honest answer to "will the
+// Favourites page show the account's list".
 bool ytmusic_session_cookie_attached(void);
 bool ytmusic_logout(void);
 

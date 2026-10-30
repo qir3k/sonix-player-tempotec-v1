@@ -6,6 +6,7 @@
 #include "lvgl/lvgl.h"
 
 #include "src/gui/bluetooth/airpodspage.h"
+#include "src/gui/bluetooth/earfunpage.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
@@ -18,6 +19,7 @@
 #include "src/gui/shell/toast.h"
 #include "src/system/device/power.h"
 #include "src/system/bluetooth/airpods.h"
+#include "src/system/bluetooth/earfun.h"
 #include "src/system/audio/alsa-controls.h"
 #include "src/system/audio/audio.h"
 #include "src/system/bluetooth/bluetooth.h"
@@ -33,6 +35,7 @@ static lv_obj_t *output_row;
 static lv_obj_t *output_value;
 static lv_obj_t *airpods_row;
 static lv_obj_t *airpods_icon;
+static lv_obj_t *earfun_row;
 static lv_obj_t *codec_row;
 static lv_obj_t *codec_value;
 static lv_timer_t *poll_timer;
@@ -116,16 +119,30 @@ static void codec_chosen_cb(lv_event_t *e) {
 }
 
 // Best first, which is the order the automatic choice walks and the order
-// anybody reading the list expects.
+// anybody reading the list expects. The same order bluetooth.c ranks them in:
+// a codec this build has never heard of still gets a row (the list is whatever
+// bluealsa offers), it just sorts below the ones that are understood.
 static int codec_order(const char *name) {
 	if (strcasecmp(name, "LDAC") == 0) {
-		return 50;
+		return 60;
+	}
+	if (strncasecmp(name, "LHDC", 4) == 0) {
+		return 55;
+	}
+	if (strcasecmp(name, "SSC") == 0 || strcasecmp(name, "Scalable") == 0) {
+		return 52;
+	}
+	if (strncasecmp(name, "LLAC", 4) == 0) {
+		return 48;
 	}
 	if (strcasecmp(name, "aptX-HD") == 0) {
 		return 40;
 	}
 	if (strcasecmp(name, "aptX") == 0) {
 		return 30;
+	}
+	if (strncasecmp(name, "LC3", 3) == 0) {
+		return 24;
 	}
 	if (strcasecmp(name, "AAC") == 0) {
 		return 20;
@@ -137,7 +154,7 @@ static int codec_order(const char *name) {
 }
 
 static void build_codec_rows(char mine[][BT_CODEC_MAX], int count) {
-	// Sorted in place: five entries, so the simplest sort there is.
+	// Sorted in place: a handful of entries, so the simplest sort there is.
 	for (int i = 0; i < count; i++) {
 		for (int j = i + 1; j < count; j++) {
 			if (codec_order(mine[j]) > codec_order(mine[i])) {
@@ -257,6 +274,23 @@ static void airpods_row_cb(lv_event_t *e) {
 	switch_screen(airpodspage_screen);
 }
 
+// The EarFun row: the same shape, one row lower, and never both at once -- a
+// pair of AirPods and a pair of EarFuns cannot be the connected sink together.
+static void earfun_row_cb(lv_event_t *e) {
+	(void)e;
+	switch_screen(earfunpage_screen);
+}
+
+static void refresh_earfun_row(void) {
+	earfun_state_t state;
+	bool present = earfun_get(&state);
+	lv_obj_set_hidden(earfun_row, !present);
+	if (present) {
+		lv_label_set_text(settingsrow_name_label(earfun_row),
+						  state.name[0] ? state.name : tr("earfun"));
+	}
+}
+
 static void refresh_airpods_row(void) {
 	airpods_state_t state;
 	bool present = airpods_get(&state);
@@ -307,6 +341,7 @@ static void refresh_page(void) {
 	settingsrow_chevron_active(codec_row, connected && count > 0);
 
 	refresh_airpods_row();
+	refresh_earfun_row();
 
 	bool sync = bluetooth_volume_sync();
 	if (lv_obj_has_state(volume_switch, LV_STATE_CHECKED) != sync) {
@@ -575,6 +610,12 @@ void btaudio_init(gui_config_t *cfg) {
 	lv_image_set_src(airpods_icon, airpodspage_model_icon(AIRPODS_MODEL_UNKNOWN));
 	lv_obj_align(airpods_icon, LV_ALIGN_RIGHT_MID, -AIRPODS_ICON_INSET, 0);
 	lv_obj_set_hidden(airpods_row, true);
+
+	// And the EarFun row, the same way: it exists only while a pair that
+	// speaks the serial-port protocol is the connected sink.
+	earfun_row = settingsrow_add(container, "earfun", NULL, earfun_row_cb, NULL);
+	settingsrow_add_icon(earfun_row, &icon_headphones, THEME_SEMANTIC_CYAN);
+	lv_obj_set_hidden(earfun_row, true);
 
 	// The codec in use, and the list of what the sink offered.
 	codec_row = settingsrow_add(container, "btaudio_codecs", &codec_value, codec_row_cb, NULL);

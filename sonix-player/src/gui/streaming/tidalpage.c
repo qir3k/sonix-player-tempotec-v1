@@ -12,6 +12,7 @@
 
 #include "src/gui/board_profile.h"
 #include "src/gui/library/medialist.h"
+#include "src/system/addons/addons.h"
 #include "src/gui/shell/confirm.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
@@ -4741,10 +4742,13 @@ static void build_settings_page(gui_config_t *cfg) {
 	tsettings_screen = lv_obj_create(NULL);
 	lv_obj_t *container = settingsrow_page(tsettings_screen, cfg, "tidal_settings");
 
-	// What this page plays, before what it fetches through.
-	settingsrow_toggle_duration(container, "sleep_timer", tidal_sleep_toggle_cb,
+	// What this page plays, before what it fetches through. The sleep timer is
+	// a module of its own (Plugins): off, the row is not drawn here either.
+	if (addons_enabled("sleep_timer")) {
+		settingsrow_toggle_duration(container, "sleep_timer", tidal_sleep_toggle_cb,
 								tidal_sleep_wheel_cb, &tidal_sleep_row);
-	tidal_sleep_refresh();
+		tidal_sleep_refresh();
+	}
 
 	// Quality: the shared pill card, the same one "DSD output" and "Replay
 	// gain" use. The pills were hand-built here before, at the 480-px size

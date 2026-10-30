@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "src/system/bluetooth/airpods.h"
+#include "src/system/bluetooth/earfun.h"
 #include "src/system/audio/audio.h"
 #include "src/system/bluetooth/btlog.h"
 #include "src/system/bluetooth/btreceiver.h"
@@ -2751,11 +2752,40 @@ static bool connected_mac(char *out, size_t size) {
 // guessed at: "better than SBC" is not something to assume about a codec this
 // code has never heard of, and some of them (FastStream, the low latency ones)
 // are deliberately worse.
+//
+// Nothing here invents a codec: the list only says in what order two ends that
+// both speak one should settle on it. Whether LHDC, LLAC, SSC (Samsung
+// Scalable) or LC3/LC3plus can be spoken at all is decided by the bluealsa this
+// firmware carries -- it is asked with -h at startup and every codec it lists
+// is offered, the ranks below included. A build whose daemon has no LHDC simply
+// never sees the name, and a pair of Huawei or Samsung buds falls back to what
+// the two ends do share.
+//
+// The order is by what the codec can carry on a good link, then by how much of
+// it survives a bad one: LDAC and LHDC 5 first, then LHDC, SSC and LLAC, then
+// the lossy aptX family, then the low-complexity codecs, and AAC/SBC last.
+// Several spellings are listed because the daemon's help is not the only place
+// these names come from -- a name is compared on letters and digits only, so
+// "LHDC-V5" and "lhdc_v5" both read as lhdcv5.
 static const struct {
 	const char *name;
 	int rank;
 } CODEC_RANKS[] = {
-	{"ldac", 50}, {"aptxhd", 40}, {"aptx", 30}, {"aac", 20}, {"sbc", 10},
+	{"ldac", 60},
+	{"lhdcv5", 58},
+	{"lhdc", 55},
+	{"lhdcv4", 54},
+	{"ssc", 52},
+	{"scalable", 52},
+	{"llac", 48},
+	{"aptxadaptivelessless", 46},
+	{"aptxadaptive", 44},
+	{"aptxhd", 40},
+	{"aptx", 30},
+	{"lc3plus", 26},
+	{"lc3", 22},
+	{"aac", 20},
+	{"sbc", 10},
 };
 
 // bluealsa spells it "aptX-HD"; a config file might say "aptx_hd". Compared on
@@ -3436,8 +3466,10 @@ static void *bluetooth_worker(void *arg) {
 			char active_name[BT_NAME_MAX];
 			name_for(active_mac, active_name, sizeof(active_name));
 			airpods_set_device(active_mac, active_name);
+			earfun_set_device(active_mac, active_name);
 		} else {
 			airpods_set_device(NULL, NULL);
+			earfun_set_device(NULL, NULL);
 		}
 
 		// Asked for by the track start, answered here, read by the line two
@@ -3703,6 +3735,7 @@ void bluetooth_init(void) {
 	btvolume_init();
 	btvolume_set_sync(g_volume_sync);
 	airpods_init();
+	earfun_init();
 
 	if (pthread_create(&worker, NULL, bluetooth_worker, NULL) != 0) {
 		fprintf(stderr, "bluetooth: could not start the worker thread\n");

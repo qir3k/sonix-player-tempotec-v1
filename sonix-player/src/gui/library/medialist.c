@@ -281,6 +281,7 @@ typedef struct {
 	lv_obj_t *sel_unfav_btn;  // favourites only
 	lv_obj_t *sel_unlist_btn; // a playlist only
 	lv_obj_t *sel_close_btn;
+	lv_obj_t *sel_confirm_btn; // the downloads lists' tick, which asks with a prompt
 	unsigned corner_shown;
 	int corner_slots;
 } panel_t;
@@ -1115,7 +1116,17 @@ static bool panel_can_delete(const panel_t *p) {
 // Selection mode's buttons, four on every list: the queue first, close last,
 // and in between what fits the list. A playlist trades "add to a playlist" for
 // "take out of this one", the favourites trade the star for its removal.
+//
+// A downloads list (Tidal's or YouTube Music's saved songs) takes the Tidal
+// pages' arrangement instead: a tick and the way out, with the tick asking by
+// prompt what to do with the chosen rows (sel_confirm_cb below) -- the same
+// corner the streaming pages put on a selection.
 static void sel_buttons_show(panel_t *p, bool on) {
+	if (p->downloads) {
+		show_if(p->sel_confirm_btn, on);
+		show_if(p->sel_close_btn, on);
+		return;
+	}
 	bool playlist = p->kind == LIBRARY_LIST_PLAYLIST;
 	bool favourites = p->kind == LIBRARY_LIST_FAVOURITES;
 	show_if(p->sel_queue_btn, on);
@@ -1163,10 +1174,13 @@ static void selection_start(panel_t *p) {
 		}
 	}
 	sel_buttons_show(p, true);
-	// Four buttons, or five where the list may also delete what is chosen: the
-	// heading gives up the room they take, which in selection mode is no great
-	// loss -- the rows are the page until the selection is dealt with.
-	settingsrow_title_corner_slots(p->title_label, p->cfg, panel_can_delete(p) ? 5 : 4);
+	// Four buttons, or five where the list may also delete what is chosen; a
+	// downloads list has the two of the streaming pages' corner, the tick and
+	// the way out. The heading gives up the room they take, which in selection
+	// mode is no great loss -- the rows are the page until the selection is
+	// dealt with.
+	settingsrow_title_corner_slots(p->title_label, p->cfg,
+								   p->downloads ? 2 : (panel_can_delete(p) ? 5 : 4));
 	lv_obj_move_foreground(p->corner);
 	rows_update_selection(p);
 }
@@ -1387,8 +1401,7 @@ static void sel_gather(panel_t *p, path_list_t *list) {
 	selection_stop(p);
 }
 
-static void sel_add_cb(lv_event_t *e) {
-	panel_t *p = lv_event_get_user_data(e);
+static void sel_add_go(panel_t *p) {
 	if (!p || !p->selecting || p->sel_count == 0) {
 		return;
 	}
@@ -1402,11 +1415,12 @@ static void sel_add_cb(lv_event_t *e) {
 	path_list_free(&list);
 }
 
+static void sel_add_cb(lv_event_t *e) { sel_add_go(lv_event_get_user_data(e)); }
+
 // Each track right after the one playing, the first chosen first -- see
 // playlist_insert_next() -- and the queue on disk written now rather than at
 // the next track change.
-static void sel_queue_cb(lv_event_t *e) {
-	panel_t *p = lv_event_get_user_data(e);
+static void sel_queue_go(panel_t *p) {
 	if (!p || !p->selecting || p->sel_count == 0) {
 		return;
 	}
@@ -1425,8 +1439,9 @@ static void sel_queue_cb(lv_event_t *e) {
 	path_list_free(&list);
 }
 
-static void sel_fav_cb(lv_event_t *e) {
-	panel_t *p = lv_event_get_user_data(e);
+static void sel_queue_cb(lv_event_t *e) { sel_queue_go(lv_event_get_user_data(e)); }
+
+static void sel_fav_go(panel_t *p) {
 	if (!p || !p->selecting || p->sel_count == 0) {
 		return;
 	}
@@ -1439,6 +1454,8 @@ static void sel_fav_cb(lv_event_t *e) {
 	}
 	path_list_free(&list);
 }
+
+static void sel_fav_cb(lv_event_t *e) { sel_fav_go(lv_event_get_user_data(e)); }
 
 static void window_update(panel_t *p);
 static void model_remove(panel_t *p, int index);
@@ -1534,6 +1551,40 @@ static void sel_remove_ask(panel_t *p) {
 static void sel_unlist_cb(lv_event_t *e) { sel_remove_ask(lv_event_get_user_data(e)); }
 
 static void sel_unfav_cb(lv_event_t *e) { sel_remove_ask(lv_event_get_user_data(e)); }
+
+static void sel_delete_ask(panel_t *p);
+
+// The tick's four lines take a void* because that is the sheet's shape; the
+// work itself is the same as the corner buttons'.
+static void sel_queue_action(void *user) { sel_queue_go(user); }
+
+static void sel_fav_action(void *user) { sel_fav_go(user); }
+
+static void sel_add_action(void *user) { sel_add_go(user); }
+
+static void sel_delete_action(void *user) { sel_delete_ask(user); }
+
+// The downloads lists' tick, which asks what to do rather than doing it. The
+// sheet holds what such a list's own three dots hold, in the same order, with
+// the one irreversible line last -- the same shape as the Tidal pages' tick
+// (see bulk_sheet_cb there), because these rows are those pages' songs.
+static void sel_confirm_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	panel_t *p = lv_event_get_user_data(e);
+	if (!p || !p->selecting || p->sel_count == 0) {
+		return;
+	}
+	popover_item_t items[4];
+	int n = 0;
+	items[n++] = (popover_item_t){"add_to_queue", sel_queue_action, p};
+	items[n++] = (popover_item_t){"medialist_add_to_favourites", sel_fav_action, p};
+	items[n++] = (popover_item_t){"add_to_playlist", sel_add_action, p};
+	// Last, because it is the only line here that cannot be undone.
+	if (panel_can_delete(p)) {
+		items[n++] = (popover_item_t){"delete", sel_delete_action, p};
+	}
+	popover_show(lv_event_get_current_target(e), items, n);
+}
 
 // ---------------------------------------------------------------------------
 // Deleting tracks from the card
@@ -3795,11 +3846,15 @@ static void build_panel(panel_t *p, gui_config_t *cfg, bool is_tracks, int slot_
 	p->sel_delete_btn = corner_button(p->corner, &icon_trash, sel_delete_cb, p);
 	p->sel_unfav_btn = corner_button(p->corner, favmark_filled(), sel_unfav_cb, p);
 	p->sel_unlist_btn = corner_button(p->corner, &icon_list_x, sel_unlist_cb, p);
+	// The downloads lists' tick, left of the way out for them: it opens the
+	// prompt that names what a selection of saved songs can do.
+	p->sel_confirm_btn = corner_button(p->corner, &icon_check, sel_confirm_cb, p);
 	p->sel_close_btn = corner_button(p->corner, &icon_close, sel_close_cb, p);
 	lv_obj_set_hidden(p->sel_queue_btn, true);
 	lv_obj_set_hidden(p->sel_fav_btn, true);
 	lv_obj_set_hidden(p->sel_add_btn, true);
 	lv_obj_set_hidden(p->sel_delete_btn, true);
+	lv_obj_set_hidden(p->sel_confirm_btn, true);
 	lv_obj_set_hidden(p->sel_close_btn, true);
 
 	// The "nothing here" note. Wraps at the rows' width: at the V1's font 24

@@ -366,6 +366,12 @@ typedef struct {
 	// colours, and it takes its room in the row wherever the row is drawn. See
 	// settingsrow_add_art().
 	bool art;
+	// The width the glyph was given when it was made. lv_obj_get_width() answers
+	// from the last layout pass and is 0 until the row itself has been placed on
+	// screen; a row fitted in that window -- every list row is, they are fitted
+	// as they are built -- would then be given no room for its picture and put
+	// its name underneath it. This is the answer that exists from the start.
+	int32_t size;
 } settingsrow_leading_icon_t;
 
 typedef struct {
@@ -401,7 +407,14 @@ static int32_t leading_icon_width(lv_obj_t *row) {
 	if (!leading || (!leading->art && !theme_uses_function_glyphs())) {
 		return 0;
 	}
-	return lv_obj_get_width(leading->icon) + ROW_LABEL_GAP;
+	int32_t width = lv_obj_get_width(leading->icon);
+	if (width <= 0) {
+		// Not laid out yet: the size it will be drawn at is the one it was made
+		// with, and using it now is what keeps the name beside the cover
+		// instead of under it.
+		width = leading->size;
+	}
+	return width > 0 ? width + ROW_LABEL_GAP : 0;
 }
 
 static lv_obj_t *settingsrow_caption(lv_obj_t *row) {
@@ -991,6 +1004,11 @@ static lv_obj_t *row_chevron(lv_obj_t *row) {
 }
 
 void settingsrow_chevron_active(lv_obj_t *row, bool active) {
+	// A row that was never built -- its module is switched off -- has no
+	// chevron to paint, and the caller keeps the same shape for every row.
+	if (!row) {
+		return;
+	}
 	lv_obj_t *chev = row_chevron(row);
 	if (!chev) {
 		return;
@@ -1114,16 +1132,17 @@ void settingsrow_add_icon(lv_obj_t *row, const lv_image_dsc_t *source, theme_sem
 	int source_h = (int)source->header.h;
 	int max_side = LV_MAX(source_w, source_h);
 	int target_side = compact_rows() ? 18 : 24;
+	int32_t icon_w = target_side;
 	if (max_side > 0) {
-		lv_obj_set_size(icon, LV_MAX(1, source_w * target_side / max_side),
-						LV_MAX(1, source_h * target_side / max_side));
+		icon_w = LV_MAX(1, source_w * target_side / max_side);
+		lv_obj_set_size(icon, icon_w, LV_MAX(1, source_h * target_side / max_side));
 		lv_image_set_inner_align(icon, LV_IMAGE_ALIGN_CENTER);
 		lv_image_set_scale(icon, (uint32_t)(LV_SCALE_NONE * target_side / max_side));
 	}
 	lv_obj_align(icon, LV_ALIGN_LEFT_MID, 0, 0);
 
-	leading_icons[leading_icon_count++] =
-		(settingsrow_leading_icon_t){.row = row, .icon = icon, .tone = tone, .art = false};
+	leading_icons[leading_icon_count++] = (settingsrow_leading_icon_t){
+		.row = row, .icon = icon, .tone = tone, .art = false, .size = icon_w};
 	lv_obj_add_event_cb(row, settingsrow_icon_row_deleted_cb, LV_EVENT_DELETE, NULL);
 	settingsrow_register_refresh();
 	settingsrow_refresh_theme();
@@ -1148,10 +1167,20 @@ lv_obj_t *settingsrow_add_art(lv_obj_t *row, const lv_image_dsc_t *placeholder, 
 	lv_obj_set_scrollable(icon, false);
 	lv_obj_set_size(icon, side, side);
 	lv_image_set_inner_align(icon, LV_IMAGE_ALIGN_CENTER);
+	// A glyph is 128 px on a side and the slot is a fraction of that: drawn at
+	// its natural size it ran past the row and over the names beside it. Scaled
+	// into the slot here, and again whenever the glyph is put back in place of
+	// a picture given up (see the callers that reset the source).
+	int source_w = (int)placeholder->header.w;
+	int source_h = (int)placeholder->header.h;
+	int max_side = LV_MAX(source_w, source_h);
+	if (max_side > side) {
+		lv_image_set_scale(icon, (uint32_t)(LV_SCALE_NONE * side / max_side));
+	}
 	lv_obj_align(icon, LV_ALIGN_LEFT_MID, 0, 0);
 
-	leading_icons[leading_icon_count++] =
-		(settingsrow_leading_icon_t){.row = row, .icon = icon, .tone = THEME_SEMANTIC_MUTED, .art = true};
+	leading_icons[leading_icon_count++] = (settingsrow_leading_icon_t){
+		.row = row, .icon = icon, .tone = THEME_SEMANTIC_MUTED, .art = true, .size = side};
 	lv_obj_add_event_cb(row, settingsrow_icon_row_deleted_cb, LV_EVENT_DELETE, NULL);
 	settingsrow_register_refresh();
 	settingsrow_refresh_theme();

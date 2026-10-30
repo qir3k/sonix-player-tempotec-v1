@@ -51,6 +51,18 @@ int win_usleep(unsigned usec) {
 // template arrays at 600 bytes.
 #define WIN_MKDTEMP_BUF 600
 
+static char *make_dir_from(char *tmpl, size_t len, unsigned *seed) {
+	for (unsigned attempt = 0; attempt < 1000; attempt++) {
+		unsigned r = GetTickCount() ^ ((*seed)++ * 2654435761u) ^ GetCurrentProcessId();
+		for (int i = 0; i < 6; i++) {
+			tmpl[len - 6 + (size_t)i] = (char)('a' + (r % 26));
+			r /= 26;
+		}
+		if (_mkdir(tmpl) == 0) return tmpl;
+	}
+	return NULL;
+}
+
 char *win_mkdtemp(char *tmpl) {
 	// mingw has no mkdtemp: fill the XXXXXX in and take the first folder that
 	// does not already exist, the same contract the POSIX call has.
@@ -58,6 +70,12 @@ char *win_mkdtemp(char *tmpl) {
 	if (!tmpl) return NULL;
 	size_t len = strlen(tmpl);
 	if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) return NULL;
+	// Kept, because the CRT temp folder is only where this is TRIED first: a
+	// host that refuses it is not a reason to stop, when the suite's own
+	// template names a folder that is writable.
+	char original[WIN_MKDTEMP_BUF];
+	if (len + 1 > sizeof(original)) return NULL;
+	snprintf(original, sizeof(original), "%s", tmpl);
 	if (strncmp(tmpl, "/tmp/", 5) == 0) {
 		char temp[MAX_PATH];
 		DWORD n = GetTempPathA(sizeof(temp), temp);
@@ -73,13 +91,11 @@ char *win_mkdtemp(char *tmpl) {
 			}
 		}
 	}
-	for (unsigned attempt = 0; attempt < 1000; attempt++) {
-		unsigned r = GetTickCount() ^ (seed++ * 2654435761u) ^ GetCurrentProcessId();
-		for (int i = 0; i < 6; i++) {
-			tmpl[len - 6 + (size_t)i] = (char)('a' + (r % 26));
-			r /= 26;
-		}
-		if (_mkdir(tmpl) == 0) return tmpl;
+	if (make_dir_from(tmpl, len, &seed)) return tmpl;
+	// The temp folder would not have it: the template as the suite wrote it.
+	if (len != strlen(original)) {
+		snprintf(tmpl, WIN_MKDTEMP_BUF, "%s", original);
+		return make_dir_from(tmpl, strlen(original), &seed);
 	}
 	return NULL;
 }

@@ -37,6 +37,39 @@ static void addon_switch_cb(lv_event_t *e) {
 	toast_success("addon_restart_needed");
 }
 
+// A theme's switch. Themes are not modules: nothing is built for one and
+// nothing is given back, so this applies at once rather than asking for a
+// restart. The last one refuses to go off -- an interface with no palette is
+// not an interface -- and the switch goes back where it was.
+static void theme_switch_cb(lv_event_t *e) {
+	theme_kind_t kind = (theme_kind_t)(intptr_t)lv_event_get_user_data(e);
+	lv_obj_t *sw = lv_event_get_target(e);
+	bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+	if (!theme_set_kind_enabled(kind, on)) {
+		if (on) {
+			lv_obj_remove_state(sw, LV_STATE_CHECKED);
+		} else {
+			lv_obj_add_state(sw, LV_STATE_CHECKED);
+		}
+		toast_error("theme_last_one");
+	}
+}
+
+// The row's own name, and the picture the Appearance page calls it by.
+static const char *theme_row_label(theme_kind_t kind) {
+	switch (kind) {
+	case THEME_KIND_LIGHT:
+		return "appearance_light";
+	case THEME_KIND_AMBER_ON_BLACK:
+		return "appearance_amber_on_black";
+	case THEME_KIND_OLED:
+		return "appearance_oled";
+	case THEME_KIND_DARK:
+	default:
+		return "appearance_dark";
+	}
+}
+
 // The favourite mark: the heart this player has always drawn, or the star the
 // older builds used. A choice rather than a switch pair, and one setting for the
 // whole interface -- the player, the lists and the Favourites tiles read it
@@ -122,6 +155,27 @@ void plugins_init(gui_config_t *cfg) {
 	// holds, because they are easy to mistake for each other.
 	lv_obj_t *langs = settingsrow_add(list, "languages_fonts", NULL, switch_screen_cb, langfonts_screen);
 	settingsrow_add_caption(langs, "languages_fonts_note");
+
+	// --- the themes ---
+	//
+	// What this player can be drawn with. One switch each, on to begin with, and
+	// at least one always on: a theme turned off while it is the one on screen
+	// hands over to the first still enabled at once, and a config naming a theme
+	// that is no longer offered is put right at startup (theme_init).
+	settingsrow_heading(list, "plugins_section_themes");
+	settingsrow_add_note(list, "plugins_themes_note");
+	for (int i = 0; i < THEME_KIND_COUNT; i++) {
+		theme_kind_t kind = (theme_kind_t)i;
+		lv_obj_t *sw = NULL;
+		settingsrow_toggle(list, theme_row_label(kind), &sw, addon_switch_noop);
+		if (!sw) {
+			continue;
+		}
+		if (theme_kind_enabled(kind)) {
+			lv_obj_add_state(sw, LV_STATE_CHECKED);
+		}
+		lv_obj_add_event_cb(sw, theme_switch_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)kind);
+	}
 
 	player_sheet_attach_drag(list, true);
 	switcher_attach_back_gesture(plugins_screen);

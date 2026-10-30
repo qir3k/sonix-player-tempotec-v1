@@ -13,6 +13,7 @@
 
 #include "src/gui/board_profile.h"
 #include "src/gui/library/browser.h"
+#include "src/system/addons/addons.h"
 #include "src/gui/library/medialist.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/shell/icons.h"
@@ -40,8 +41,6 @@
 #include "src/system/streaming/ytlikes.h"
 
 #define YTMUSIC_PAGE_RESULTS YTMUSIC_ITEMS_MAX
-#define YTMUSIC_LOGIN_QR_SIZE 190
-#define YTMUSIC_LOGIN_QUIET 10
 #define YTMUSIC_QUERY_MAX 192
 
 // The page is a small tree: the home screen lists what can be opened, the
@@ -68,18 +67,12 @@ static lv_obj_t *tracks_title;
 static lv_obj_t *explore_screen;
 static lv_obj_t *explore_list;
 static lv_obj_t *settings_screen;
-static lv_obj_t *sign_in_row;
 static lv_obj_t *sign_out_row;
 static lv_obj_t *source_screen;
 static lv_obj_t *source_list;
 static lv_obj_t *source_value_label;
 static ytmusic_source_t source_items[YTMUSIC_SOURCES_MAX];
 static int source_item_count;
-static lv_obj_t *login_screen;
-static lv_obj_t *login_qr;
-static lv_obj_t *login_code_label;
-static lv_obj_t *login_url_label;
-static lv_obj_t *login_message;
 static pthread_mutex_t page_lock = PTHREAD_MUTEX_INITIALIZER;
 // One network job at a time: a search, an Explore load, a card's page, or the
 // download-and-play of a track. They share the request lock in the system
@@ -93,12 +86,6 @@ static ytmusic_item_t track_items[YTMUSIC_PAGE_RESULTS];
 static int track_count;
 static ytmusic_section_t explore_sections[YTMUSIC_SECTIONS_MAX];
 static int explore_section_count;
-static ytmusic_device_login_t device_login;
-static lv_timer_t *login_timer;
-static bool login_active;
-static bool login_busy;
-static int login_elapsed;
-static unsigned login_generation;
 
 // The album a downloaded song lands in. A song row's own second column names the
 // album where YouTube sends one; an album's own track list does not, so the
@@ -250,16 +237,6 @@ typedef struct {
 	int slot;
 } play_result_t;
 
-typedef struct {
-	bool ok;
-	bool begin;
-	unsigned generation;
-	ytmusic_login_state_t state;
-	ytmusic_device_login_t login;
-	char error[192];
-} login_result_t;
-
-static void login_tick_cb(lv_timer_t *timer);
 static void list_done(void *data);
 static void *list_worker(void *arg);
 static void explore_done(void *data);
@@ -581,156 +558,11 @@ static void open_downloads_cb(lv_event_t *e) {
 	free(artists);
 }
 
+// The pages an account changes: the sign-out row exists only while a session is
+// attached, and the import row is always there, because importing a session is
+// the only way an account is ever attached.
 static void home_refresh_session_rows(void) {
-	bool logged_in = ytmusic_logged_in();
-	// Google's sign-in is offered only when this build was given the OAuth
-	// client it needs, and it is not needed for anything the player does on its
-	// own: playback comes from the instances, and the heart keeps a song in
-	// this player's own list. A row that can only answer "no key configured"
-	// is worse than no row.
-	if (sign_in_row) lv_obj_set_hidden(sign_in_row, logged_in || !ytmusic_oauth_configured());
-	if (sign_out_row) lv_obj_set_hidden(sign_out_row, !logged_in);
-}
-
-static void login_stop(void) {
-	login_active = false;
-	login_busy = false;
-	login_generation++;
-	memset(&device_login, 0, sizeof(device_login));
-	if (login_timer) {
-		lv_timer_delete(login_timer);
-		login_timer = NULL;
-	}
-}
-
-static void login_result_done(void *data) {
-	login_result_t *result = data;
-	if (!result) return;
-	if (result->generation != login_generation) {
-		free(result);
-		return;
-	}
-	login_busy = false;
-	if (!login_active) {
-		free(result);
-		return;
-	}
-	if (result->begin) {
-		if (!result->ok) {
-			login_stop();
-			toast_error(result->error[0] ? result->error : "ytmusic_login_failed");
-			free(result);
-			return;
-		}
-		device_login = result->login;
-		login_elapsed = 0;
-		lv_label_set_text(login_code_label, device_login.user_code);
-		lv_label_set_text(login_url_label, device_login.verification_url);
-		lv_label_set_text(login_message, tr("ytmusic_scan_qr"));
-		bool qr_ok = login_qr &&
-			lv_qrcode_update(login_qr, device_login.verification_url,
-							 (uint32_t)strlen(device_login.verification_url)) == LV_RESULT_OK;
-		lv_obj_set_hidden(login_qr, !qr_ok);
-		lv_obj_set_hidden(login_url_label, qr_ok);
-		if (!login_timer) login_timer = lv_timer_create(login_tick_cb, 1000, NULL);
-		if (!login_timer) {
-			login_stop();
-			toast_error("ytmusic_login_failed");
-		}
-		free(result);
-		return;
-	}
-	if (result->state == YTMUSIC_LOGIN_PENDING) {
-		device_login = result->login;
-		free(result);
-		return;
-	}
-	if (result->state == YTMUSIC_LOGIN_OK) {
-		login_stop();
-		home_refresh_session_rows();
-		toast_success("ytmusic_signed_in");
-		if (lv_screen_active() == login_screen) switch_screen(ytmusic_screen);
-		free(result);
-		return;
-	}
-	login_stop();
-	toast_error(result->error[0] ? result->error :
-		(result->state == YTMUSIC_LOGIN_EXPIRED ? "ytmusic_login_code_expired" : "ytmusic_login_failed"));
-	free(result);
-}
-
-static void *login_worker(void *arg) {
-	login_result_t *result = arg;
-	if (result->begin) {
-		result->ok = ytmusic_login_device_begin(&result->login, result->error, sizeof(result->error));
-	} else {
-		result->state = ytmusic_login_device_poll(&result->login, result->error, sizeof(result->error));
-		result->ok = result->state == YTMUSIC_LOGIN_OK || result->state == YTMUSIC_LOGIN_PENDING;
-	}
-	if (!gui_post(login_result_done, result)) {
-		if (result->generation == login_generation) login_busy = false;
-		free(result);
-	}
-	return NULL;
-}
-
-static bool login_worker_start(bool begin) {
-	if (login_busy) return false;
-	login_result_t *result = calloc(1, sizeof(*result));
-	if (!result) return false;
-	result->begin = begin;
-	result->generation = login_generation;
-	if (!begin) result->login = device_login;
-	login_busy = true;
-	pthread_t thread;
-	if (pthread_create(&thread, NULL, login_worker, result) != 0) {
-		login_busy = false;
-		free(result);
-		return false;
-	}
-	pthread_detach(thread);
-	return true;
-}
-
-static void login_tick_cb(lv_timer_t *timer) {
-	(void)timer;
-	if (!login_active) return;
-	login_elapsed++;
-	if (device_login.expires_secs > 0 && login_elapsed >= device_login.expires_secs) {
-		login_stop();
-		toast_error("ytmusic_login_code_expired");
-		return;
-	}
-	int interval = device_login.interval_secs > 0 ? device_login.interval_secs : 5;
-	if (login_elapsed % interval == 0 && !login_busy && !login_worker_start(false)) {
-		login_stop();
-		toast_error("ytmusic_login_failed");
-	}
-}
-
-static void login_begin_done_cb(lv_event_t *e) {
-	(void)e;
-	if (!ytmusic_oauth_configured()) {
-		toast_error("ytmusic_oauth_keys_missing");
-		return;
-	}
-	login_stop();
-	login_active = true;
-	login_elapsed = 0;
-	lv_label_set_text(login_message, tr("ytmusic_requesting_code"));
-	lv_label_set_text(login_code_label, "");
-	lv_obj_set_hidden(login_qr, true);
-	lv_obj_set_hidden(login_url_label, true);
-	switch_screen(login_screen);
-	if (!login_worker_start(true)) {
-		login_stop();
-		toast_error("ytmusic_login_failed");
-	}
-}
-
-static void login_screen_unloaded(lv_event_t *e) {
-	(void)e;
-	login_stop();
+	if (sign_out_row) lv_obj_set_hidden(sign_out_row, !ytmusic_session_cookie_attached());
 }
 
 // ---------------------------------------------------------------------------
@@ -817,6 +649,15 @@ static void art_show_placeholder(yt_art_list_t *state, int row) {
 	}
 	const lv_image_dsc_t *glyph = state->placeholders[row] ? state->placeholders[row] : &icon_music2;
 	lv_image_set_src(image, glyph);
+	// Back at the slot's size, not the glyph's own 128 px: the shrink the row
+	// was built with (see settingsrow_add_art), set again because the picture
+	// it replaces was drawn without one.
+	int max_side = LV_MAX(glyph->header.w, glyph->header.h);
+	if (max_side > YTMUSIC_ROW_THUMB) {
+		lv_image_set_scale(image, (uint32_t)(LV_SCALE_NONE * YTMUSIC_ROW_THUMB / max_side));
+	} else {
+		lv_image_set_scale(image, LV_SCALE_NONE);
+	}
 	lv_obj_add_style(image, &theme_style_icon, 0);
 	lv_obj_set_style_image_recolor_opa(image, LV_OPA_COVER, 0);
 	lv_obj_set_style_radius(image, 0, 0);
@@ -909,6 +750,9 @@ static void art_poll_cb(lv_timer_t *timer) {
 		lv_obj_set_style_radius(image, 6, 0);
 		lv_obj_set_style_clip_corner(image, true, 0);
 		lv_image_set_src(image, &art_active->images[row].dsc);
+		// The picture is decoded at the slot's own size, so it draws at scale
+		// none: the placeholder's shrink must not shrink the sleeve with it.
+		lv_image_set_scale(image, LV_SCALE_NONE);
 		art_slot_row[slot] = -1;
 		freed = true;
 	}
@@ -1224,8 +1068,7 @@ static void *bulk_worker(void *arg) {
 	return NULL;
 }
 
-static void selection_queue_cb(lv_event_t *e) {
-	(void)e;
+static void selection_keep_go(void) {
 	if (!selecting || !chosen || chosen_count <= 0 || !sel_items) {
 		return;
 	}
@@ -1264,6 +1107,75 @@ static void selection_queue_cb(lv_event_t *e) {
 		return;
 	}
 	pthread_detach(thread);
+}
+
+static void selection_keep_action(void *user) {
+	(void)user;
+	selection_keep_go();
+}
+
+// The chosen rows hearted into the player's own list, or taken out of it when
+// the list on screen is that list. The store is local, so there is no worker
+// and no waiting screen -- the same act the row's own menu performs, for
+// several rows at once.
+static void selection_like_go(bool add) {
+	if (!selecting || !chosen || chosen_count <= 0 || !sel_items) {
+		return;
+	}
+	int changed = 0;
+	for (int i = 0; i < sel_total; i++) {
+		if (!chosen[i]) {
+			continue;
+		}
+		const ytmusic_item_t *item = &sel_items[i];
+		if (item->kind != YTMUSIC_ITEM_TRACK || !item->id[0]) {
+			continue;
+		}
+		if (add) {
+			ytlike_t like;
+			memset(&like, 0, sizeof(like));
+			snprintf(like.id, sizeof(like.id), "%s", item->id);
+			snprintf(like.title, sizeof(like.title), "%s", item->title);
+			snprintf(like.artist, sizeof(like.artist), "%s", item->subtitle);
+			snprintf(like.album, sizeof(like.album), "%s", item->album[0] ? item->album : list_album);
+			like.duration = item->duration;
+			if (ytlikes_add(&like)) {
+				changed++;
+			}
+		} else if (ytlikes_remove(item->id)) {
+			changed++;
+		}
+	}
+	selection_stop();
+	if (changed > 0) {
+		toast_success(add ? "added_to_favourites" : "medialist_tracks_removed");
+	}
+	// A row that was just unliked is gone from the favourites, and the screen
+	// is that list.
+	if (!add && tracks_are_likes) {
+		favourites_refill();
+	}
+}
+
+static void selection_like_action(void *user) { selection_like_go((bool)(intptr_t)user); }
+
+// The corner's tick asks what to do rather than doing it, exactly as the Tidal
+// pages' tick does: a selection is a deliberate act, and the sheet names the
+// act before anything is kept or hearted.
+static void selection_sheet_cb(lv_event_t *e) {
+	lv_event_stop_bubbling(e);
+	if (!selecting || !chosen || chosen_count <= 0) {
+		return;
+	}
+	// The favourites list offers the way back out of itself; every other list
+	// of songs offers the way in.
+	bool on_likes = tracks_are_likes && sel_action_btn == tracks_sel_action;
+	popover_item_t items[2];
+	int n = 0;
+	items[n++] = (popover_item_t){on_likes ? "remove_from_favourites" : "medialist_add_to_favourites",
+								  selection_like_action, (void *)(intptr_t)(on_likes ? 0 : 1)};
+	items[n++] = (popover_item_t){"trackmenu_keep_on_card", selection_keep_action, NULL};
+	popover_show(lv_event_get_current_target(e), items, n);
 }
 
 static void selection_cancel_cb(lv_event_t *e) {
@@ -2408,7 +2320,7 @@ static void build_search_page(void) {
 	// The corner is empty until rows are chosen: the tick queues them onto the
 	// card, the cross leaves the mode. The same pair as on the Tidal page.
 	settingsrow_title_corner_slots(results_title, page_cfg, 2);
-	results_sel_action = page_corner_button(results_screen, page_cfg, 0, &icon_check, selection_queue_cb);
+	results_sel_action = page_corner_button(results_screen, page_cfg, 0, &icon_check, selection_sheet_cb);
 	results_sel_close = page_corner_button(results_screen, page_cfg, 1, &icon_close, selection_cancel_cb);
 	lv_obj_set_hidden(results_sel_action, true);
 	lv_obj_set_hidden(results_sel_close, true);
@@ -2423,7 +2335,7 @@ static void build_search_page(void) {
 	tracks_list = settingsrow_page(tracks_screen, page_cfg, "YouTube Music");
 	tracks_title = settingsrow_page_title(tracks_screen);
 	settingsrow_title_corner_slots(tracks_title, page_cfg, 2);
-	tracks_sel_action = page_corner_button(tracks_screen, page_cfg, 0, &icon_check, selection_queue_cb);
+	tracks_sel_action = page_corner_button(tracks_screen, page_cfg, 0, &icon_check, selection_sheet_cb);
 	tracks_sel_close = page_corner_button(tracks_screen, page_cfg, 1, &icon_close, selection_cancel_cb);
 	lv_obj_set_hidden(tracks_sel_action, true);
 	lv_obj_set_hidden(tracks_sel_close, true);
@@ -2440,74 +2352,6 @@ static void build_search_page(void) {
 	// holding the slots gives them back while this page is up.
 	lv_obj_add_event_cb(explore_screen, no_art_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	switcher_attach_back_gesture(explore_screen);
-}
-
-static void build_login_page(void) {
-	login_screen = lv_obj_create(NULL);
-	lv_obj_add_style(login_screen, &theme_style_screen, 0);
-	lv_obj_set_scrollable(login_screen, false);
-	settingsrow_title(login_screen, page_cfg, "ytmusic_sign_in");
-
-	lv_obj_t *box = lv_obj_create(login_screen);
-	int top = settingsrow_content_top(page_cfg);
-	lv_obj_set_size(box, page_cfg->screen_width - 2 * page_cfg->padding,
-			 page_cfg->screen_height - top - page_cfg->padding);
-	lv_obj_align(box, LV_ALIGN_TOP_MID, 0, top);
-	lv_obj_set_style_bg_opa(box, 0, 0);
-	lv_obj_set_style_border_width(box, 0, 0);
-	lv_obj_set_style_pad_all(box, page_cfg->padding, 0);
-	lv_obj_set_style_pad_row(box, 10, 0);
-	lv_obj_set_scroll_dir(box, LV_DIR_VER);
-	lv_obj_set_scrollbar_mode(box, LV_SCROLLBAR_MODE_OFF);
-	lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-	login_qr = lv_qrcode_create(box);
-	// As wide as the box's inner width leaves room for, quiet zone included.
-	// A fixed 190 plus its border was wider than a 240-pixel screen's box and
-	// was cut off at both sides.
-	int qr_size = page_cfg->screen_width - 4 * page_cfg->padding - 2 * YTMUSIC_LOGIN_QUIET;
-	if (qr_size > YTMUSIC_LOGIN_QR_SIZE) qr_size = YTMUSIC_LOGIN_QR_SIZE;
-	if (qr_size < 80) qr_size = 80;
-	lv_qrcode_set_size(login_qr, qr_size);
-	lv_qrcode_set_dark_color(login_qr, lv_color_black());
-	lv_qrcode_set_light_color(login_qr, lv_color_white());
-	lv_obj_set_style_border_color(login_qr, lv_color_white(), 0);
-	lv_obj_set_style_border_width(login_qr, YTMUSIC_LOGIN_QUIET, 0);
-	lv_obj_set_style_bg_color(login_qr, lv_color_white(), 0);
-	lv_obj_set_style_bg_opa(login_qr, LV_OPA_COVER, 0);
-	lv_obj_set_hidden(login_qr, true);
-
-	login_url_label = lv_label_create(box);
-	lv_label_set_long_mode(login_url_label, LV_LABEL_LONG_WRAP);
-	lv_obj_set_width(login_url_label, lv_pct(100));
-	lv_obj_set_style_text_align(login_url_label, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_style_text_font(login_url_label, &font_ui_20, 0);
-	lv_label_set_text(login_url_label, "");
-	lv_obj_set_hidden(login_url_label, true);
-
-	// The code has to be readable and whole: at 36 px bold with 5 px of letter
-	// spacing a device code is wider than the screen, and CLIP cut the first
-	// and last characters off -- exactly the ones that have to be typed in.
-	login_code_label = lv_label_create(box);
-	lv_label_set_long_mode(login_code_label, LV_LABEL_LONG_WRAP);
-	lv_obj_set_width(login_code_label, lv_pct(100));
-	lv_obj_set_style_text_align(login_code_label, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_add_style(login_code_label, &theme_style_text, 0);
-	lv_obj_set_style_text_font(login_code_label, &font_ui_28, 0);
-	lv_obj_set_style_text_letter_space(login_code_label, 3, 0);
-	lv_label_set_text(login_code_label, "");
-
-	login_message = lv_label_create(box);
-	lv_label_set_long_mode(login_message, LV_LABEL_LONG_WRAP);
-	lv_obj_set_width(login_message, lv_pct(100));
-	lv_obj_set_style_text_align(login_message, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_add_style(login_message, &theme_style_text, 0);
-	lv_obj_set_style_text_font(login_message, &font_ui_20, 0);
-	lv_label_set_text(login_message, tr("ytmusic_requesting_code"));
-
-	lv_obj_add_event_cb(login_screen, login_screen_unloaded, LV_EVENT_SCREEN_UNLOADED, NULL);
-	switcher_attach_back_gesture(login_screen);
 }
 
 // The value beside the source row, and whether it is the chosen one.
@@ -2906,10 +2750,13 @@ static void build_settings_page(gui_config_t *cfg) {
 	lv_obj_add_style(settings_screen, &theme_style_screen, 0);
 	lv_obj_t *container = settingsrow_page(settings_screen, cfg, "ytmusic_settings");
 
-	// What this page plays, before what it fetches through.
-	settingsrow_toggle_duration(container, "sleep_timer", yt_sleep_toggle_cb, yt_sleep_wheel_cb,
+	// What this page plays, before what it fetches through. The sleep timer is
+	// a module of its own (Plugins): off, the row is not drawn here either.
+	if (addons_enabled("sleep_timer")) {
+		settingsrow_toggle_duration(container, "sleep_timer", yt_sleep_toggle_cb, yt_sleep_wheel_cb,
 								&yt_sleep_row);
-	yt_sleep_refresh();
+		yt_sleep_refresh();
+	}
 	lv_obj_t *pill_box = NULL;
 	settingsrow_pills(container, "ytmusic_quality", &pill_box);
 	quality_pills[0] = settingsrow_pill(pill_box, "ytmusic_quality_high", 1, yt_quality_pick_cb);
@@ -2928,12 +2775,6 @@ static void build_settings_page(gui_config_t *cfg) {
 	settingsrow_add_caption(source_row, "ytmusic_source_note");
 	source_item_count = ytmusic_sources(source_items, YTMUSIC_SOURCES_MAX);
 	source_refresh();
-	sign_in_row = settingsrow_action(container, "ytmusic_sign_in", login_begin_done_cb, NULL);
-	settingsrow_add_icon(sign_in_row, &icon_import, THEME_SEMANTIC_CYAN);
-	// Google's device token is refused by the music endpoints -- a signed-in
-	// library page comes back with no rows and no error -- so the row says what
-	// it does not do, and the session import below is what Favourites needs.
-	settingsrow_add_caption(sign_in_row, "ytmusic_sign_in_note");
 	sign_out_row = settingsrow_action(container, "ytmusic_sign_out", logout_cb, NULL);
 	settingsrow_add_icon(sign_out_row, &icon_log_out, THEME_SEMANTIC_RED);
 	lv_obj_t *import_row = settingsrow_action(container, "ytmusic_import_session", import_session_cb, NULL);
@@ -3027,7 +2868,6 @@ void ytmusicpage_init(gui_config_t *cfg) {
 	lv_obj_add_event_cb(ytmusic_screen, home_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	player_sheet_attach_drag(home_container, true);
 	build_search_page();
-	build_login_page();
 	build_settings_page(cfg);
 	// Created paused: the first cover request resumes it, and it pauses itself
 	// again when the last one lands or fails.

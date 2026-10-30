@@ -21,8 +21,6 @@ static char qobuz_app_id[64];
 static char qobuz_app_secret[128];
 static char tidal_client_id[64];
 static char tidal_client_secret[128];
-static char ytmusic_client_id[256];
-static char ytmusic_client_secret[256];
 // The InnerTube key the music.youtube.com page hands every visitor. It belongs
 // to Google rather than to this project, so it is a value from the keys file
 // like the rest of them -- and, being one value anybody can obtain, the piece
@@ -131,13 +129,10 @@ static void parse_line(char *line, char section[32]) {
 			dest_size = sizeof(tidal_client_secret);
 		}
 	} else if (strcmp(section, "ytmusic") == 0) {
-		if (strcmp(key, "client_id") == 0) {
-			dest = ytmusic_client_id;
-			dest_size = sizeof(ytmusic_client_id);
-		} else if (strcmp(key, "client_secret") == 0) {
-			dest = ytmusic_client_secret;
-			dest_size = sizeof(ytmusic_client_secret);
-		} else if (strcmp(key, "api_key") == 0) {
+		// api_key is the only thing this file carries for YouTube Music: the
+		// OAuth client pair it used to hold is gone with the sign-in it was
+		// for, and an old card still naming it is simply ignored.
+		if (strcmp(key, "api_key") == 0) {
 			dest = ytmusic_api_key;
 			dest_size = sizeof(ytmusic_api_key);
 		}
@@ -278,13 +273,10 @@ static void report(const char *path) {
 
 	// The InnerTube key is reported by its presence only, like every other
 	// value here: the log lands on the card and travels further than it does.
-	printf("streamkeys: from %s -- Qobuz %s, Tidal %s, YouTube Music %s (InnerTube key %s), Podcast %s, Last.fm %s\n",
-		   path,
+	printf("streamkeys: from %s -- Qobuz %s, Tidal %s, YouTube Music %s, Podcast %s, Last.fm %s\n", path,
 		   qobuz_app_id[0] && qobuz_app_secret[0] ? "yes" : "no",
 		   tidal_client_id[0] && tidal_client_secret[0] ? "yes" : "no",
-		   ytmusic_client_id[0] && ytmusic_client_secret[0] ? "yes" : "no",
-		   ytmusic_api_key[0] ? "yes" : "no",
-		   podcast_key[0] && podcast_secret[0] ? "yes" : "no",
+		   ytmusic_api_key[0] ? "yes" : "no", podcast_key[0] && podcast_secret[0] ? "yes" : "no",
 		   lastfm_key[0] && lastfm_secret[0] ? "yes" : "no");
 }
 
@@ -341,8 +333,6 @@ const char *streamkeys_qobuz_app_id(void) { return or_null(qobuz_app_id); }
 const char *streamkeys_qobuz_app_secret(void) { return or_null(qobuz_app_secret); }
 const char *streamkeys_tidal_client_id(void) { return or_null(tidal_client_id); }
 const char *streamkeys_tidal_client_secret(void) { return or_null(tidal_client_secret); }
-const char *streamkeys_ytmusic_client_id(void) { return or_null(ytmusic_client_id); }
-const char *streamkeys_ytmusic_client_secret(void) { return or_null(ytmusic_client_secret); }
 const char *streamkeys_ytmusic_api_key(void) { return or_null(ytmusic_api_key); }
 
 const char *streamkeys_podcast_key(void) { return or_null(podcast_key); }

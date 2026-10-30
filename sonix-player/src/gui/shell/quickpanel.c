@@ -1458,6 +1458,25 @@ static uint8_t parse_list(const char *saved, uint8_t *out, uint8_t cap, bool *pl
 // has no business writing to the card.
 #define QP_LAYOUT_VERSION 4
 
+// Whether the module behind one button is switched on. A module that is off has
+// no button in the panel, the same way it has no row on its settings page: the
+// module's own switch in Plugins is where it comes back from.
+static bool button_module_on(uint8_t index) {
+	switch (index) {
+	case QP_BTN_EQ:
+		return addons_enabled("eq");
+	case QP_BTN_PEQ:
+		return addons_enabled("peq");
+	case QP_BTN_MSEB:
+		return addons_enabled("mseb");
+	case QP_BTN_SLEEP_MUSIC:
+	case QP_BTN_SLEEP_AUDIOBOOK:
+		return addons_enabled("sleep_timer");
+	default:
+		return true;
+	}
+}
+
 static void order_load(void) {
 	if (order_loaded) {
 		return;
@@ -1500,6 +1519,16 @@ static void order_load(void) {
 			hidden[hidden_n++] = (uint8_t)i;
 		} else {
 			line[line_n++] = (uint8_t)i;
+		}
+	}
+
+	// A button whose module has been switched off since the layout was saved
+	// leaves its place empty rather than handing it to another control: the
+	// module still owns that place and comes back into it when it is switched on
+	// again.
+	for (int i = 0; i < line_n; i++) {
+		if (!button_module_on(line[i])) {
+			line[i] = QP_BTN_NONE;
 		}
 	}
 

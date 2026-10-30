@@ -606,11 +606,23 @@ void appearance_init(gui_config_t *cfg) {
 	lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
 	lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
 
-	theme_buttons[THEME_KIND_DARK] = make_theme_choice(row, "appearance_dark", THEME_KIND_DARK, compact);
-	theme_buttons[THEME_KIND_LIGHT] = make_theme_choice(row, "appearance_light", THEME_KIND_LIGHT, compact);
-	theme_buttons[THEME_KIND_AMBER_ON_BLACK] = make_theme_choice(row,
-		compact ? "appearance_amber_short" : "appearance_amber_on_black", THEME_KIND_AMBER_ON_BLACK, compact);
-	theme_buttons[THEME_KIND_OLED] = make_theme_choice(row, "appearance_oled", THEME_KIND_OLED, compact);
+	// Only the themes this player offers: one switched off in Plugins -> Themes
+	// is not a palette it has, and a button for it would be a press that does
+	// nothing. The list never empties -- the last theme refuses to go off.
+	if (theme_kind_enabled(THEME_KIND_DARK)) {
+		theme_buttons[THEME_KIND_DARK] = make_theme_choice(row, "appearance_dark", THEME_KIND_DARK, compact);
+	}
+	if (theme_kind_enabled(THEME_KIND_LIGHT)) {
+		theme_buttons[THEME_KIND_LIGHT] = make_theme_choice(row, "appearance_light", THEME_KIND_LIGHT, compact);
+	}
+	if (theme_kind_enabled(THEME_KIND_AMBER_ON_BLACK)) {
+		theme_buttons[THEME_KIND_AMBER_ON_BLACK] = make_theme_choice(
+			row, compact ? "appearance_amber_short" : "appearance_amber_on_black", THEME_KIND_AMBER_ON_BLACK,
+			compact);
+	}
+	if (theme_kind_enabled(THEME_KIND_OLED)) {
+		theme_buttons[THEME_KIND_OLED] = make_theme_choice(row, "appearance_oled", THEME_KIND_OLED, compact);
+	}
 
 	// Compact palette and function-glyph examples for Amber on Black and OLED,
 	// immediately after the theme switch. Hidden for Dark/Light so their

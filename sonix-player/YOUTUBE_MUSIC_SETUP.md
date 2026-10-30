@@ -13,7 +13,8 @@ Two things about it shape this page:
   your podcast subscriptions belong to an account, and the only credential
   InnerTube honours for them is the cookie a signed-in browser sends.
 
-So there are two ways to attach an account, and the page works without either.
+So an account is attached one way — by importing a browser session — and the
+page works without one.
 
 ## Building with the InnerTube key
 
@@ -81,9 +82,13 @@ and their keys are read exactly as before. A key from either file wins over
 one compiled into the build, so it also replaces a baked-in key that has gone
 stale.
 
-## Option 1: import a session from the browser (recommended)
+## The account: import a session from the browser
 
-This is the credential the music endpoints actually accept.
+This is the only credential the music endpoints accept, and the only account the
+player offers. There is no "sign in with Google" button: the device token that
+flow produced was refused by the music endpoints, so a button for it could only
+promise something it could not deliver. Nothing here is needed to search,
+explore, play or keep favourites on the player itself.
 
 1. Sign in to <https://music.youtube.com> in a desktop browser.
 2. Export the site's cookies with the browser's own export (a `cookies.txt` in
@@ -106,47 +111,6 @@ reloads it at boot. The value must contain `SAPISID`, `__Secure-3PAPISID` or
 A cookie expires when the browser session ends or when Google rotates it. If
 Favourites suddenly comes back empty, import a fresh one.
 
-## Option 2: sign in with Google on the player
-
-The player can also run Google's device authorization flow, the same flow the
-`ytmusicapi` project uses. This needs your own OAuth client:
-
-1. Create or choose a project in the [Google Cloud Console](https://console.cloud.google.com/).
-2. Enable the **YouTube Data API v3** for that project.
-3. Create an OAuth client of type **TVs and Limited Input devices**.
-4. Copy the client ID and client secret into `streaming-keys.ini` in the root of
-   the microSD card:
-
-   ```ini
-   [ytmusic]
-   client_id = YOUR_CLIENT_ID.apps.googleusercontent.com
-   client_secret = YOUR_CLIENT_SECRET
-   ```
-
-Keep this file private; the example format is in `streaming-keys.ini.example`.
-The card can add YouTube Music credentials even when the firmware already has
-credentials for other services.
-
-Then open **Streaming → YouTube Music → the cog → Sign in with Google**. Scan
-the QR code or open the address shown, enter the code on the player, and approve
-access. Leave the player on that screen until it confirms the sign-in: it has to
-receive and store the refresh token first. The token is refreshed automatically
-whenever it expires.
-
-The flow asks for the full `https://www.googleapis.com/auth/youtube` scope. The
-narrower `youtube.readonly` scope is refused by the music endpoints: a request
-carrying such a token comes back empty instead of failing, which is why a
-session signed in that way used to make search return nothing. If a player was
-set up before this change, sign in again so the new scope is granted.
-
-This whole step is **optional**, and a build with no `client_id` / `client_secret`
-simply hides the row: nothing about listening needs it. What the token buys is
-the account's own pages — your playlists and your liked songs. The music
-endpoints refuse that token when it is asked for the library and answer with an
-empty page rather than an error, so those pages need the imported session of
-Option 1; where the player holds only a token, the page says so instead of
-listing nothing.
-
 ## What the page does
 
 - **Search** — songs. A row plays; an album or playlist row opens its own page.
@@ -154,7 +118,7 @@ listing nothing.
   singles", "Trending", …). Tapping a carousel lists its cards without another
   request.
 - **Top songs** — the charts page.- **Favourites** — two answers, and it picks without being told. With a session
-  imported (Option 1) it is your account's liked songs, the list only that
+  imported it is your account's liked songs, the list only that
   credential can reach. Without one it is the player's own list of songs you
   hearted here, with no account, no sign-in and no network involved: the heart
   on now-playing and the row menu's *Add to favourites* both write it, and it

@@ -797,8 +797,8 @@ static void test_real_device_pages(void) {
 // Favourites answered "no results" for an account that had in fact signed in.
 //
 // The sidecar is seeded by hand here, in the two shapes the player can hold: an
-// OAuth account with no browser session beside it (which cannot serve the
-// library), and an imported session (which can).
+// No session at all (so the library cannot answer), and an imported session
+// (which can).
 static void write_session_file(const char *body) {
 	FILE *f = fopen(".build/ytmusic_session.ini", "w");
 	if (!f) {
@@ -814,10 +814,10 @@ static void test_library_says_what_is_missing(void) {
 	char *vllm = load_fixture("fixtures/empty-VLLM.json");
 	if (!vllm) return;
 
-	// Signed in with Google: an account is attached, and it is not the browser
-	// session the library needs.
-	write_session_file("access_token=fake\nrefresh_token=fake\nexpires_at=0\n");
-	CHECK(ytmusic_logged_in());
+	// No account attached: the library says what is missing instead of
+	// showing a list that can never fill.
+	write_session_file("");
+	CHECK(!ytmusic_session_cookie_attached());
 	fake_reset();
 	fake_reply("youtubei/v1/browse", 200, vllm);
 	ytmusic_item_t items[YTMUSIC_ITEMS_MAX];
@@ -837,7 +837,7 @@ static void test_library_says_what_is_missing(void) {
 	CHECK(error[0] == '\0');
 
 	ytmusic_logout();
-	CHECK(!ytmusic_logged_in());
+	CHECK(!ytmusic_session_cookie_attached());
 	free(vllm);
 }
 
@@ -1013,13 +1013,13 @@ static void test_netscape_cookie_file_is_imported(void) {
 	CHECK(strstr(cookie, "SAPISID=abcdefghijklmnop") != NULL);
 	CHECK(strstr(cookie, "__Secure-3PAPISID=qrstuvwxyz") != NULL);
 	CHECK(strstr(cookie, "TRACKER") == NULL);
-	CHECK(ytmusic_logged_in());
+	CHECK(ytmusic_session_cookie_attached());
 	memset(cookie, 0, sizeof(cookie));
 	FILE *left = fopen(path, "r");
 	CHECK(left == NULL); // the card copy is not left lying there
 	if (left) fclose(left);
 	ytmusic_logout();
-	CHECK(!ytmusic_logged_in());
+	CHECK(!ytmusic_session_cookie_attached());
 }
 
 // A build with no InnerTube key cannot ask YouTube anything, and must say that

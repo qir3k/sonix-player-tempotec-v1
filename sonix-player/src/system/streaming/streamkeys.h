@@ -102,8 +102,6 @@ const char *streamkeys_qobuz_app_id(void);
 const char *streamkeys_qobuz_app_secret(void);
 const char *streamkeys_tidal_client_id(void);
 const char *streamkeys_tidal_client_secret(void);
-const char *streamkeys_ytmusic_client_id(void);
-const char *streamkeys_ytmusic_client_secret(void);
 // The InnerTube key, so a personal image can leave it out of the build and out
 // of every repository: the same file -- and the card's own copy of it -- is
 // where it lives. NULL when neither carries one.

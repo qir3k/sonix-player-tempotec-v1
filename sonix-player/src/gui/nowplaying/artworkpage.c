@@ -309,16 +309,16 @@ void artworkpage_open(const char *path, const char *title, const char *artist, c
 	}
 	// A picture inside the file's own tags is the one the player draws and the
 	// one a folder cover cannot override: replacing it means rewriting the tag.
-	// With the tag writer switched on that is exactly what happens; without it,
-	// saying so before the search is better than after it -- the answer would be
-	// a file nobody ever sees. An OGG or an MP4 is refused on the same grounds,
-	// by the writer's own answer about what it can rewrite.
+	// With the artwork plugin switched on that is exactly what happens; without
+	// it, saying so before the search is better than after it -- the answer
+	// would be a file nobody ever sees. An OGG or an MP4 is refused on the same
+	// grounds, by the writer's own answer about what it can rewrite.
 	albumart_t embedded;
 	writing_tags = albumart_load_candidate(path, 0, &embedded);
 	if (writing_tags) {
 		albumart_free(&embedded);
-		if (!addons_enabled("artwork_tag")) {
-			toast_error("artwork_tag_off");
+		if (!addons_enabled("artwork")) {
+			toast_error("artwork_off");
 			return;
 		}
 		if (!tagwrite_supported(path)) {

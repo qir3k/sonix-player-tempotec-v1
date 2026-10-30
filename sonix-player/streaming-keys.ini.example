@@ -6,10 +6,11 @@ app_secret =
 client_id = 
 client_secret = 
 
-# Google Cloud OAuth client (TVs and Limited Input devices); enable YouTube Data API.
+# The InnerTube key music.youtube.com hands every visitor, read off the page.
+# It is the only YouTube Music value this file carries: an account is attached
+# by importing a browser session on the player, not by signing in.
 [ytmusic]
-client_id = YOUR_CLIENT_ID.apps.googleusercontent.com
-client_secret = YOUR_CLIENT_SECRET
+api_key =
 
 [podcast]
 api_key = 

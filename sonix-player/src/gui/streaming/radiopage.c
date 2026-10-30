@@ -9,6 +9,7 @@
 
 #include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
+#include "src/system/addons/addons.h"
 #include "src/gui/shell/azindex.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
@@ -2200,9 +2201,11 @@ static void build_radio_settings_page(gui_config_t *cfg) {
 	lv_obj_t *container = settingsrow_page(radio_settings_screen, cfg, "radio_settings");
 
 	// Its own, as the podcasts have theirs: falling asleep to a station is not
-	// falling asleep to an album.
-	settingsrow_toggle_duration(container, "sleep_timer", radio_sleep_toggle_cb, radio_sleep_wheel_cb,
+	// falling asleep to an album. Off in Plugins, no page draws a timer.
+	if (addons_enabled("sleep_timer")) {
+		settingsrow_toggle_duration(container, "sleep_timer", radio_sleep_toggle_cb, radio_sleep_wheel_cb,
 								&radio_sleep_row);
+	}
 
 	// Where in the world the lists are: the country list's own picker, rather
 	// than a row of pills for two or three of them.

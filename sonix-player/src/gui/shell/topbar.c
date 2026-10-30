@@ -461,8 +461,18 @@ static bool bt_codec_color(const char *codec, lv_color_t *out) {
 	bool dark = theme_is_dark();
 	if (strncmp(key, "ldac", 4) == 0) {
 		*out = dark ? lv_color_make(0x62, 0xA0, 0xEA) : lv_color_make(0x1A, 0x5F, 0xB4);
+	} else if (strncmp(key, "lhdc", 4) == 0 || strncmp(key, "llac", 4) == 0) {
+		// LHDC and its low-latency sibling LLAC: the cyan the palette already
+		// uses for a live thing, distinct from LDAC's blue.
+		*out = dark ? lv_color_make(0x78, 0xE9, 0xFF) : lv_color_make(0x00, 0x86, 0xA8);
+	} else if (strncmp(key, "ssc", 3) == 0 || strncmp(key, "scalable", 8) == 0) {
+		// Samsung Scalable.
+		*out = dark ? lv_color_make(0xF9, 0xC4, 0x40) : lv_color_make(0xAD, 0x5F, 0x00);
 	} else if (strncmp(key, "aptx", 4) == 0) {
 		*out = dark ? lv_color_make(0xDC, 0x8A, 0xDD) : lv_color_make(0x81, 0x3D, 0x9C);
+	} else if (strncmp(key, "lc3", 3) == 0) {
+		// LC3 and LC3plus: the red of the palette's alarm tone.
+		*out = dark ? lv_color_make(0xFF, 0x7B, 0x63) : lv_color_make(0xC0, 0x1C, 0x28);
 	} else if (strncmp(key, "aac", 3) == 0) {
 		*out = dark ? lv_color_make(0x57, 0xE3, 0x89) : lv_color_make(0x26, 0xA2, 0x69);
 	} else if (strncmp(key, "sbc", 3) == 0) {
