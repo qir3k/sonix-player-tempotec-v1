@@ -32,9 +32,11 @@
 
 #include "win_compat_host.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "src/system/core/config.h"
 #include "src/system/decode/growfile.h"
