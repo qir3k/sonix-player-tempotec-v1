@@ -11,6 +11,7 @@
 #include "src/system/audio/waveform.h"
 #include "src/system/device/ota.h"
 #include "src/system/device/system.h"
+#include "src/system/core/panel.h"
 
 #include <dirent.h>
 #include <sys/reboot.h>
@@ -1714,6 +1715,7 @@ void power_screen_off(void) {
 	bool light_only = receiver || transmitter;
 
 	set_indevs_enabled(false); // no touch events into LVGL while the panel is down
+	panel_touch_flush();
 	if (light_only) {
 		// Leave the framebuffer scanning its existing image. Blanking the panel
 		// resets it, and redrawing the whole interface on wake can starve the
@@ -1851,6 +1853,7 @@ void power_screen_on(void) {
 		if (anim_timer) {
 			lv_timer_resume(anim_timer);
 		}
+		panel_touch_flush();
 		set_indevs_enabled(true);
 		indev_timers_set_paused(false);
 		g_audio_light_only = false;
@@ -1936,6 +1939,7 @@ void power_screen_on(void) {
 	// Hold at zero until the controller has carried the fresh frame out to
 	// the panel -- the moment before this is when the reset white could show.
 	backlight_hold_until_panel_shows();
+	panel_touch_flush();
 	set_indevs_enabled(true);
 	indev_timers_set_paused(false);
 
