@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -141,10 +142,20 @@ static void check_folder(void) {
 	assert(strcmp(names[3], "d.jpg") == 0);
 
 	// The cap: a folder of thousands is somebody's photo library, and the
-	// page only has room for a page.
+	// page only has room for a page. Which pictures fill that page is whatever
+	// the card hands over first -- readdir order is the filesystem's, not the
+	// player's -- so what is checked here is the cap and that what it kept is
+	// still a picture list in order, not which four names it happened to keep.
 	char few[2][BOOTPIC_NAME_MAX + 1];
 	assert(bootpic_list(few, 2) == 2);
-	assert(strcmp(few[0], "A.JPEG") == 0);
+	for (int i = 0; i < 2; i++) {
+		bool known = false;
+		for (size_t m = 0; m < sizeof(made) / sizeof(made[0]); m++) {
+			known = known || strcmp(few[i], made[m]) == 0;
+		}
+		assert(known);
+	}
+	assert(strcasecmp(few[0], few[1]) < 0);
 
 	// No card, no pictures -- and no folder named either.
 	bootpic_set_root("");
