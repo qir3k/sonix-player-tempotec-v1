@@ -2,10 +2,11 @@ name: Tests
 
 # What has to pass before anything is packaged. One definition, used three ways:
 #
-#   - a push to dev or personal (fast feedback while working),
+#   - a push to dev (fast feedback while working),
 #   - a pull request touching the player, the tests or the packer,
 #   - and the firmware workflow, which calls this file and waits for it before
-#     cross-compiling anything (see build-tempotec-v1.yml).
+#     cross-compiling anything (see build-tempotec-v1.yml). This avoids running
+#     the same suite twice on personal pushes.
 #
 # Nothing here needs the device, a MIPS toolchain, a music server or an account:
 # every suite runs on the host against the real modules.
@@ -15,7 +16,6 @@ on:
   push:
     branches:
       - dev
-      - personal
     paths:
       - .github/workflows/tests.yml
       - sonix-player/Makefile
