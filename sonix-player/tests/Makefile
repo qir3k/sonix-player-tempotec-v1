@@ -447,6 +447,7 @@ CHARGE_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(CHARGE_SRC)) \
 # so this links the page, the card helpers and the stores, nothing else.
 LYRICSEARCH_SRC = $(ROOT)/tests/ui/test_lyricsearch.c \
                   $(ROOT)/src/gui/nowplaying/lyricsearch.c \
+                  $(ROOT)/src/system/library/lrclib.c $(ROOT)/src/system/core/json.c \
                   $(ROOT)/src/gui/shell/settingsrow.c $(ROOT)/src/gui/shell/theme.c \
                   $(ROOT)/src/gui/shell/icons.c \
                   $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
