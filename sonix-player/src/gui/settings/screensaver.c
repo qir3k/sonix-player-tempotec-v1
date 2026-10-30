@@ -968,6 +968,7 @@ bool screensaver_prepare(void) {
 		// one decoded meanwhile, before the first frame reaches the glass.
 		collect_frame();
 		refresh_content();
+		lv_obj_move_foreground(saver);
 	} else {
 		screensaver_show(); // collects and promotes on its way through
 	}

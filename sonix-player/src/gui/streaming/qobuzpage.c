@@ -7,6 +7,7 @@
 
 #include "src/gui/shell/confirm.h"
 #include "src/gui/fonts/fonts.h"
+#include "src/gui/settings/screensaver.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/nowplaying/player.h"
@@ -158,11 +159,13 @@ static void busy_show(const char *text) {
 		return;
 	}
 	lv_obj_set_hidden(busy_layer, false);
-	lv_obj_move_foreground(busy_layer);
+	if (!screensaver_is_visible()) {
+		lv_obj_move_foreground(busy_layer);
+	}
 }
 
 static void build_busy_layer(void) {
-	busy_layer = lv_obj_create(lv_layer_sys());
+	busy_layer = lv_obj_create(lv_layer_top());
 	lv_obj_set_size(busy_layer, lv_pct(100), lv_pct(100));
 	lv_obj_set_pos(busy_layer, 0, 0);
 	lv_obj_set_style_bg_color(busy_layer, lv_color_black(), 0);
@@ -170,6 +173,7 @@ static void build_busy_layer(void) {
 	lv_obj_set_style_border_width(busy_layer, 0, 0);
 	lv_obj_set_style_radius(busy_layer, 0, 0);
 	lv_obj_set_scrollable(busy_layer, false);
+	lv_obj_set_clickable(busy_layer, true);
 	lv_obj_set_hidden(busy_layer, true);
 	lv_obj_set_flex_flow(busy_layer, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(busy_layer, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
