@@ -21,6 +21,7 @@ static lv_obj_t *left_value;
 static lv_obj_t *right_value;
 static lv_obj_t *case_value;
 static lv_obj_t *version_value;
+static lv_obj_t *connection_value;
 
 static lv_obj_t *noise_pills;
 static lv_obj_t *noise_pill[3]; // the three modes, in EARFUN_NOISE_* order - 1
@@ -33,6 +34,7 @@ static lv_obj_t *in_ear_switch;
 
 static lv_timer_t *poll_timer;
 static uint32_t drawn_serial = 0xFFFFFFFFu;
+static bool drawn_connected;
 
 // ---------------------------------------------------------------------------
 // The controls
@@ -74,6 +76,9 @@ static void set_level(lv_obj_t *label, int percent) {
 }
 
 static void redraw(const earfun_state_t *state) {
+	if (connection_value) {
+		lv_obj_set_hidden(connection_value, state->connected);
+	}
 	set_level(left_value, state->left);
 	set_level(right_value, state->right);
 	set_level(case_value, state->case_level);
@@ -84,16 +89,20 @@ static void redraw(const earfun_state_t *state) {
 	for (int i = 0; i < 3; i++) {
 		if (noise_pill[i]) {
 			settingsrow_pill_active(noise_pill[i], (int)state->noise == i + 1);
+			lv_obj_set_clickable(noise_pill[i], state->connected);
 		}
 	}
 	for (int i = 0; i < 3; i++) {
 		if (anc_pill[i]) {
 			settingsrow_pill_active(anc_pill[i], state->anc_level == i);
+			lv_obj_set_clickable(anc_pill[i], state->connected && state->noise == EARFUN_NOISE_CANCELLATION);
 		}
 	}
 	for (int i = 0; i < 2; i++) {
 		if (transparency_pill[i]) {
 			settingsrow_pill_active(transparency_pill[i], state->transparency_mode == i);
+			lv_obj_set_clickable(transparency_pill[i],
+							 state->connected && state->noise == EARFUN_NOISE_TRANSPARENCY);
 		}
 	}
 	if (game_switch) {
@@ -104,8 +113,9 @@ static void redraw(const earfun_state_t *state) {
 		}
 		// Nothing to switch until the earbuds have said what it is now: the
 		// switch would otherwise start in an arbitrary position.
-		lv_obj_set_clickable(game_switch, state->game_mode_known);
-		lv_obj_set_style_opa(game_switch, state->game_mode_known ? LV_OPA_COVER : LV_OPA_50, 0);
+		bool available = state->connected && state->game_mode_known;
+		lv_obj_set_clickable(game_switch, available);
+		lv_obj_set_style_opa(game_switch, available ? LV_OPA_COVER : LV_OPA_50, 0);
 	}
 	if (in_ear_switch) {
 		if (state->in_ear) {
@@ -113,8 +123,9 @@ static void redraw(const earfun_state_t *state) {
 		} else {
 			lv_obj_remove_state(in_ear_switch, LV_STATE_CHECKED);
 		}
-		lv_obj_set_clickable(in_ear_switch, state->in_ear_known);
-		lv_obj_set_style_opa(in_ear_switch, state->in_ear_known ? LV_OPA_COVER : LV_OPA_50, 0);
+		bool available = state->connected && state->in_ear_known;
+		lv_obj_set_clickable(in_ear_switch, available);
+		lv_obj_set_style_opa(in_ear_switch, available ? LV_OPA_COVER : LV_OPA_50, 0);
 	}
 
 	// The strength and variant only mean anything for their own mode, so their
@@ -123,10 +134,10 @@ static void redraw(const earfun_state_t *state) {
 	bool cancelling = state->noise == EARFUN_NOISE_CANCELLATION;
 	bool transparent = state->noise == EARFUN_NOISE_TRANSPARENCY;
 	if (anc_pills) {
-		lv_obj_set_style_opa(anc_pills, cancelling ? LV_OPA_COVER : LV_OPA_50, 0);
+		lv_obj_set_style_opa(anc_pills, state->connected && cancelling ? LV_OPA_COVER : LV_OPA_50, 0);
 	}
 	if (transparency_pills) {
-		lv_obj_set_style_opa(transparency_pills, transparent ? LV_OPA_COVER : LV_OPA_50, 0);
+		lv_obj_set_style_opa(transparency_pills, state->connected && transparent ? LV_OPA_COVER : LV_OPA_50, 0);
 	}
 
 	if (version_value) {
@@ -137,10 +148,11 @@ static void redraw(const earfun_state_t *state) {
 static void refresh(bool force) {
 	earfun_state_t state;
 	bool connected = earfun_get(&state);
-	if (!force && (state.serial == drawn_serial || !connected)) {
+	if (!force && state.serial == drawn_serial && connected == drawn_connected) {
 		return;
 	}
 	drawn_serial = state.serial;
+	drawn_connected = connected;
 	// A page whose session has gone keeps the last reading for one redraw --
 	// the numbers of earbuds that have just left are worse than a blank.
 	if (!connected) {
@@ -179,6 +191,9 @@ void earfunpage_init(gui_config_t *cfg) {
 
 	// --- what is left ---
 	settingsrow_heading(container, "earfun_battery");
+	lv_obj_t *connection_row = settingsrow_add(container, "connecting", &connection_value, NULL, NULL);
+	lv_label_set_text(connection_value, tr("connecting"));
+	lv_obj_set_hidden(connection_row, true);
 	lv_obj_t *left_row = settingsrow_add(container, "earfun_left", &left_value, NULL, NULL);
 	settingsrow_add_icon(left_row, &icon_headphones, THEME_SEMANTIC_CYAN);
 	lv_obj_t *right_row = settingsrow_add(container, "earfun_right", &right_value, NULL, NULL);

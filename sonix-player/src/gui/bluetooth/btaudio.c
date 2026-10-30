@@ -284,13 +284,29 @@ static void earfun_row_cb(lv_event_t *e) {
 
 static void refresh_earfun_row(void) {
 	earfun_state_t state;
-	// The module is asked every time rather than once at build: its page is
-	// only built when it is on, so the row that leads there has to go with it.
-	bool present = addons_enabled("earfun") && earfun_get(&state);
+	bt_device_t device;
+	bool protocol_ready = earfun_get(&state);
+	bool is_earfun_audio = bluetooth_audio_device(&device) && earfun_name_supported(device.name);
+	if (!is_earfun_audio) {
+		bt_device_t paired[BT_MAX_DEVICES];
+		int count = bluetooth_get_paired(paired, BT_MAX_DEVICES);
+		for (int i = 0; i < count; i++) {
+			if (paired[i].connected && earfun_name_supported(paired[i].name)) {
+				device = paired[i];
+				is_earfun_audio = true;
+				break;
+			}
+		}
+	}
+	// Keep the page reachable as soon as an EarFun pair is the active audio
+	// device. Requiring its GAIA control session here hid the controls while
+	// that session was still opening or retrying.
+	bool present = addons_enabled("earfun") && (is_earfun_audio || protocol_ready);
 	lv_obj_set_hidden(earfun_row, !present);
 	if (present) {
-		lv_label_set_text(settingsrow_name_label(earfun_row),
-						  state.name[0] ? state.name : tr("earfun"));
+		const char *name = protocol_ready && state.name[0] ? state.name :
+			(is_earfun_audio && device.name[0] ? device.name : tr("earfun"));
+		lv_label_set_text(settingsrow_name_label(earfun_row), name);
 	}
 }
 
@@ -407,6 +423,12 @@ static void routing_watch_cb(lv_timer_t *timer) {
 	if (!known[0]) {
 		snprintf(known, sizeof(known), "%s", now); // first look: nothing to reload
 		known_generation = bluetooth_output_generation();
+		// Bluetooth may auto-connect during startup before this watcher's first
+		// tick. If the track already has its PCM open on another output, reopen
+		// it once when we first observe bluealsa. Preserve a paused track's state.
+		if (now_bt) {
+			restart_playback_if_running(false);
+		}
 		return;
 	}
 
