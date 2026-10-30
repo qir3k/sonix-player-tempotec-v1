@@ -140,6 +140,27 @@ jobs:
       - name: The EarFun control protocol
         run: make -C sonix-player/tests earfun
 
+      # ALAC in an MP4, decoded and compared with the PCM it was encoded from.
+      # ffmpeg is only the encoder here -- the player's own decoder is what is
+      # under test, and it needs a real lossless file to be tested with.
+      - name: ALAC decoding against real encoded audio
+        run: |
+          set -euo pipefail
+          dir=sonix-player/tests/.build/alac
+          mkdir -p "$dir"
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          # One deterministic tone, twice: once as ALAC in MP4, once as the
+          # raw 16-bit PCM it must decode back to.
+          ffmpeg -loglevel error -y -f lavfi \
+            -i "sine=frequency=440:sample_rate=44100:duration=2" \
+            -ac 2 -sample_fmt s16 -c:a alac "$dir/alac.m4a"
+          ffmpeg -loglevel error -y -f lavfi \
+            -i "sine=frequency=440:sample_rate=44100:duration=2" \
+            -ac 2 -sample_fmt s16 -f s16le "$dir/alac.s16"
+          make -C sonix-player/tests alac
+
       - name: YouTube Music resolution, and the build with no key
         run: make -C sonix-player/tests ytmusic
 

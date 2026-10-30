@@ -25,6 +25,7 @@ make -C sonix-player/tests lrclib          # lyrics search, ranking and sidecar 
 make -C sonix-player/tests tags            # tag reading and format sniffing
 make -C sonix-player/tests covers          # the 1000-cover cache
 make -C sonix-player/tests tagwrite        # rewriting a cover into an MP3 or FLAC
+make -C sonix-player/tests alac            # a real ALAC file decoded back to its PCM
 make -C sonix-player/tests mostplayed      # the Most played list, on the real database
 make -C sonix-player/tests podcastplayed   # heard podcast episodes
 make -C sonix-player/tests ui              # main menu, screensaver, Tools, Wi-Fi, charge, lyrics
@@ -509,6 +510,19 @@ UTF-16 and UTF-8 encodings ID3 allows, unsynchronised frames, and the formats
 the library has to recognise by their first bytes rather than their extension.
 `make -C sonix-player/tests covers` drives the cover cache to its thousand-entry
 ceiling and past it, including a card pulled out mid-decode.
+
+## ALAC
+
+`make -C sonix-player/tests alac` decodes a real Apple Lossless file and
+compares the PCM with the samples it was encoded from. The fixtures are not
+checked in — this project has no ALAC encoder — so the tests workflow generates
+`.build/alac/alac.m4a` and `.build/alac/alac.s16` with ffmpeg first. The check
+opens the file the way the player does (an MP4, with the codec read from the
+track rather than the name), requires the decoder to report **ALAC**, 44.1 kHz,
+stereo and 16 bits, and then compares every sample: a one-sample tolerance
+covers the 16-bit round trip and nothing else. An encoder's priming samples
+are allowed for by finding the alignment first. Without a fixture folder the
+target prints `skipped` and passes, so a host without ffmpeg still builds.
 
 `make -C sonix-player/tests tagwrite` is the Cover Art Fetcher's writing half:
 it replaces the APIC frame of an MP3 and the PICTURE block of a FLAC, keeps

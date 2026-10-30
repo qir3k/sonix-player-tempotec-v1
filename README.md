@@ -22,6 +22,7 @@ This is not an official TempoTec or HiBy release. **It has been tested on physic
 
 - [Target device](#target-device)
 - [Features](#features)
+- [Supported audio formats](#supported-audio-formats)
 - [Build a firmware image](#build-a-firmware-image)
 - [Install or restore firmware](#install-or-restore-firmware)
 - [Streaming credentials](#streaming-credentials)
@@ -65,6 +66,46 @@ The boot screen can be set to **Retrospace**, **Space**, **Travelling in space**
 The battery is looked after at both ends. At **5 %** the player says so — a red card, and the panel comes back up for it if it was dark — and at **1 %** it switches itself off the ordinary way, position written and card unmounted, instead of letting the cell drop out from under it; below 10 % it also stays out of standby, because a sleeping player cannot watch its own gauge. A player that was **switched off and is then put on a charger** comes up on a battery screen instead of the library: the level, the percentage and what the charger is doing, going dark after ten seconds, with a **press** of the power button to bring it back and a **hold** to start the player after all.
 
 See [FEATURES.md](FEATURES.md) for the detailed feature notes and [PATCHES.md](PATCHES.md) for how the V1 port works underneath.
+
+## Supported audio formats
+
+Formats are recognised by what is inside the file, not by its name, so a FLAC called `track.mp3` still plays. Everything below is decoded on the device — no server or computer is involved.
+
+### Files on the card
+
+| Codec | Extensions | Notes |
+|---|---|---|
+| **MP3** | `.mp3` | dr_mp3; CBR and VBR. A leading ID3v2 tag of any version is skipped. |
+| **AAC-LC** (MP4) | `.m4a`, `.m4b`, `.mp4` | The usual iTunes and YouTube download form. An HE-AAC file plays its core layer, with the real rate taken from the container. Audio-only `.mp4` is read; a film is left to the video player. |
+| **AAC-LC** (ADTS) | `.aac` | Raw streams, with or without an ID3 tag in front. |
+| **ALAC** | `.m4a`, `.mp4`, `.alac` | **Yes, ALAC works.** It is a first-class decoder, not a fallback: an MP4 whose audio track says `alac` is recognised and played as ALAC, at its own sample rate, with 16- and 24-bit depth kept intact. Lossless, so a 24-bit ALAC is bit-identical to the file. |
+| **FLAC** | `.flac` | 16- and 24-bit, all standard rates including hi-res. ID3 tags in front of the stream are tolerated. |
+| **Ogg Vorbis** | `.ogg`, `.oga` | Chained and multi-page comment headers read. |
+| **Opus** | `.opus`, `.ogg` | Ogg Opus; decoded and resampled for the DAC. |
+| **WavPack** | `.wv` | Lossless and hybrid; metadata read. |
+| **Monkey's Audio** | `.ape` | APEv2 tags read. |
+| **WAV** | `.wav` | Through the firmware's `libsndfile`, loaded at runtime. |
+| **AIFF / AIFC** | `.aif`, `.aiff`, `.aifc` | Through `libsndfile`. |
+| **CAF** | `.caf` | Through `libsndfile`; an ALAC-in-CAF file needs it too. |
+| **DSD** | `.dsf`, `.dff` | DSD64, DSD128 and DSD256, sent to the DAC untouched over DoP. Over Bluetooth, which has no DSD mode, the track is converted to PCM first. |
+
+WAV, AIFF and CAF depend on `libsndfile.so.1` being present in the firmware: the player opens it at runtime and, if a build has no copy, those files are skipped instead of being played as noise. Every other row above is compiled into the player.
+
+PCM is handed to the DAC as 16-bit, 24-bit or 32-bit words depending on the stream; a 24-bit file is not cut down to 16. The built-in DAC follows the track's own sample rate.
+
+### While streaming
+
+| Source | What the player asks for | Quality |
+|---|---|---|
+| **Tidal** | AAC in MP4 at Low/High; FLAC for CD and Hi-res | Up to 24-bit FLAC |
+| **Qobuz** | MP3 320, FLAC 16/44.1, FLAC 24/96 or 24/192 | Chosen in Qobuz settings |
+| **YouTube Music** | AAC in MP4 (itag 140 at 128 kbit/s preferred, OPUS/Vorbis refused) | ~128 kbit/s |
+| **Internet radio** | MP3, AAC/ADTS, Ogg Vorbis, Opus and FLAC | Whatever the station sends |
+| **Podcasts** | MP3 and AAC | Whatever the publisher serves |
+| **Subsonic / Gonic** | Any format above the decoder knows, as the server sends it | Depends on the server |
+| **Bluetooth headphones** | The codec the stack negotiated — SBC, AAC, aptX, LDAC, and LHDC/LLAC, Samsung Scalable and LC3/LC3+ where the link and the daemon support them | Depends on the headphones and adapter |
+
+ALAC is a local-file codec only: none of the streaming services above serve ALAC, so there is nothing to decode there. AirPlay also arrives as ALAC — the receiver decodes it and hands the player raw frames — which is a separate path and does not involve the file decoder.
 
 ## Build a firmware image
 
