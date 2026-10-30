@@ -2,6 +2,7 @@
 #define EARFUN_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 // What a pair of EarFun earbuds says about itself.
