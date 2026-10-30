@@ -1708,10 +1708,6 @@ static char fb_touch_node[32];
 
 const char *panel_touch_device(void) { return fb_touch_node[0] ? fb_touch_node : NULL; }
 
-// Hands the touch panel over and takes it back. While disabled the indev is
-// not polled and stops reading the node, so events pile up unread in the
-// kernel queue. Whatever re-enables it must wait a moment before trusting the
-// first touch (see gearboyplay.c).
 // Throws away what the panel sent while nobody was reading it. A disabled indev
 // is not polled, so the kernel queue fills with whatever the glass did during
 // the blank -- wake transients, a palm on the screen, the tap that woke it --
@@ -1734,7 +1730,6 @@ void panel_touch_flush(void) {
 	}
 	lv_indev_wait_release(fb_touch);
 	lv_anim_delete(fb_touch, NULL);
-}
 }
 
 void panel_touch_enable(bool enabled) {
