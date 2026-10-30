@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "src/system/device/power.h"
+#include "src/system/device/cpupower.h"
 #include "src/system/core/utils.h"
 
 // One slot's worth of state. `generation` is what makes abandoning safe: the
@@ -156,6 +157,7 @@ static void *id_worker(void *arg) {
 
 	for (;;) {
 		thread_set_background_level(power_screen_is_on());
+		cpupower_yield_if_stressed();
 
 		pthread_mutex_lock(&lock);
 		while (!(player_id_job.pending && !player_id_job.running)) {
@@ -204,6 +206,7 @@ static void *worker(void *arg) {
 		// gone. A picture for a screen nobody can see is not worth that, so with
 		// the screen off the thread goes back to the bottom of the pile.
 		thread_set_background_level(power_screen_is_on());
+		cpupower_yield_if_stressed();
 
 		pthread_mutex_lock(&lock);
 

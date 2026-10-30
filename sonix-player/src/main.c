@@ -70,6 +70,7 @@
 #include "src/system/playback/playlist.h"
 #include "src/system/library/playlists.h"
 #include "src/system/device/power.h"
+#include "src/system/device/cpupower.h"
 #include "src/system/streaming/radio.h"
 #include "src/system/device/screenshot.h"
 #include "src/system/device/sysinfo.h"
@@ -2019,7 +2020,7 @@ static lv_display_t *init_target_display(void) {
 // holds the single core for good: the interface, the card's I/O and the kernel
 // threads never run again, and the device resets with nothing on the card.
 // Held to nine tenths of the period, so a spin slows the device down instead.
-#define RT_SHARE_TENTHS 9
+#define RT_SHARE_TENTHS 8
 
 static long read_proc_long(const char *path) {
 	FILE *f = fopen(path, "r");
@@ -2104,6 +2105,7 @@ int main(int argc, char **argv) {
 	// Before the first real-time thread starts.
 	limit_realtime_share();
 #endif
+	cpupower_init();
 
 #ifndef HOST_BUILD
 	// Straight away, before anything is opened: how much RAM the binary takes

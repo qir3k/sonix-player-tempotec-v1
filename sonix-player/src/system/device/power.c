@@ -51,6 +51,7 @@
 #include "src/system/device/axpcharge.h"
 #include "src/system/device/batteryguard.h"
 #include "src/system/device/chargemode.h"
+#include "src/system/device/cpupower.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/topbar.h"
 
@@ -1695,6 +1696,7 @@ void power_screen_off(void) {
 	// The screen going dark opens a new idle window: the standby countdown
 	// starts here, unless activity keeps pushing it back.
 	g_mem_active_ms = g_screen_off_at;
+	cpupower_screen_state(false, playback_in_progress());
 
 	// Written right before the blank, either way round: the touch driver reads
 	// this flag when the blank reaches it, and chooses doze or a full
@@ -1809,6 +1811,7 @@ static void wake_repaint(void) {
 }
 
 void power_screen_on(void) {
+	cpupower_screen_state(true, playback_in_progress());
 	waveform_set_screen_on(true);
 	if (g_screen_on) {
 		return;
@@ -2021,6 +2024,7 @@ static int battery_percent_cached(void) {
 
 static void battery_guard_tick(void) {
 	int percent = battery_percent_cached();
+	cpupower_battery_state(percent, g_usb_now);
 	batteryguard_action_t action = batteryguard_step(&g_battery_guard, percent, g_usb_now);
 
 	if (action == BATTERYGUARD_WARN) {
@@ -2170,6 +2174,7 @@ static void power_timer_cb(lv_timer_t *timer) {
 	// 4a-ter. the battery's last few percent. Before the radios and before the
 	//         sleep: at one percent this does not return.
 	battery_guard_tick();
+	cpupower_screen_state(g_screen_on, playing);
 	// 4a-bis-1. the radios a wake owed back, once the wake has settled
 	restore_radios_if_due();
 

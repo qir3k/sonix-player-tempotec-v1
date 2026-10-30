@@ -1,6 +1,7 @@
 #include "library.h"
 
 #include "src/system/library/audiobookdb.h"
+#include "src/system/device/cpupower.h"
 #include "src/system/library/geniusbuild.h"
 #include "src/system/library/geniusdb.h"
 #include "src/system/playback/playlist.h"
@@ -4655,6 +4656,7 @@ static void scan_directory(const char *path, int depth) {
 		}
 
 		scan_one_file(child, de->d_name, &st);
+		cpupower_yield_if_stressed();
 	}
 
 	// The 32 KB buffer goes back to the system before descending a level.

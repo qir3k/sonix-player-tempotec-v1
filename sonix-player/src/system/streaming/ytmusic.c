@@ -14,6 +14,7 @@ static const char *playback_cache_dir(void);
 #include "src/system/net/http.h"
 #include "src/system/streaming/streamkeys.h"
 #include "src/system/streaming/ytlikes.h"
+#include "src/system/device/cpupower.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -2560,6 +2561,7 @@ static bool download_ranged(const char *url, const char *part, uint64_t from, ui
 			// encoder never suffer buffer starvation or audio stuttering.
 			usleep(8 * 1000);
 		}
+		cpupower_yield_if_stressed();
 		// The last byte the server promised has arrived: nothing left to ask
 		// for, and no 416 needed to say so.
 		if (total > 0 && *downloaded >= total) {

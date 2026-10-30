@@ -56,6 +56,16 @@ $(BUILD)/test_batteryguard: $(GUARD_SRC) $(ROOT)/src/system/device/batteryguard.
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(GUARD_SRC) $(LDFLAGS) $(LDLIBS)
 
+# CPU Power and Governor test
+CPUPOWER_SRC = test_cpupower.c $(ROOT)/src/system/device/cpupower.c
+.PHONY: cpupower
+cpupower: $(BUILD)/test_cpupower
+	$(BUILD)/test_cpupower
+
+$(BUILD)/test_cpupower: $(CPUPOWER_SRC) $(ROOT)/src/system/device/cpupower.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(CPUPOWER_SRC) $(LDFLAGS) $(LDLIBS)
+
 # The touch panel's filter: where the pointer is, given the event stream a
 # Goodix panel sends. Two coordinate pairs in different units, two ways of
 # announcing a press, slots for fingers that are not the one being used. The
