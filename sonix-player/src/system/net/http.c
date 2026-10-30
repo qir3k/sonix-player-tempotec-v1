@@ -887,6 +887,30 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 	return true;
 }
 
+// Where a redirect says to go next: the Location as given, with the scheme and
+// authority it came from put back in front of a relative one.
+//
+// Refused by name when the whole address does not fit, rather than truncated.
+// A cut-off address is a request to somewhere else -- a different host, or a
+// signed media address with its signature missing -- and the player would then
+// report a server that answered 403 or did not exist, instead of a buffer that
+// was too small. The caller has already refused a Location that filled its own
+// buffer, so only the scheme and authority can push the total over here.
+static bool redirect_target(char *current, size_t current_size, const url_t *u, const char *location) {
+	char base[512];
+	if (location[0] == '/') {
+		snprintf(base, sizeof(base), "%s://%s:%d", u->secure ? "https" : "http", u->host, u->port);
+	} else {
+		base[0] = '\0';
+	}
+	if (strlen(base) + strlen(location) >= current_size) {
+		set_last_error("%s", tr("http_redirect_too_long"));
+		return false;
+	}
+	snprintf(current, current_size, "%s%s", base, location);
+	return true;
+}
+
 bool http_get(const char *url, char **out, size_t *out_len, size_t limit, int timeout_secs) {
 	return http_get_ex(url, NULL, false, out, out_len, limit, timeout_secs, NULL);
 }
@@ -974,12 +998,8 @@ bool http_request(const char *url, const http_req_t *req, char **out, size_t *ou
 		// A relative Location keeps the scheme and authority it came from; an
 		// absolute one may switch between http and https, and plenty of hosts
 		// answer port 80 with nothing but a redirect to their https self.
-		if (location[0] == '/') {
-			char base[512];
-			snprintf(base, sizeof(base), "%s://%s:%d", u.secure ? "https" : "http", u.host, u.port);
-			snprintf(current, sizeof(current), "%s%s", base, location);
-		} else {
-			snprintf(current, sizeof(current), "%s", location);
+		if (!redirect_target(current, sizeof(current), &u, location)) {
+			return false;
 		}
 		if (req && req->no_https_downgrade && u.secure && strncasecmp(current, "http://", 7) == 0) {
 			set_last_error("subsonic_https_downgrade");
@@ -1145,12 +1165,8 @@ bool http_stream_open_ex(http_stream_t *st, const char *url, int timeout_secs, c
 			set_last_error("subsonic_https_downgrade");
 			return false;
 		}
-		if (location[0] == '/') {
-			char base[512];
-			snprintf(base, sizeof(base), "%s://%s:%d", u.secure ? "https" : "http", u.host, u.port);
-			snprintf(current, sizeof(current), "%s%s", base, location);
-		} else {
-			snprintf(current, sizeof(current), "%s", location);
+		if (!redirect_target(current, sizeof(current), &u, location)) {
+			return false;
 		}
 	}
 	return false;
