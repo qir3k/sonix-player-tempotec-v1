@@ -9,7 +9,7 @@ Sonix Player for the TempoTec Variations V1 follows a clear lineage: **[Jepl4r's
 - **Plugins** — every optional feature is a switch in Settings → Plugins: streaming services, music features (Lyrics Fetcher, Cover Art Fetcher, EQ, PEQ, MSEB, sleep timers, AutoEQ, Last.fm, ListenBrainz), the library shelves, the tools and the themes. A module switched off is never built, so its memory stays free; see [ADDONS.md](sonix-player/docs/ADDONS.md).
 - **YouTube Music without a computer** — search, charts, Explore, albums, playlists and podcasts on the device alone, played as they download, with a download option, a session imported from the card for the account's own library, and a Piped / Invidious fallback when Google refuses the device's own player request. See [YOUTUBE_MUSIC_SETUP.md](sonix-player/YOUTUBE_MUSIC_SETUP.md).
 - **Streaming that behaves like the local library** — Tidal, Qobuz, Podcasts, Radio and YouTube Music share one region list (Worldwide by default), one sleep timer, one favourites mark, one illustration of lists and one set of download pages.
-- **Bluetooth** — LDAC quality settings, AirPods battery and noise control, EarFun earbuds over the GAIA serial protocol, and a codec list that ranks LHDC, LLAC, Samsung Scalable and LC3/LC3+ above the older families where the link and the daemon support them.
+- **Bluetooth** — LDAC quality settings, AirPods battery and noise control, and EarFun earbuds over the GAIA serial protocol.
 - **Useful diagnostics** — slow GUI event-loop passes are logged with timing and callback context to help investigate pauses and lag ([log details](docs/collecting-logs.md#the-interfaces-own-timing-ui-lines)).
 
 The firmware builder starts with an official V1 update package, replaces the stock music player and interface with Sonix, then repackages the update as `v1.upt`.
@@ -107,7 +107,7 @@ PCM is handed to the DAC as 16-bit, 24-bit or 32-bit words depending on the stre
 | **Internet radio** | MP3, AAC/ADTS, Ogg Vorbis, Opus and FLAC | Whatever the station sends |
 | **Podcasts** | MP3 and AAC | Whatever the publisher serves |
 | **Subsonic / Gonic** | Any format above the decoder knows, as the server sends it | Depends on the server |
-| **Bluetooth headphones** | The codec the stack negotiated — SBC, AAC, aptX, LDAC, and LHDC/LLAC, Samsung Scalable and LC3/LC3+ where the link and the daemon support them | Depends on the headphones and adapter |
+| **Bluetooth headphones** | The codec the stack negotiated — SBC, AAC, aptX, aptX-HD, LDAC | Depends on the headphones and adapter |
 
 ALAC is a local-file codec only: none of the streaming services above serve ALAC, so there is nothing to decode there. AirPlay also arrives as ALAC — the receiver decodes it and hands the player raw frames — which is a separate path and does not involve the file decoder.
 

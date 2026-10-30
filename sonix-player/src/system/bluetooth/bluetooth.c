@@ -2755,36 +2755,22 @@ static bool connected_mac(char *out, size_t size) {
 // are deliberately worse.
 //
 // Nothing here invents a codec: the list only says in what order two ends that
-// both speak one should settle on it. Whether LHDC, LLAC, SSC (Samsung
-// Scalable) or LC3/LC3plus can be spoken at all is decided by the bluealsa this
-// firmware carries -- it is asked with -h at startup and every codec it lists
-// is offered, the ranks below included. A build whose daemon has no LHDC simply
-// never sees the name, and a pair of Huawei or Samsung buds falls back to what
-// the two ends do share.
+// both speak one should settle on it. The codecs actually available are decided
+// by the bluealsa this firmware carries (SBC, AAC, aptX, aptX-HD, LDAC) -- it
+// is asked with -h at startup and every codec it lists is offered.
 //
 // The order is by what the codec can carry on a good link, then by how much of
-// it survives a bad one: LDAC and LHDC 5 first, then LHDC, SSC and LLAC, then
-// the lossy aptX family, then the low-complexity codecs, and AAC/SBC last.
+// it survives a bad one: LDAC first, then aptX-HD, aptX, AAC, and SBC last.
 // Several spellings are listed because the daemon's help is not the only place
 // these names come from -- a name is compared on letters and digits only, so
-// "LHDC-V5" and "lhdc_v5" both read as lhdcv5.
+// "aptX-HD" and "aptx_hd" both read as aptxhd.
 static const struct {
 	const char *name;
 	int rank;
 } CODEC_RANKS[] = {
 	{"ldac", 60},
-	{"lhdcv5", 58},
-	{"lhdc", 55},
-	{"lhdcv4", 54},
-	{"ssc", 52},
-	{"scalable", 52},
-	{"llac", 48},
-	{"aptxadaptivelessless", 46},
-	{"aptxadaptive", 44},
 	{"aptxhd", 40},
 	{"aptx", 30},
-	{"lc3plus", 26},
-	{"lc3", 22},
 	{"aac", 20},
 	{"sbc", 10},
 };

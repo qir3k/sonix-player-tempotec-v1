@@ -127,23 +127,11 @@ static int codec_order(const char *name) {
 	if (strcasecmp(name, "LDAC") == 0) {
 		return 60;
 	}
-	if (strncasecmp(name, "LHDC", 4) == 0) {
-		return 55;
-	}
-	if (strcasecmp(name, "SSC") == 0 || strcasecmp(name, "Scalable") == 0) {
-		return 52;
-	}
-	if (strncasecmp(name, "LLAC", 4) == 0) {
-		return 48;
-	}
 	if (strcasecmp(name, "aptX-HD") == 0) {
 		return 40;
 	}
 	if (strcasecmp(name, "aptX") == 0) {
 		return 30;
-	}
-	if (strncasecmp(name, "LC3", 3) == 0) {
-		return 24;
 	}
 	if (strcasecmp(name, "AAC") == 0) {
 		return 20;
