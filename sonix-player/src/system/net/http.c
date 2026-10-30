@@ -903,11 +903,19 @@ static bool redirect_target(char *current, size_t current_size, const url_t *u, 
 	} else {
 		base[0] = '\0';
 	}
-	if (strlen(base) + strlen(location) >= current_size) {
+	// Copied rather than printed: the two halves are already measured, so there
+	// is nothing for a format to decide -- and with the check above there is
+	// nothing left to truncate either, which a snprintf cannot promise the
+	// compiler.
+	size_t base_len = strlen(base);
+	size_t location_len = strlen(location);
+	if (base_len + location_len >= current_size) {
 		set_last_error("%s", tr("http_redirect_too_long"));
 		return false;
 	}
-	snprintf(current, current_size, "%s%s", base, location);
+	memcpy(current, base, base_len);
+	memcpy(current + base_len, location, location_len);
+	current[base_len + location_len] = '\0';
 	return true;
 }
 
