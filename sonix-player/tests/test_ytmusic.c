@@ -972,15 +972,8 @@ static void test_song_row_names_its_album(void) {
 // saying something is running once it has finished -- a bar that never goes away
 // is worse than no bar at all.
 static void test_progress_is_cleared_when_the_download_ends(void) {
-	char probe[64] = "/tmp/sonix-ytmusic/progress.txt";
-	FILE *writable = fopen(probe, "wb");
-	if (!writable) {
-		fprintf(stderr, "  skipped: this host cannot write /tmp/sonix-ytmusic (%s)\n",
-				strerror(errno));
-		return;
-	}
-	fclose(writable);
-	remove(probe);
+	// The progress itself is in memory rather than a file on the card, so this
+	// check needs no folder and skips on no host.
 	fake_reset();
 	fake_reply("inv.test/api/v1/videos/", 200, INVIDIOUS_FORMATS);
 	fake_reply("inv.test/latest_version", 206, AUDIO_BYTES);
@@ -1154,6 +1147,9 @@ int main(void) {
 	// host that refuses 	mp still runs them.
 	static char cache_env[] = "SONIX_YTMUSIC_CACHE=" YTM_CACHE;
 	putenv(cache_env);
+	// .build is the build tree's own name and normally already there; the
+	// cache folder inside it is this suite's, and a fresh checkout has neither.
+	mkdir(".build", 0700);
 	mkdir(YTM_CACHE, 0700);
 	streamkeys_init();
 	ytmusic_init();

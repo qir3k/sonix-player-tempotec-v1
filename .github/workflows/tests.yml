@@ -149,8 +149,10 @@ jobs:
       - name: The YouTube Music relay
         run: make -C sonix-player/tests relay
 
+      # bash, not sh: the packer and its helpers say so in their shebangs, and
+      # dash refuses the arrays and [[ ]] they are written in.
       - name: The packer scripts still parse
         run: |
-          sh -n sonix-packer/sonix_firmware_packer.sh
-          sh -n sonix-packer/prepare_v1_stock.sh
-          sh -n sonix-packer/verify_upt.sh
+          bash -n sonix-packer/sonix_firmware_packer.sh
+          bash -n sonix-packer/prepare_v1_stock.sh
+          bash -n sonix-packer/verify_upt.sh
