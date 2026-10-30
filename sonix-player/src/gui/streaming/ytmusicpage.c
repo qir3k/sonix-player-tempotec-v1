@@ -29,6 +29,7 @@
 #include "src/gui/wireless/wifisettings.h"
 #include "src/gui/streaming/qobuzart.h"
 #include "src/system/core/config.h"
+#include "src/system/core/utils.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/system.h"
 #include "src/system/playback/sleeptimer.h"
@@ -258,6 +259,47 @@ static void end_busy(void) {
 	pthread_mutex_lock(&page_lock);
 	page_busy = false;
 	pthread_mutex_unlock(&page_lock);
+}
+
+// A lightweight wait indicator for searches and playback startup. Downloads
+// keep the separate progress card below, since that is the useful feedback
+// while bytes are being saved to the card.
+static lv_obj_t *busy_layer;
+static lv_obj_t *busy_label;
+
+static void busy_show(void) {
+	if (!busy_layer) return;
+	lv_obj_set_hidden(busy_label, false);
+	lv_obj_set_hidden(busy_layer, false);
+	lv_obj_move_foreground(busy_layer);
+}
+
+static void busy_hide(void) {
+	if (busy_layer) lv_obj_set_hidden(busy_layer, true);
+}
+
+static void busy_build(void) {
+	busy_layer = lv_obj_create(lv_layer_sys());
+	lv_obj_set_size(busy_layer, lv_pct(100), lv_pct(100));
+	lv_obj_set_pos(busy_layer, 0, 0);
+	lv_obj_set_style_bg_color(busy_layer, lv_color_black(), 0);
+	lv_obj_set_style_bg_opa(busy_layer, LV_OPA_50, 0);
+	lv_obj_set_style_border_width(busy_layer, 0, 0);
+	lv_obj_set_style_radius(busy_layer, 0, 0);
+	lv_obj_set_scrollable(busy_layer, false);
+	lv_obj_set_hidden(busy_layer, true);
+	lv_obj_set_flex_flow(busy_layer, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_flex_align(busy_layer, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+	lv_obj_t *spin = spinner_create(busy_layer, &icon_loader_big);
+	lv_obj_set_style_image_recolor(spin, lv_color_white(), 0);
+	lv_obj_set_style_image_recolor_opa(spin, LV_OPA_COVER, 0);
+
+	busy_label = lv_label_create(busy_layer);
+	lv_label_set_text(busy_label, tr("loading"));
+	lv_obj_set_style_text_color(busy_label, lv_color_white(), 0);
+	lv_obj_set_style_text_font(busy_label, &font_ui_22, 0);
+	lv_obj_set_style_margin_top(busy_label, 16, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1026,6 +1068,7 @@ static void bulk_done_cb(void *data) {
 }
 
 static void *bulk_worker(void *arg) {
+	thread_be_low_priority("ytmusic bulk");
 	bulk_result_t *result = arg;
 	for (int i = 0; i < result->count; i++) {
 		bulk_at = i + 1;
@@ -1341,7 +1384,7 @@ static void play_queued(int slot) {
 static void playback_begin(void *data) {
 	play_result_t *result = data;
 	if (!result) return;
-	loading_hide();
+	busy_hide();
 	end_busy();
 	yt_fetching = false;
 	play_queued(result->slot);
@@ -1366,7 +1409,7 @@ static void playback_done(void *data) {
 	if (!result) return;
 	yt_fetching = false;
 	if (!result->started) {
-		loading_hide();
+	busy_hide();
 		end_busy();
 		if (result->ok) {
 			play_queued(result->slot);
@@ -1382,6 +1425,7 @@ static void playback_done(void *data) {
 }
 
 static void *playback_worker(void *arg) {
+	thread_be_low_priority("ytmusic play");
 	play_result_t *result = arg;
 	result->ok = ytmusic_stream_for_playback(&result->track, result->path, sizeof(result->path),
 											 playback_ready, result,
@@ -1430,8 +1474,7 @@ static void play_item_at(const ytmusic_item_t *items, int count, int index) {
 	}
 	if (!begin_busy()) return;
 	yt_fetching = true;
-	loading_transfer = false;
-	loading_show();
+	busy_show();
 	if (!start_transfer(&yt_queue_tracks[slot], slot)) {
 		yt_fetching = false;
 		loading_hide();
@@ -1543,6 +1586,7 @@ static void save_done(void *data) {
 }
 
 static void *save_worker(void *arg) {
+	thread_be_low_priority("ytmusic save");
 	save_result_t *result = arg;
 	result->ok = ytmusic_download_for_playback(&result->track, result->path, sizeof(result->path),
 											   result->error, sizeof(result->error));
@@ -1691,11 +1735,12 @@ static bool start_list_request(list_kind_t kind, bool to_tracks, ytmusic_filter_
 		return false;
 	}
 	pthread_detach(thread);
-	gui_notify_popup(tr("searching"));
+	busy_show();
 	return true;
 }
 
 static void *list_worker(void *arg) {
+	thread_be_low_priority("ytmusic list");
 	list_result_t *result = arg;
 	if (result->kind == LIST_SEARCH) {
 		result->count = ytmusic_search_items(result->query, result->filter, result->items,
@@ -1714,6 +1759,7 @@ static void *list_worker(void *arg) {
 static void list_done(void *data) {
 	list_result_t *result = data;
 	if (!result) return;
+	busy_hide();
 	end_busy();
 	pthread_mutex_lock(&page_lock);
 	bool current = result->generation == list_generation;
@@ -1796,6 +1842,7 @@ static void item_clicked_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 
 static void *explore_worker(void *arg) {
+	thread_be_low_priority("ytmusic explore");
 	explore_result_t *result = arg;
 	result->count = ytmusic_explore_sections(result->sections, YTMUSIC_SECTIONS_MAX,
 											  result->error, sizeof(result->error));
@@ -1809,6 +1856,7 @@ static void *explore_worker(void *arg) {
 static void explore_done(void *data) {
 	explore_result_t *result = data;
 	if (!result) return;
+	busy_hide();
 	end_busy();
 	pthread_mutex_lock(&page_lock);
 	bool current = result->generation == list_generation;
@@ -1863,7 +1911,7 @@ static void explore_start_cb(lv_event_t *e) {
 		return;
 	}
 	pthread_detach(thread);
-	gui_notify_popup(tr("searching"));
+	busy_show();
 }
 
 // One carousel, listed with the cards it holds. Its items came with the page,
@@ -2845,6 +2893,7 @@ static void home_loaded_cb(lv_event_t *e) {
 
 void ytmusicpage_init(gui_config_t *cfg) {
 	page_cfg = cfg;
+	busy_build();
 	// Where a downloaded cover is kept. Called here as much as for the shared
 	// loader's benefit: with no card named it has nowhere to write and every
 	// list keeps its placeholders, which is the honest answer.

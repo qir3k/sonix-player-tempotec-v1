@@ -245,9 +245,10 @@ static void submit(const job_t *job) {
 // veil would hide.
 // ---------------------------------------------------------------------------
 
-// A spinner in the middle of the screen, no text: understood without reading
-// and needing no translation. The string callers pass is ignored.
+// Match the Podcast and YouTube Music loading veil: spinner with a short label.
 static lv_obj_t *busy_layer;
+static lv_obj_t *busy_label;
+static bool waiting_spinner_active;
 
 static void busy_hide(void) {
 	if (busy_layer) {
@@ -255,11 +256,18 @@ static void busy_hide(void) {
 	}
 }
 
+static void waiting_spinner_hide(void) {
+	if (!waiting_spinner_active) return;
+	waiting_spinner_active = false;
+	busy_hide();
+}
+
 static void busy_show(const char *text) {
 	(void)text;
 	if (!busy_layer) {
 		return;
 	}
+	lv_obj_set_hidden(busy_label, false);
 	lv_obj_set_hidden(busy_layer, false);
 	lv_obj_move_foreground(busy_layer);
 }
@@ -282,6 +290,12 @@ static void build_busy_layer(void) {
 	lv_obj_t *spin = spinner_create(busy_layer, &icon_loader_big);
 	lv_obj_set_style_image_recolor(spin, lv_color_white(), 0);
 	lv_obj_set_style_image_recolor_opa(spin, LV_OPA_COVER, 0);
+
+	busy_label = lv_label_create(busy_layer);
+	lv_label_set_text(busy_label, tr("loading"));
+	lv_obj_set_style_text_color(busy_label, lv_color_white(), 0);
+	lv_obj_set_style_text_font(busy_label, &font_ui_22, 0);
+	lv_obj_set_style_margin_top(busy_label, 16, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1857,7 +1871,9 @@ static void job_done_cb(void *user) {
 	(void)user;
 	// Before reading any result_*: from here on the worker is held and nothing
 	// writes underneath. It is released on the way out, in job_result_taken().
-	busy_hide();
+	if (result_kind != JOB_PLAY || result_error[0]) {
+		busy_hide();
+	}
 	if (result_kind == JOB_BULK_DOWNLOAD) {
 		download_layer_hide();
 		bulk_failed = result_error[0] != '\0';
@@ -1981,6 +1997,7 @@ static void on_slow_start(int seconds) { gui_post(slow_start_async, (void *)(int
 // Playback stopped on a track that was not there yet: when the file arrives,
 // it resumes from where it stopped.
 static bool waiting_for_track;
+static long waiting_track_id;
 
 static bool track_is_playable(const char *path);
 static void prefetch_urgent(const char *wanted_path);
@@ -1988,6 +2005,7 @@ static void prefetch_urgent(const char *wanted_path);
 static void resume_if_waiting_async(void *user) {
 	(void)user;
 	if (!waiting_for_track) {
+		waiting_spinner_hide();
 		return;
 	}
 	// The Wi-Fi transfer is a file server running as root on the card this
@@ -2007,6 +2025,8 @@ static void resume_if_waiting_async(void *user) {
 		return;
 	}
 	waiting_for_track = false;
+	waiting_track_id = 0;
+	waiting_spinner_hide();
 	fprintf(stderr, "tidal: restarting the queue from slot %d ('%s')\n", index, path);
 	device_state_play_queue_index(index);
 	player_refresh_now_playing();
@@ -2034,7 +2054,7 @@ static bool track_is_playable(const char *path) {
 	return growing || downloading;
 }
 
-// The "downloading" notice must go through gui_post.
+// The wait indicator must go through gui_post.
 //
 // device_state calls tidalpage_prepare_track when starting a file, and it
 // calls it from whatever thread it happens to be on: the UI thread when a
@@ -2042,9 +2062,21 @@ static bool track_is_playable(const char *path) {
 // the queue. LVGL is not reentrant and has no locks (LV_USE_OS is off), so
 // drawing a popup from there is the class of fault that shows up as an
 // occasional crash with no pattern.
-static void downloading_note_async(void *user) {
+static void waiting_note_async(void *user) {
 	(void)user;
-	gui_notify_popup("downloading");
+	if (waiting_for_track) {
+		waiting_spinner_active = true;
+		busy_show("loading");
+	}
+}
+
+static void waiting_failed_async(void *user) {
+	long id = (long)(intptr_t)user;
+	if (!waiting_for_track || waiting_track_id != id) return;
+	waiting_for_track = false;
+	waiting_track_id = 0;
+	waiting_spinner_hide();
+	gui_notify_popup(tr("download_failed"));
 }
 
 bool tidalpage_prepare_track(char *path, size_t path_size) {
@@ -2092,6 +2124,7 @@ bool tidalpage_prepare_track(char *path, size_t path_size) {
 	// stopping playback.
 	tidalcache_set_network_wanted(true);
 	waiting_for_track = true;
+	waiting_track_id = tidalcache_track_id(path);
 	// Stop what was playing first, and not out of politeness: the previous
 	// track is reading a file that is still downloading, and it is one of the
 	// downloads prefetch_urgent() is about to abandon. Pulling the file out
@@ -2100,7 +2133,7 @@ bool tidalpage_prepare_track(char *path, size_t path_size) {
 	// Stopped, there is nothing to pull out from under anyone.
 	device_state_stop();
 	prefetch_urgent(path);
-	gui_post(downloading_note_async, NULL);
+	gui_post(waiting_note_async, NULL);
 	return false;
 }
 
@@ -2119,6 +2152,7 @@ static void cover_ready_async(void *user) {
 
 static void play_started_async(void *user) {
 	(void)user;
+	busy_hide();
 	player_refresh_now_playing();
 	switch_screen(player_screen);
 }
@@ -2509,6 +2543,8 @@ static void queue_watch_cb(lv_timer_t *timer) {
 		char wanted[512];
 		if (index >= 0 && playlist_path_at(index, wanted, sizeof(wanted)) && !tidalcache_owns(wanted)) {
 			waiting_for_track = false;
+			waiting_track_id = 0;
+			gui_post(waiting_spinner_hide, NULL);
 		}
 	}
 
@@ -2577,6 +2613,7 @@ static void *prefetch_main(void *arg) {
 			fprintf(stderr, "tidal: %ld does not download: %s\n", track.id, tidalcache_last_error());
 			prefetch_failed_id = id;
 			prefetch_failed_ms = lv_tick_get();
+			gui_post(waiting_failed_async, (void *)(intptr_t)id);
 		} else if (prefetch_failed_id == id) {
 			prefetch_failed_id = 0;
 		}
@@ -2726,6 +2763,7 @@ static bool tidal_cache_array(job_kind_t kind, void **out, size_t *item_size) {
 
 static void *worker_main(void *arg) {
 	(void)arg;
+	thread_be_low_priority("tidal page");
 
 	for (;;) {
 		pthread_mutex_lock(&job_lock);
@@ -3162,9 +3200,9 @@ static void run(const job_t *job, const char *waiting_text) {
 	}
 
 	start_worker();
-	// No veil for playback (it starts immediately) or for login, which has its
-	// own spinner on the code page.
-	if (job->kind != JOB_PLAY && job->kind != JOB_LOGIN_BEGIN && job->kind != JOB_LOGIN_POLL) {
+	// Playback shows the same wait indicator as list requests when the caller
+	// knows a network load is ahead. Login has its own code-page spinner.
+	if (waiting_text && job->kind != JOB_LOGIN_BEGIN && job->kind != JOB_LOGIN_POLL) {
 		busy_show(waiting_text);
 	}
 	submit(job);
@@ -3233,7 +3271,7 @@ static void row_clicked_cb(lv_event_t *e) {
 	case JOB_FAV_TRACKS:
 		job.kind = JOB_PLAY;
 		job.index = index;
-		run(&job, NULL);
+		run(&job, "loading");
 		return;
 
 	case JOB_SEARCH_ALBUMS:
