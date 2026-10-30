@@ -68,8 +68,8 @@ struct sockaddr_rc {
 #define READ_BUF 512
 #define POLL_MS 250
 #define BATTERY_EVERY_MS 15000 // three requests, so not on every tick
-#define SOUND_ACTIVE_EVERY_MS 600
-#define SOUND_IDLE_EVERY_MS 2500
+#define SOUND_ACTIVE_EVERY_MS 400
+#define SOUND_IDLE_EVERY_MS 1000
 #define MISC_SETTINGS_EVERY_MS 10000
 #define RETRY_MS 6000	   // between attempts to open a session
 #define GIVE_UP_AFTER 3	   // first retry notice for one address
@@ -191,10 +191,18 @@ static void handle_frame(const uint8_t *frame, size_t length) {
 		return;
 	}
 	uint16_t raw_cmd = (uint16_t)((frame[6] << 8) | frame[7]);
-	if (!(raw_cmd & (FRAME_REPLY | 0x4000))) {
-		return; // something the player itself wrote, echoed back
-	}
 	uint16_t command = raw_cmd & 0x3FFF;
+	bool is_reply = (raw_cmd & FRAME_REPLY) != 0;
+
+	// Echoed requests without reply or event bit (e.g. GET commands sent by the player)
+	// must not overwrite state. However, unsolicited SET notifications or events from earbuds must be accepted!
+	bool is_get = (command == EARFUN_CMD_NOISE_GET || command == EARFUN_CMD_ANC_GET ||
+				   command == EARFUN_CMD_TRANSPARENCY_GET || command == EARFUN_CMD_GAME_GET ||
+				   command == EARFUN_CMD_IN_EAR_GET);
+	if (!is_reply && !(raw_cmd & 0x4000) && is_get) {
+		return;
+	}
+
 	const uint8_t *payload = frame + FRAME_HEADER;
 	size_t payload_length = frame[3];
 
@@ -214,32 +222,65 @@ static void handle_frame(const uint8_t *frame, size_t length) {
 		break;
 	case EARFUN_CMD_NOISE_GET:
 	case EARFUN_CMD_NOISE_SET:
-		if (payload_length >= 2 && payload[1] <= 2) {
-			g_state.noise = (earfun_noise_t)(payload[1] + 1); // 0 off, 1 ANC, 2 transparency
-			g_state.serial++;
-		} else if (payload_length == 1 && payload[0] <= 2) {
-			g_state.noise = (earfun_noise_t)(payload[0] + 1);
-			g_state.serial++;
+		if (is_reply) {
+			if (payload_length >= 2 && payload[1] <= 2) {
+				g_state.noise = (earfun_noise_t)(payload[1] + 1); // 0 off, 1 ANC, 2 transparency
+				g_state.serial++;
+			} else if (command == EARFUN_CMD_NOISE_GET && payload_length == 1 && payload[0] <= 2) {
+				g_state.noise = (earfun_noise_t)(payload[0] + 1);
+				g_state.serial++;
+			}
+			// When command == EARFUN_CMD_NOISE_SET and payload_length == 1:
+			// payload[0] is the GAIA ACK status byte (0x00 = success).
+			// Do NOT overwrite g_state.noise with status!
+		} else {
+			if (payload_length >= 2 && payload[1] <= 2) {
+				g_state.noise = (earfun_noise_t)(payload[1] + 1);
+				g_state.serial++;
+			} else if (payload_length >= 1 && payload[0] <= 2) {
+				g_state.noise = (earfun_noise_t)(payload[0] + 1);
+				g_state.serial++;
+			}
 		}
 		break;
 	case EARFUN_CMD_ANC_GET:
 	case EARFUN_CMD_ANC_SET:
-		if (payload_length >= 2) {
-			g_state.anc_level = payload[1];
-			g_state.serial++;
-		} else if (payload_length == 1) {
-			g_state.anc_level = payload[0];
-			g_state.serial++;
+		if (is_reply) {
+			if (payload_length >= 2) {
+				g_state.anc_level = payload[1];
+				g_state.serial++;
+			} else if (command == EARFUN_CMD_ANC_GET && payload_length == 1) {
+				g_state.anc_level = payload[0];
+				g_state.serial++;
+			}
+		} else {
+			if (payload_length >= 2) {
+				g_state.anc_level = payload[1];
+				g_state.serial++;
+			} else if (payload_length >= 1) {
+				g_state.anc_level = payload[0];
+				g_state.serial++;
+			}
 		}
 		break;
 	case EARFUN_CMD_TRANSPARENCY_GET:
 	case EARFUN_CMD_TRANSPARENCY_SET:
-		if (payload_length >= 2) {
-			g_state.transparency_mode = payload[1];
-			g_state.serial++;
-		} else if (payload_length == 1) {
-			g_state.transparency_mode = payload[0];
-			g_state.serial++;
+		if (is_reply) {
+			if (payload_length >= 2) {
+				g_state.transparency_mode = payload[1];
+				g_state.serial++;
+			} else if (command == EARFUN_CMD_TRANSPARENCY_GET && payload_length == 1) {
+				g_state.transparency_mode = payload[0];
+				g_state.serial++;
+			}
+		} else {
+			if (payload_length >= 2) {
+				g_state.transparency_mode = payload[1];
+				g_state.serial++;
+			} else if (payload_length >= 1) {
+				g_state.transparency_mode = payload[0];
+				g_state.serial++;
+			}
 		}
 		break;
 	case EARFUN_CMD_GAME_GET:

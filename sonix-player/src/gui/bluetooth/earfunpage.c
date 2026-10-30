@@ -7,6 +7,7 @@
 
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
+#include "src/gui/shell/noise_overlay.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -43,7 +44,15 @@ static bool drawn_connected;
 // ---------------------------------------------------------------------------
 
 static void noise_cb(lv_event_t *e) {
-	earfun_set_noise((earfun_noise_t)(intptr_t)lv_event_get_user_data(e));
+	earfun_noise_t mode = (earfun_noise_t)(intptr_t)lv_event_get_user_data(e);
+	earfun_set_noise(mode);
+	if (mode == EARFUN_NOISE_CANCELLATION) {
+		noise_overlay_show(NOISE_OVERLAY_ANC);
+	} else if (mode == EARFUN_NOISE_TRANSPARENCY) {
+		noise_overlay_show(NOISE_OVERLAY_AMBIENT);
+	} else if (mode == EARFUN_NOISE_OFF) {
+		noise_overlay_show(NOISE_OVERLAY_OFF);
+	}
 	refresh(false);
 }
 

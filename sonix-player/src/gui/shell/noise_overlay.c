@@ -10,7 +10,7 @@
 #include "src/system/device/power.h"
 
 #define NOISE_OVERLAY_HIDE_MS 1600
-#define NOISE_OVERLAY_POLL_MS 250
+#define NOISE_OVERLAY_POLL_MS 100
 
 static lv_obj_t *veil;
 static lv_obj_t *overlay;
@@ -59,6 +59,16 @@ void noise_overlay_show(noise_overlay_mode_t mode) {
 	}
 
 	current_mode = mode;
+	if (mode == NOISE_OVERLAY_ANC) {
+		last_ef_noise = EARFUN_NOISE_CANCELLATION;
+		last_ap_noise = AIRPODS_NOISE_CANCELLATION;
+	} else if (mode == NOISE_OVERLAY_AMBIENT) {
+		last_ef_noise = EARFUN_NOISE_TRANSPARENCY;
+		last_ap_noise = AIRPODS_NOISE_TRANSPARENCY;
+	} else if (mode == NOISE_OVERLAY_OFF) {
+		last_ef_noise = EARFUN_NOISE_OFF;
+		last_ap_noise = AIRPODS_NOISE_OFF;
+	}
 	const lv_image_dsc_t *icon = &icon_headphones;
 	const char *text = "Off";
 
@@ -99,17 +109,19 @@ static void poll_cb(lv_timer_t *timer) {
 
 	earfun_state_t ef;
 	if (earfun_get(&ef)) {
-		if (!ef_was_connected) {
-			ef_was_connected = true;
-			last_ef_noise = ef.noise;
-		} else if (ef.noise != last_ef_noise && ef.noise != EARFUN_NOISE_UNKNOWN) {
-			last_ef_noise = ef.noise;
-			if (ef.noise == EARFUN_NOISE_CANCELLATION) {
-				noise_overlay_show(NOISE_OVERLAY_ANC);
-			} else if (ef.noise == EARFUN_NOISE_TRANSPARENCY) {
-				noise_overlay_show(NOISE_OVERLAY_AMBIENT);
-			} else if (ef.noise == EARFUN_NOISE_OFF) {
-				noise_overlay_show(NOISE_OVERLAY_OFF);
+		if (ef.noise != EARFUN_NOISE_UNKNOWN) {
+			if (!ef_was_connected) {
+				ef_was_connected = true;
+				last_ef_noise = ef.noise;
+			} else if (ef.noise != last_ef_noise) {
+				last_ef_noise = ef.noise;
+				if (ef.noise == EARFUN_NOISE_CANCELLATION) {
+					noise_overlay_show(NOISE_OVERLAY_ANC);
+				} else if (ef.noise == EARFUN_NOISE_TRANSPARENCY) {
+					noise_overlay_show(NOISE_OVERLAY_AMBIENT);
+				} else if (ef.noise == EARFUN_NOISE_OFF) {
+					noise_overlay_show(NOISE_OVERLAY_OFF);
+				}
 			}
 		}
 	} else {
@@ -119,17 +131,19 @@ static void poll_cb(lv_timer_t *timer) {
 
 	airpods_state_t ap;
 	if (airpods_get(&ap)) {
-		if (!ap_was_connected) {
-			ap_was_connected = true;
-			last_ap_noise = ap.noise;
-		} else if (ap.noise != last_ap_noise && ap.noise != AIRPODS_NOISE_UNKNOWN) {
-			last_ap_noise = ap.noise;
-			if (ap.noise == AIRPODS_NOISE_CANCELLATION) {
-				noise_overlay_show(NOISE_OVERLAY_ANC);
-			} else if (ap.noise == AIRPODS_NOISE_TRANSPARENCY) {
-				noise_overlay_show(NOISE_OVERLAY_AMBIENT);
-			} else if (ap.noise == AIRPODS_NOISE_OFF) {
-				noise_overlay_show(NOISE_OVERLAY_OFF);
+		if (ap.noise != AIRPODS_NOISE_UNKNOWN) {
+			if (!ap_was_connected) {
+				ap_was_connected = true;
+				last_ap_noise = ap.noise;
+			} else if (ap.noise != last_ap_noise) {
+				last_ap_noise = ap.noise;
+				if (ap.noise == AIRPODS_NOISE_CANCELLATION) {
+					noise_overlay_show(NOISE_OVERLAY_ANC);
+				} else if (ap.noise == AIRPODS_NOISE_TRANSPARENCY) {
+					noise_overlay_show(NOISE_OVERLAY_AMBIENT);
+				} else if (ap.noise == AIRPODS_NOISE_OFF) {
+					noise_overlay_show(NOISE_OVERLAY_OFF);
+				}
 			}
 		}
 	} else {
@@ -146,6 +160,7 @@ void noise_overlay_init(gui_config_t *cfg) {
 	const int top_y = is_compact ? (cfg->top_bar_height + 4) : (cfg->top_bar_height + 8);
 
 	veil = lv_obj_create(lv_layer_top());
+	lv_obj_remove_style_all(veil);
 	lv_obj_set_size(veil, lv_pct(100), lv_pct(100));
 	lv_obj_set_pos(veil, 0, 0);
 	lv_obj_set_style_bg_opa(veil, LV_OPA_TRANSP, 0);
