@@ -1276,6 +1276,37 @@ static void open_album_cb(void *user) {
 	switcher_set_player_return(medialist_tracks_screen);
 }
 
+// Artist choices are the library's names, in tag order.
+#define SHOW_ARTIST_MAX 7
+static char artist_choices[SHOW_ARTIST_MAX][LIBRARY_ARTIST_NAME_MAX];
+static lv_obj_t *artist_menu_anchor;
+
+static void open_artist(const char *name) {
+	player_sheet_close(false);
+	medialist_open_artist(name);
+	switcher_set_player_return(medialist_artist_screen());
+}
+
+static void open_artist_choice_cb(void *user) { open_artist(artist_choices[(intptr_t)user]); }
+
+static void open_artist_cb(void *user) {
+	(void)user;
+	device_state_t state;
+	device_state_get(&state);
+	int count = library_track_artists(state.current_file, artist_choices, SHOW_ARTIST_MAX);
+	if (!count) {
+		gui_notify_popup("trackmenu_no_artist");
+	} else if (count == 1 || !artist_menu_anchor) {
+		open_artist(artist_choices[0]);
+	} else {
+		popover_item_t items[SHOW_ARTIST_MAX];
+		for (int i = 0; i < count; i++) {
+			items[i] = (popover_item_t){artist_choices[i], open_artist_choice_cb, (void *)(intptr_t)i, false, true};
+		}
+		popover_show(artist_menu_anchor, items, count);
+	}
+}
+
 // Tidal's track response only keeps the performer's readable name.  The page
 // resolves it through its artist search, then tapping the matching result
 // opens that artist's albums.  The option belongs only to Tidal: local tracks
@@ -1371,6 +1402,7 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"smartmix_start", start_genius_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
 		{"show_album", open_album_cb, NULL},
+		{"show_artist", open_artist_cb, NULL},
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
 	};
@@ -1413,6 +1445,7 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"smartmix_start", start_genius_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
 		{"show_album", open_album_cb, NULL},
+		{"show_artist", open_artist_cb, NULL},
 		{"trackmenu_keep_on_card", keep_on_card_cb, NULL},
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
@@ -1431,6 +1464,8 @@ void trackmenu_open(lv_obj_t *anchor) {
 	// cache file.
 	bool streamed = !podcast && !tidal_track && state.current_file[0] &&
 					(qobuzcache_track_id(state.current_file) > 0 || ytmusic_cache_owns(state.current_file));
+
+	artist_menu_anchor = anchor;
 
 	// Smart Mix stays available on every non-podcast menu, as upstream has it.
 	// Only the episode table omits it; the Tidal and keep-on-card tables add

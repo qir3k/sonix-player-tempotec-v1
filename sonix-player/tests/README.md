@@ -21,6 +21,7 @@ make -C sonix-player/tests notes           # the notes folder's rules
 make -C sonix-player/tests listenbrainz    # the scrobbler and its queue
 make -C sonix-player/tests aamlayout       # Album Art Max's arithmetic
 make -C sonix-player/tests tagdate         # the dates tags carry
+make -C sonix-player/tests genius          # Smart Mix track-count limits and traversal
 make -C sonix-player/tests lrclib          # lyrics search, ranking and sidecar save
 make -C sonix-player/tests tags            # tag reading and format sniffing
 make -C sonix-player/tests covers          # the 1000-cover cache
@@ -482,6 +483,7 @@ structure, with filler where the picture data would be.
   back to it when it is the only one. Twenty `._` files beside one picture
   never make it miss.
 
+
 ## The battery guard
 
 `make -C sonix-player/tests batteryguard` runs `batteryguard.c`, the rule with
@@ -562,3 +564,12 @@ worker stubbed. It checks the GAIA-shaped packets the page's switches send
 that a reply the earbud sends back becomes the state the page draws -- including
 a truncated or unknown frame, which has to leave the last state alone rather
 than report a value nobody sent.
+
+## Smart Mix sizes
+
+`make -C sonix-player/tests genius` links the real mix generator to a synthetic
+memory-only similarity graph. It checks every popup size (10, 15, 20, 25, 30),
+the seed counting toward the requested size, unique independently owned output
+paths, invalid sizes, missing seeds, cancellation/card invalidation, shorter
+mixes when candidates run out, and failure when only the seed is available.
+No LVGL, database or card is required.

@@ -8,10 +8,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "src/gui/board_profile.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
+#include "src/gui/shell/popover.h"
 #include "src/gui/shell/spinner.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
@@ -39,6 +41,7 @@ typedef struct {
 	// below writes the playlist and cannot reach the language table.
 	char prefix[64];
 	genius_mode_t mode;
+	int target_count;
 	unsigned random;
 	atomic_bool cancel;
 	atomic_bool delivery_failed;
@@ -58,7 +61,7 @@ static struct {
 	lv_timer_t *timer;
 } genius_ui;
 
-static void genius_begin(const char *seed_path, genius_mode_t mode, const char *prefix);
+static void genius_begin(const char *seed_path, genius_mode_t mode, const char *prefix, int target_count);
 
 static void genius_finish(void *user) {
 	genius_job_t *job = user;
@@ -147,7 +150,7 @@ static void *genius_build(void *user) {
 	thread_be_low_priority("smart mix");
 	geniusdb_result_t read = geniusdb_load_snapshot(&job->snapshot, &job->cancel);
 	if (read == GENIUSDB_OK) {
-		job->result = genius_mix_build(job->snapshot, job->seed_path, job->random, &job->cancel, &job->mix);
+		job->result = genius_mix_build(job->snapshot, job->seed_path, job->target_count, job->random, &job->cancel, &job->mix);
 		// Writing the playlist belongs to this thread: it reads tags off the
 		// card for every entry. A mix that cannot be written is reported as a
 		// failure, and the playlist it half made is taken back off the card
@@ -184,13 +187,13 @@ static void genius_cancel(lv_event_t *e) {
 
 static void genius_cancel_button(lv_obj_t *parent) {
 	lv_obj_t *row = lv_btn_create(parent);
-	lv_obj_set_size(row, lv_pct(100), 76);
+	lv_obj_set_size(row, lv_pct(100), bp_pick(44, 76));
 	lv_obj_add_style(row, &theme_style_card, 0);
 	lv_obj_add_style(row, &theme_style_card_pressed, LV_STATE_PRESSED);
 	lv_obj_set_style_radius(row, 12, 0);
 	lv_obj_set_style_border_width(row, 0, 0);
 	lv_obj_set_style_shadow_width(row, 0, 0);
-	lv_obj_set_style_pad_hor(row, 16, 0);
+	lv_obj_set_style_pad_hor(row, bp_pick(10, 16), 0);
 	lv_obj_set_scrollable(row, false);
 	lv_obj_add_event_cb(row, genius_cancel, LV_EVENT_CLICKED, NULL);
 
@@ -200,21 +203,65 @@ static void genius_cancel_button(lv_obj_t *parent) {
 	lv_obj_set_width(label, lv_pct(100));
 	lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_add_style(label, &theme_style_text, 0);
-	lv_obj_set_style_text_font(label, &font_ui_22, 0);
+	lv_obj_set_style_text_font(label, bp_is_tempotec_v1() ? &font_ui_16 : &font_ui_22, 0);
 	lv_obj_center(label);
 }
 
 bool geniusui_available(void) { return gui_card_available() && geniusdb_available(); }
 
-void geniusui_start(const char *seed_path) { genius_begin(seed_path, GENIUS_MODE_PLAY, NULL); }
+// The originating list/menu may close as soon as it hands us the seed. Keep
+// our own copy until the size choice is made; never borrow a row's path.
+static struct {
+	char seed_path[512];
+	genius_mode_t mode;
+	uint64_t session;
+	char labels[5][64];
+} genius_choice;
 
-void geniusui_create_playlist(const char *seed_path) {
-	// The name is composed here, on the GUI thread: the worker that writes the
-	// playlist has no way to ask the language table what the feature is called.
-	genius_begin(seed_path, GENIUS_MODE_PLAYLIST, tr("smartmix_playlist_prefix"));
+static void genius_size_picked(void *user) {
+	if (library_session() != genius_choice.session) {
+		gui_notify_popup("smartmix_cancelled");
+		return;
+	}
+	// Translate on the GUI thread, only once the user confirms the count.
+	genius_begin(genius_choice.seed_path, genius_choice.mode,
+				 genius_choice.mode == GENIUS_MODE_PLAYLIST ? tr("smartmix_playlist_prefix") : NULL,
+				 (int)(intptr_t)user);
 }
 
-static void genius_begin(const char *seed_path, genius_mode_t mode, const char *prefix) {
+static void genius_choose_size(const char *seed_path, genius_mode_t mode) {
+	if (genius_ui.job) {
+		return;
+	}
+	if (!geniusui_available() || !seed_path || !seed_path[0]) {
+		gui_notify_popup("smartmix_no_data");
+		return;
+	}
+	if (strlen(seed_path) >= sizeof(genius_choice.seed_path)) {
+		gui_notify_popup("smartmix_failed");
+		return;
+	}
+	snprintf(genius_choice.seed_path, sizeof(genius_choice.seed_path), "%s", seed_path);
+	genius_choice.mode = mode;
+	genius_choice.session = library_session();
+	popover_item_t items[6] = {0};
+	for (int i = 0; i < 5; i++) {
+		int count = 10 + i * 5;
+		snprintf(genius_choice.labels[i], sizeof(genius_choice.labels[i]), tr("playlist_tracks"), count);
+		items[i] = (popover_item_t){.label = genius_choice.labels[i], .action = genius_size_picked,
+			.user = (void *)(intptr_t)count, .verbatim = true};
+	}
+	items[5] = (popover_item_t){.label = "cancel"};
+	popover_show(lv_screen_active(), items, 6);
+}
+
+void geniusui_start(const char *seed_path) { genius_choose_size(seed_path, GENIUS_MODE_PLAY); }
+
+void geniusui_create_playlist(const char *seed_path) {
+	genius_choose_size(seed_path, GENIUS_MODE_PLAYLIST);
+}
+
+static void genius_begin(const char *seed_path, genius_mode_t mode, const char *prefix, int target_count) {
 	if (genius_ui.job) {
 		return;
 	}
@@ -232,6 +279,7 @@ static void genius_begin(const char *seed_path, genius_mode_t mode, const char *
 	snprintf(job->seed_path, sizeof(job->seed_path), "%s", seed_path);
 	snprintf(job->prefix, sizeof(job->prefix), "%s", prefix ? prefix : "");
 	job->mode = mode;
+	job->target_count = target_count;
 	job->random = lv_rand(0, INT32_MAX);
 	atomic_init(&job->cancel, false);
 	atomic_init(&job->delivery_failed, false);
@@ -245,20 +293,20 @@ static void genius_begin(const char *seed_path, genius_mode_t mode, const char *
 	lv_obj_set_clickable(genius_ui.overlay, true);
 	lv_obj_set_scrollable(genius_ui.overlay, false);
 	lv_obj_t *card = lv_obj_create(genius_ui.overlay);
-	lv_obj_set_size(card, 380, LV_SIZE_CONTENT);
+	lv_obj_set_size(card, bp_pick(210, 380), LV_SIZE_CONTENT);
 	lv_obj_add_style(card, &theme_style_screen, 0);
-	lv_obj_set_style_pad_all(card, 20, 0);
-	lv_obj_set_style_pad_gap(card, 20, 0);
+	lv_obj_set_style_pad_all(card, bp_pick(14, 20), 0);
+	lv_obj_set_style_pad_gap(card, bp_pick(12, 20), 0);
 	lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_center(card);
 	lv_obj_t *spinner = spinner_create(card, &icon_loader_big);
-	lv_obj_set_size(spinner, 48, 48);
+	lv_obj_set_size(spinner, bp_pick(36, 48), bp_pick(36, 48));
 	lv_obj_t *label = lv_label_create(card);
 	lv_label_set_text(label, tr("smartmix_building"));
 	lv_obj_set_width(label, lv_pct(100));
 	lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_style_text_font(label, &font_ui_22, 0);
+	lv_obj_set_style_text_font(label, bp_is_tempotec_v1() ? &font_ui_16 : &font_ui_22, 0);
 	lv_obj_add_style(label, &theme_style_text, 0);
 	genius_cancel_button(card);
 	genius_ui.timer = lv_timer_create(genius_poll, 100, NULL);

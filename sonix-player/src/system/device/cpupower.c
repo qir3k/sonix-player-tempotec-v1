@@ -9,6 +9,10 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+
 // Sysfs cpufreq paths
 #define SYSFS_CPU0_CPUFREQ "/sys/devices/system/cpu/cpu0/cpufreq"
 #define SYSFS_GEN_CPUFREQ  "/sys/devices/system/cpu/cpufreq"

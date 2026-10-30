@@ -4,6 +4,9 @@
 // a slow one (see ui_note_slow_pass() below), and a period and a callback are
 // not in the public API.
 #include "lvgl/src/misc/lv_timer_private.h"
+// The touch panel's read callback, called directly to drain the panel (see
+// panel_touch_flush() below).
+#include "lvgl/src/indev/lv_indev_private.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -1709,16 +1712,29 @@ const char *panel_touch_device(void) { return fb_touch_node[0] ? fb_touch_node :
 // not polled and stops reading the node, so events pile up unread in the
 // kernel queue. Whatever re-enables it must wait a moment before trusting the
 // first touch (see gearboyplay.c).
+// Throws away what the panel sent while nobody was reading it. A disabled indev
+// is not polled, so the kernel queue fills with whatever the glass did during
+// the blank -- wake transients, a palm on the screen, the tap that woke it --
+// and the first poll afterwards would replay all of it as presses and swipes.
+// The read callback is called by hand to consume the queue and its result is
+// dropped; the indev is then told to ignore the pointer until the finger is up.
 void panel_touch_flush(void) {
 	if (fb_touch_fd >= 0) {
 		struct input_event in;
 		while (read(fb_touch_fd, &in, sizeof(in)) > 0) {
 		}
 	}
-	if (fb_touch) {
-		lv_indev_wait_release(fb_touch);
-		lv_anim_delete(fb_touch, NULL);
+	if (!fb_touch) {
+		return;
 	}
+	if (fb_touch->read_cb) {
+		lv_indev_data_t discard;
+		memset(&discard, 0, sizeof(discard));
+		fb_touch->read_cb(fb_touch, &discard);
+	}
+	lv_indev_wait_release(fb_touch);
+	lv_anim_delete(fb_touch, NULL);
+}
 }
 
 void panel_touch_enable(bool enabled) {

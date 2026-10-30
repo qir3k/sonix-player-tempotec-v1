@@ -547,7 +547,15 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 
 -include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(LYRICSEARCH_OBJ:.o=.d))
 
--include $(sort $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(CHARGE_OBJ:.o=.d))
+# Smart Mix track-count limits and traversal, with a memory-only graph fixture.
+GENIUS_SRC = test_genius.c $(ROOT)/src/system/library/genius.c
+.PHONY: genius
+genius: $(BUILD)/test_genius
+	$(BUILD)/test_genius
+
+$(BUILD)/test_genius: $(GENIUS_SRC) $(ROOT)/src/system/library/genius.h $(ROOT)/src/system/library/geniusdb.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(GENIUS_SRC) $(LDFLAGS) $(LDLIBS)
 
 # The EarFun control protocol, driven by replies instead of by earbuds: the
 # frame encoder and the decoders, with every socket call in the worker stubbed.
@@ -613,7 +621,7 @@ $(BUILD)/test_ytmusic_keyless: $(YTM_SRC) $(ROOT)/src/system/streaming/ytmusic.h
 
 # Everything, in the order the workflow runs it. `make test` stays the default
 # target; this is the one to run before merging into personal.
-ALL_SUITES = earfun
+ALL_SUITES = earfun genius cpupower
 
 .PHONY: all
 all:

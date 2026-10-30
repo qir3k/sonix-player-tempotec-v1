@@ -7,7 +7,7 @@
 #include "src/gui/shell/theme.h"
 #include "src/system/core/lang.h"
 
-#define POPOVER_MAX_ITEMS 7
+#define POPOVER_MAX_ITEMS 8
 #define POPOVER_WIDTH 284
 #define POPOVER_ROW_HEIGHT 62
 #define POPOVER_RADIUS 16
@@ -125,7 +125,7 @@ void popover_show(lv_obj_t *anchor, const popover_item_t *items, int count) {
 		lv_obj_add_event_cb(row, item_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
 		lv_obj_t *label = lv_label_create(row);
-		lv_label_set_text(label, tr(items[i].label));
+		lv_label_set_text(label, items[i].verbatim ? items[i].label : tr(items[i].label));
 		lv_obj_add_style(label, &theme_style_text, 0);
 		lv_obj_set_style_text_font(label, &font_ui_24, 0);
 		// Given a width, a label wraps instead of running past its parent. Left
@@ -169,20 +169,28 @@ void popover_show(lv_obj_t *anchor, const popover_item_t *items, int count) {
 		lv_obj_set_scrollable(card, true);
 	}
 
-	int x = a.x1 + (a.x2 - a.x1) / 2 - card_w / 2;
+	int x, y;
+	if (!anchor || anchor == lv_screen_active()) {
+		x = (screen_w - card_w) / 2;
+		y = (screen_h - card_h) / 2;
+	} else {
+		x = a.x1 + (a.x2 - a.x1) / 2 - card_w / 2;
+		y = a.y2 + POPOVER_MARGIN; // preferred: right under the control
+		if (y + card_h > screen_h - POPOVER_MARGIN) {
+			y = a.y1 - POPOVER_MARGIN - card_h; // no room: above it
+		}
+	}
 	if (x < POPOVER_MARGIN) {
 		x = POPOVER_MARGIN;
 	}
 	if (x + card_w > screen_w - POPOVER_MARGIN) {
 		x = screen_w - POPOVER_MARGIN - card_w;
 	}
-
-	int y = a.y2 + POPOVER_MARGIN; // preferred: right under the control
-	if (y + card_h > screen_h - POPOVER_MARGIN) {
-		y = a.y1 - POPOVER_MARGIN - card_h; // no room: above it
-	}
 	if (y < POPOVER_MARGIN) {
 		y = POPOVER_MARGIN;
+	}
+	if (y + card_h > screen_h - POPOVER_MARGIN) {
+		y = screen_h - POPOVER_MARGIN - card_h;
 	}
 
 	lv_obj_set_pos(card, x, y);
