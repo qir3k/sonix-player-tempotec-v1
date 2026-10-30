@@ -116,8 +116,13 @@ int main(void) {
 	check(state.noise == EARFUN_NOISE_TRANSPARENCY, "the mode asked for is taken as done");
 
 	// Which names this module is willing to talk to at all.
+	// Only the EarFun Air Pro 4 is accepted; other EarFun devices are not.
 	check(earfun_name_supported("EarFun Air Pro 4"), "the pair itself");
-	check(earfun_name_supported("earfun air pro 4i"), "case does not matter");
+	check(earfun_name_supported("earfun air pro 4"), "all lowercase");
+	check(earfun_name_supported("EarFun Air Pro 4 Left"), "renamed with suffix");
+	check(!earfun_name_supported("EarFun Air Pro 3"), "different model");
+	check(!earfun_name_supported("EarFun Air"), "different EarFun product");
+	check(!earfun_name_supported("earfun air pro 4i"), "model 4i is not model 4");
 	check(!earfun_name_supported("WH-1000XM4"), "somebody else's headphones");
 	check(!earfun_name_supported(""), "no name");
 

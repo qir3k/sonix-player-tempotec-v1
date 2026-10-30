@@ -361,7 +361,11 @@ static bool probe(int fd) {
 		}
 		filled += (size_t)n;
 		for (size_t i = 0; i + FRAME_HEADER <= filled; i++) {
-			if (buf[i] == FRAME_SOP && buf[i + 1] == FRAME_VERSION && buf[i + 2] == FRAME_FLAGS &&
+			// Accept GAIA version 0x03 or 0x04: both are seen across EarFun Air
+			// Pro 4 firmware revisions. Flags must be 0x00 (no checksum).
+			if (buf[i] == FRAME_SOP &&
+				(buf[i + 1] == FRAME_VERSION || buf[i + 1] == 0x03) &&
+				buf[i + 2] == FRAME_FLAGS &&
 				(size_t)buf[i + 3] + FRAME_HEADER <= filled - i) {
 				return true;
 			}
@@ -567,9 +571,9 @@ static void *worker_main(void *arg) {
 			continue;
 		}
 		snprintf(mac, sizeof(mac), "%s", want_mac);
-		// A name that is not an EarFun one is not a device to open a socket
-		// to: a battery reading cannot come from a speaker or a car kit, and
-		// asking would be a socket every few seconds for nothing.
+		// Only open a socket to an EarFun Air Pro 4: other devices will not
+		// answer these commands, and probing would mean a socket every few
+		// seconds for nothing.
 		bool wanted = earfun_name_supported(want_name);
 		pthread_mutex_unlock(&lock);
 
@@ -676,18 +680,25 @@ bool earfun_get(earfun_state_t *out) {
 }
 
 bool earfun_name_supported(const char *name) {
-	// Case-insensitively, because the earbuds' own name is "EarFun Air Pro 4"
-	// and a renamed pair keeps the prefix its owner typed over.
+	// The EarFun Air Pro 4 specifically: match its exact model name
+	// case-insensitively. A user-renamed pair such as "EarFun Air Pro 4 Left"
+	// is still caught (the model name is a prefix and the next character must
+	// be a space, end-of-string, or punctuation, not a digit/letter that would
+	// make it a different model like "4i"). Other EarFun products and all other
+	// headphones are rejected.
 	if (!name) {
 		return false;
 	}
-	static const char PREFIX[] = "earfun";
-	for (size_t i = 0; i < sizeof(PREFIX) - 1; i++) {
-		if (!name[i] || tolower((unsigned char)name[i]) != PREFIX[i]) {
+	static const char MODEL[] = "earfun air pro 4";
+	for (size_t i = 0; i < sizeof(MODEL) - 1; i++) {
+		if (!name[i] || tolower((unsigned char)name[i]) != MODEL[i]) {
 			return false;
 		}
 	}
-	return true;
+	// The character after "Air Pro 4" must be end-of-string or a separator,
+	// not alphanumeric: "4i", "4S" etc. are different models.
+	char next = name[sizeof(MODEL) - 1];
+	return next == '\0' || !isalnum((unsigned char)next);
 }
 
 // Queues one command for the session thread. Nothing is queued with no session:

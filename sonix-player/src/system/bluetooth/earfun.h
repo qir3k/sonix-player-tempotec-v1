@@ -21,10 +21,9 @@
 //
 // This follows the Gadgetbridge implementation of the Air Pro 4
 // (EarFunAirPro4Protocol and EarFunPacket in gadgetbridge), which is where the
-// command numbers below come from. The earbuds are found by name: only a device
-// whose Bluetooth name begins with "EarFun" is ever offered this protocol, so
-// the player never opens a socket to somebody's speaker looking for a battery
-// reading that will never come.
+// command numbers below come from. The earbuds are found by name: only a device whose Bluetooth name begins
+// with "EarFun Air Pro 4" is ever offered this protocol, so the player never
+// opens a socket to other EarFun products or unrelated headphones.
 //
 // Threading: one worker owns the socket, as in airpods.h. Everything a caller
 // sees is a copy taken under a lock.
@@ -56,8 +55,10 @@ typedef struct {
 	uint32_t serial;  // bumps on every change, so a poll can skip a redraw
 } earfun_state_t;
 
-// Whether this device's Bluetooth name says it is an EarFun pair. The page and
-// the worker both ask this before doing anything else.
+// Whether this device's Bluetooth name identifies it as an EarFun Air Pro 4.
+// The match is case-insensitive and anchored at the start of the name, so a
+// user-renamed unit is still accepted. Only the Air Pro 4 is matched: other
+// EarFun products use a different protocol and must not be probed by this module.
 bool earfun_name_supported(const char *name);
 
 // Starts the worker. It sits idle until there is a device to talk to.
