@@ -155,7 +155,7 @@ jobs:
           # raw 16-bit PCM it must decode back to.
           ffmpeg -loglevel error -y -f lavfi \
             -i "sine=frequency=440:sample_rate=44100:duration=2" \
-            -ac 2 -sample_fmt s16 -c:a alac "$dir/alac.m4a"
+            -ac 2 -sample_fmt s16p -c:a alac "$dir/alac.m4a"
           ffmpeg -loglevel error -y -f lavfi \
             -i "sine=frequency=440:sample_rate=44100:duration=2" \
             -ac 2 -sample_fmt s16 -f s16le "$dir/alac.s16"
