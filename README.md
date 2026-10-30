@@ -1,164 +1,32 @@
 **Sonix Player for the TempoTec Variations V1**
 
-**Sonix Player for the TempoTec Variations V1** follows a clear lineage: **[Jepl4r's Sonix Player](https://github.com/Jepl4r/sonix-player)**, then **[MrFox's V1 fork](https://github.com/mr-f0xx/sonix-player-tempotec-v1)**, which ported the player to the TempoTec Variations V1, and then this fork. The V1 target and firmware packaging build on MrFox's work; the additions below are maintained here. Credit for inherited player, packer and porting work remains with their original authors.
+Sonix Player for the TempoTec Variations V1 follows a clear lineage: **[Jepl4r's Sonix Player](https://github.com/Jepl4r/sonix-player)**, then **[MrFox's V1 fork](https://github.com/mr-f0xx/sonix-player-tempotec-v1)**, which ported the player to the TempoTec Variations V1, and then this fork. The V1 target and firmware packaging build on MrFox's work; the additions below are maintained here. Credit for inherited player, packer and porting work remains with their original authors.
 
 **Additions and V1-focused work maintained in this fork:**
 
-- **Multilingual interface** — the full build includes eight selectable language packs. The language can be changed in Settings, and MiSans fills in glyphs missing from the selected font; additional TTF/OTF fonts can be added from the card.
-- **V1-focused Tidal and Podcasts screens** — layouts, search and navigation tailored to the V1's 240 × 320 display, with list caching to make previously loaded names available without another network fetch.
-- **Podcast listening state and organization** — listened marks, manual marking, regional trending charts, followed-show ordering, and downloaded episodes stored on the card.
-- **Audio controls where they are needed** — EQ, PEQ and MSEB controls are available on the USB DAC and Bluetooth receiver pages as well as in the usual player controls.
-- **Consistent favourites** — the same favourite state and heart control across the player, Music page, selection mode and control centre.
+- **One board, one tree** — the 240 × 320 V1 profile is a compile-time constant, not a switch: the 480-pixel layouts and the other HiBy targets are gone. Every page in this tree is laid out for the V1's panel.
+- **Eleven interface languages** — English, Deutsch, Español, Français, Italiano, Japanese, Nederlands, Polski, Português BR, Russian and Ukrainian, each selectable in Settings → Plugins → Languages and Fonts, where the script fallbacks (Japanese, Korean, Arabic, Thai, Cyrillic) are separate add-ons so a bare build carries only the faces it needs.
+- **Plugins** — every optional feature is a switch in Settings → Plugins: streaming services, music features (Lyrics Fetcher, Cover Art Fetcher, EQ, PEQ, MSEB, sleep timers, AutoEQ, Last.fm, ListenBrainz), the library shelves, the tools and the themes. A module switched off is never built, so its memory stays free; see [ADDONS.md](sonix-player/docs/ADDONS.md).
+- **YouTube Music without a computer** — search, charts, Explore, albums, playlists and podcasts on the device alone, played as they download, with a download option, a session imported from the card for the account's own library, and a Piped / Invidious fallback when Google refuses the device's own player request. See [YOUTUBE_MUSIC_SETUP.md](sonix-player/YOUTUBE_MUSIC_SETUP.md).
+- **Streaming that behaves like the local library** — Tidal, Qobuz, Podcasts, Radio and YouTube Music share one region list (Worldwide by default), one sleep timer, one favourites mark, one illustration of lists and one set of download pages.
+- **Bluetooth** — LDAC quality settings, AirPods battery and noise control, EarFun earbuds over the GAIA serial protocol, and a codec list that ranks LHDC, LLAC, Samsung Scalable and LC3/LC3+ above the older families where the link and the daemon support them.
 - **Useful diagnostics** — slow GUI event-loop passes are logged with timing and callback context to help investigate pauses and lag ([log details](docs/collecting-logs.md#the-interfaces-own-timing-ui-lines)).
 
 The firmware builder starts with an official V1 update package, replaces the stock music player and interface with Sonix, then repackages the update as `v1.upt`.
 
-This checkout is worked on **`dev`** and released from **`personal`**. New work is committed on `dev`; it is the branch to test from, and a push to it packages nothing. `personal` holds exactly what `dev` holds once a change has been tested there, and starting the build from it gives the personal firmware a new version and publishes its `v1.upt` and matching checksum as a release in this repository. `main` is no longer used for new work, and it is kept only as the shareable version: it can produce an Actions artifact, and a release from it is optional. See [the release guide](docs/releases.md).
+This checkout has **two branches**. `dev` is where work is written and tested; a push to it builds the player and runs the test suites, and packages nothing. `personal` is the release branch: it holds what `dev` holds once a change has been tested there, and a push to it runs the same tests, then builds the firmware, stamps it with a new version and publishes `v1.upt` with its matching checksum as a release in this repository. `main` is not used. See [the release guide](docs/releases.md).
 
 This is not an official TempoTec or HiBy release. **It has been tested on physical TempoTec Variations V1 hardware and works on the tested device.** It targets the **TempoTec Variations V1 only**; compatibility with the V1-A or other players in the Variations family is not established.
-
-
-## Previews
-
-Interface previews of Sonix, rendered at the V1's native 240 × 320 resolution. Click any picture to open it full size. The font and the colours shown are not the defaults.
-
-<table>
-  <tr>
-    <td align="center">
-      <a href="screenshots/main-menu.png"><img src="screenshots/main-menu.png" width="180" alt="Main menu"></a>
-      <br><sub><b>Main menu</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/music.png"><img src="screenshots/music.png" width="180" alt="Music"></a>
-      <br><sub><b>Music</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/more.png"><img src="screenshots/more.png" width="180" alt="More"></a>
-      <br><sub><b>More</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/wireless.png"><img src="screenshots/wireless.png" width="180" alt="Wireless"></a>
-      <br><sub><b>Wireless</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="screenshots/settings.png"><img src="screenshots/settings.png" width="180" alt="Settings"></a>
-      <br><sub><b>Settings</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/now-playing.png"><img src="screenshots/now-playing.png" width="180" alt="Now Playing"></a>
-      <br><sub><b>Now Playing</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/file-browser.png"><img src="screenshots/file-browser.png" width="180" alt="File Browser"></a>
-      <br><sub><b>File Browser</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/streaming.png"><img src="screenshots/streaming.png" width="180" alt="Streaming"></a>
-      <br><sub><b>Streaming</b></sub>
-    </td>
-  </tr>
-</table>
-
-### Amber on black theme
-
-Showcase of **Amber** appearance: fiery orange accents on a pure black background, with warm amber artwork and glowing icons.
-
-<table>
-  <tr>
-    <td align="center">
-      <a href="screenshots/ember/main-menu.png"><img src="screenshots/ember/main-menu.png" width="180" alt="Ember Main menu"></a>
-      <br><sub><b>Main menu</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/ember/music.png"><img src="screenshots/ember/music.png" width="180" alt="Ember Music"></a>
-      <br><sub><b>Music</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/ember/more.png"><img src="screenshots/ember/more.png" width="180" alt="Ember More"></a>
-      <br><sub><b>More</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/ember/wireless.png"><img src="screenshots/ember/wireless.png" width="180" alt="Ember Wireless"></a>
-      <br><sub><b>Wireless</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="screenshots/ember/settings.png"><img src="screenshots/ember/settings.png" width="180" alt="Ember Settings"></a>
-      <br><sub><b>Settings</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/ember/now-playing.png"><img src="screenshots/ember/now-playing.png" width="180" alt="Ember Now Playing"></a>
-      <br><sub><b>Now Playing</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/ember/file-browser.png"><img src="screenshots/ember/file-browser.png" width="180" alt="Ember File Browser"></a>
-      <br><sub><b>File Browser</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/ember/streaming.png"><img src="screenshots/ember/streaming.png" width="180" alt="Ember Streaming"></a>
-      <br><sub><b>Streaming</b></sub>
-    </td>
-  </tr>
-</table>
-
-### OLED theme
-
-Showcase of **OLED** appearance: true black backgrounds with white as the accent, on the V1 layouts. Nothing is filled grey: cards, rows and buttons are as black as the page, and Now Playing sets the sleeve on black instead of on a blurred copy of it. The main menu leaves out the title and tagline, so its six tiles start right under the status bar. Rendered by the host simulator with the V1 profile.
-
-<table>
-  <tr>
-    <td align="center">
-      <a href="screenshots/oled/main-menu.png"><img src="screenshots/oled/main-menu.png" width="180" alt="OLED main menu"></a>
-      <br><sub><b>Main menu</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/oled/music.png"><img src="screenshots/oled/music.png" width="180" alt="OLED music"></a>
-      <br><sub><b>Music</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/oled/more.png"><img src="screenshots/oled/more.png" width="180" alt="OLED more"></a>
-      <br><sub><b>More</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/oled/wireless.png"><img src="screenshots/oled/wireless.png" width="180" alt="OLED wireless"></a>
-      <br><sub><b>Wireless</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="screenshots/oled/settings.png"><img src="screenshots/oled/settings.png" width="180" alt="OLED settings"></a>
-      <br><sub><b>Settings</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/oled/now-playing.png"><img src="screenshots/oled/now-playing.png" width="180" alt="OLED now playing: Gold BBS'S by The Alchemist &amp; Conway The Machine"></a>
-      <br><sub><b>Now Playing — Gold BBS'S (LULU)</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/oled/file-browser.png"><img src="screenshots/oled/file-browser.png" width="180" alt="OLED file browser"></a>
-      <br><sub><b>File Browser</b></sub>
-    </td>
-    <td align="center">
-      <a href="screenshots/oled/streaming.png"><img src="screenshots/oled/streaming.png" width="180" alt="OLED streaming"></a>
-      <br><sub><b>Streaming</b></sub>
-    </td>
-  </tr>
-</table>
 
 ## Contents
 
 - [Target device](#target-device)
 - [Features](#features)
-- [Previews](#previews)
-  - [Amber on black theme](#amber-on-black-theme)
-  - [OLED theme](#oled-theme)
 - [Build a firmware image](#build-a-firmware-image)
 - [Install or restore firmware](#install-or-restore-firmware)
 - [Streaming credentials](#streaming-credentials)
-- [Subsonic / Gonic](#subsonic--gonic)
 - [Build from source](#build-from-source)
+- [Tests](#tests)
 - [Project files and documentation](#project-files-and-documentation)
 - [Credits](#credits)
 
@@ -182,38 +50,40 @@ The player UI is built with LVGL 9.6 and adapted for the V1's small display. The
 
 ## Features
 
-The V1 build includes a local library and file browser, streaming services, wireless audio, and several non-music apps. Highlights include:
+The V1 build includes a local library and file browser, streaming services, wireless audio, and several non-music apps. Highlights:
 
-- **Eight selectable interface languages** in the full build, with live language switching and font fallback for scripts missing from the selected face. MiSans, Neon 80s, Roboto and user-installed TTF/OTF fonts are supported; see [`sonix-player/assets/fonts/FONT-LICENSES.txt`](sonix-player/assets/fonts/FONT-LICENSES.txt) for font credits and licenses.
+- **Interface languages** — eleven packs, switched live, with script fallbacks (Japanese, Korean, Arabic, Thai, Cyrillic) installed as add-ons under Plugins → Languages and Fonts. MiSans, Neon 80s, Roboto and user-installed TTF/OTF fonts are supported; see [`sonix-player/assets/fonts/FONT-LICENSES.txt`](sonix-player/assets/fonts/FONT-LICENSES.txt) for font credits and licences.
 - **Local playback** with playlists, favourites, lyrics, artwork, search, play counts, audiobooks and a broad set of formats: WAV, FLAC, MP3, Ogg Vorbis, Opus, M4A/M4B/MP4, AAC, ALAC, WavPack, APE, AIFF/AIFC, CAF and DSD (DSF/DFF).
-- **Streaming and network audio:** Tidal, Qobuz, Subsonic/Gonic, internet radio, Bluetooth audio in and out, AirPlay and DLNA. Streaming features need working service credentials or a compatible server and may depend on third-party availability.
-- **Audio processing:** 10-band graphic EQ, parametric EQ, MSEB, crossfeed, channel balance and ReplayGain. The EQ, PEQ and MSEB can also process internet radio and USB DAC input.
+- **Streaming and network audio:** Tidal, Qobuz, YouTube Music, Subsonic/Gonic, internet radio, Bluetooth audio in and out, AirPlay and DLNA. Streaming features need working service credentials or a compatible server and may depend on third-party availability.
+- **Audio processing:** 10-band graphic EQ, parametric EQ, MSEB, crossfeed, channel balance and ReplayGain — each an optional module, and each able to process internet radio and USB DAC input as well as local files.
 - **USB audio:** use the V1 as a USB DAC for a computer or as a USB audio host for compatible DACs and headphones.
-- **More built-in apps:** the Podcast Index catalogue and downloaded episodes, an EPUB reader, and a Gearboy Game Boy / Game Boy Color emulator.
-- **Appearance options:** Dark and Light palettes, Amber on Black and OLED themes, player layouts, optional rounded screen corners, and configurable boot screens including custom images from the card.
+- **More built-in apps:** the Podcast Index catalogue and downloaded episodes, an EPUB reader, a metronome, and a Gearboy Game Boy / Game Boy Color emulator.
+- **Appearance:** four themes (Dark, Light, Amber on Black, OLED) — switchable in Plugins, with at least one always on and a boot fallback if the saved one is switched off — player layouts, optional rounded screen corners, and configurable boot screens including custom images from the card.
 
 The boot screen can be set to **Retrospace**, **Space**, **Travelling in space**, the stock light or dark image, or a custom JPEG/PNG in the card's `Bootlogo` folder. Custom images are copied into the player so the selected boot screen remains available without the card. Rounded screen corners are also optional and off by default.
 
 The battery is looked after at both ends. At **5 %** the player says so — a red card, and the panel comes back up for it if it was dark — and at **1 %** it switches itself off the ordinary way, position written and card unmounted, instead of letting the cell drop out from under it; below 10 % it also stays out of standby, because a sleeping player cannot watch its own gauge. A player that was **switched off and is then put on a charger** comes up on a battery screen instead of the library: the level, the percentage and what the charger is doing, going dark after ten seconds, with a **press** of the power button to bring it back and a **hold** to start the player after all.
 
-See [FEATURES.md](FEATURES.md) for a longer feature list. Streaming services also require valid credentials and may depend on third-party service availability.
+See [FEATURES.md](FEATURES.md) for the detailed feature notes and [PATCHES.md](PATCHES.md) for how the V1 port works underneath.
 
 ## Build a firmware image
 
-GitHub Actions builds the firmware using the MIPS toolchain in `sonix-player/rockboxdev/`, plus `7z`, `squashfs-tools` and `genisoimage`. A push or merge to `personal` automatically builds and publishes a personal release. Each push normally increments the patch version; commit messages can request a minor or major version bump. The built personal image is stamped to check for updates from this repository and credits the personal fork. Pushes to `dev` do not run the firmware build.
+GitHub Actions builds the firmware using the MIPS toolchain in `sonix-player/rockboxdev/`, plus `7z`, `squashfs-tools` and `genisoimage`.
 
-To create a personal release, merge the finished work into `personal`. The workflow builds the merged commit, creates a version tag and release, and attaches `v1.upt` plus `v1_md5.txt`. Its Actions artifact also includes the build report, validation reports and player binaries. The first run builds and caches the toolchain and can take 30–90 minutes; later runs are usually faster.
+- **`dev`** — every push builds the host player and runs the test suites. No firmware image is produced.
+- **`personal`** — every push runs those same tests first, and only then builds, stamps and releases the image. A failing suite stops the release.
+- **Manual runs** — **Build TempoTec V1 firmware** can be dispatched for any branch, tag or commit. A manual run requires the stock firmware URL and the community-build acknowledgement. Use `publish_release_tag` to upload the built image to an existing release; the workflow checks that the tag and the built commit match first.
 
-For a shareable build from `main`, that branch's workflow run provides an Actions artifact named for its exact commit and kept for 14 days. It does not create a personal release. Publishing a `main` build is optional and deliberate: run the workflow for the exact tagged commit or set `publish_release_tag` for an existing release. The workflow checks that the tag and built commit match before uploading the two firmware files. It does not build a firmware image from `dev`.
+Each push to `personal` normally increments the patch version; commit messages can request a minor or major bump. The release carries `v1.upt` and `v1_md5.txt`, and its notes list the commits included. The Actions artifact for the same run also includes `BUILD-REPORT.txt`, the stock and output validation reports, and the player binaries. Always check `BUILD-REPORT.txt` to confirm which source revision produced an artifact.
 
-The workflow can also be run manually for a chosen branch, tag or commit. A manual run requires the stock firmware URL and the community-build acknowledgement. If you publish to a release, use the exact commit named by its tag. Always check `BUILD-REPORT.txt` to confirm which source revision produced an artifact.
+The first run builds and caches the toolchain and can take 30–90 minutes; later runs are usually faster.
 
 ## Install or restore firmware
 
 Only attempt this on a TempoTec Variations V1. Read the warning above before proceeding.
 
 1. Keep the **official V1 `v1.upt` and its matching `v1_md5.txt`** somewhere safe. They are needed if you want to return to stock.
-2. For the personal build, download `v1.upt` and `v1_md5.txt` together from the personal release in this repository. For a shareable `main` build, use its Actions artifact or its deliberately published release, and check that its build report names the intended commit. Copy both files to the root of a microSD card supported by the device.
+2. Download `v1.upt` and `v1_md5.txt` together from the personal release in this repository, and check that its build report names the intended commit. Copy both files to the root of a microSD card supported by the device.
 3. Charge the player adequately, insert the card and start the device's built-in firmware update process. Menu names vary by stock firmware version; follow the device's on-screen instructions and do not interrupt the update.
 4. If you want to restore stock firmware, put the original vendor `v1.upt` and its matching checksum file at the card root and use the same update process.
 
@@ -234,6 +104,10 @@ app_secret =
 client_id =
 client_secret =
 
+# The InnerTube key music.youtube.com hands every visitor, read off the page.
+[ytmusic]
+api_key =
+
 [podcast]
 api_key =
 api_secret =
@@ -243,7 +117,9 @@ api_key =
 api_secret =
 ```
 
-ListenBrainz is the one scrobbler that needs no credentials in the image: its account is a personal user token, requested on listenbrainz.org/settings and pasted into the player's Settings → Music → ListenBrainz. Only the token is kept on the device. Scrobbling to Last.fm and to ListenBrainz are independent and can run side by side.
+The YouTube Music key is the one exception worth understanding: it is not an account credential, it is the key the public `music.youtube.com` page hands every visitor, and no account is needed for anything this player browses. A build can also supply it at compile time (`YTMUSIC_API_KEY`, or `sonix-player/.ytmusic-key`), and [YOUTUBE_MUSIC_SETUP.md](sonix-player/YOUTUBE_MUSIC_SETUP.md) says where to read it off the page. An account — for liked songs and your own playlists — is attached by importing a browser session from the card, not by signing in.
+
+ListenBrainz is the one scrobbler that needs no credentials in the image: its account is a personal user token, requested on listenbrainz.org/settings and pasted into Settings → Music → ListenBrainz. Only the token is kept on the device. Scrobbling to Last.fm and to ListenBrainz are independent and can run side by side.
 
 #### Qobuz without keys of your own
 
@@ -255,7 +131,7 @@ When you build an image **for your own device** from the official stock firmware
 SONIX_EMBED_STOCK_KEYS=1 ./sonix_firmware_packer.sh
 ```
 
-With a `streaming-keys.key` present the credentials are sealed into `streaming-keys.bin`; without one they ship as a plain, player-readable `streaming-keys.ini`. The extractor only runs on this explicit opt-in, masks values in its output, and leaves Tidal on the manual path (its secret is assembled at run time in the stock binary and cannot be scanned out). **An image built this way carries a third party's API credentials: keep it private, never upload it to a release.** The standalone tool (`sonix-player/tools/extract_streamkeys.py`, with `--check` and `--list-candidates`) and the full investigation, including what was traced in the stock binary, are documented in [docs/qobuz-stock-firmware.md](docs/qobuz-stock-firmware.md).
+With a `streaming-keys.key` present the credentials are sealed into `streaming-keys.bin`; without one they ship as a plain, player-readable `streaming-keys.ini`. The extractor only runs on this explicit opt-in, masks values in its output, and leaves Tidal on the manual path (its secret is assembled at run time in the stock binary and cannot be scanned out). **An image built this way carries a third party's API credentials: keep it private, never upload it to a release.** The standalone tool (`sonix-player/tools/extract_streamkeys.py`, with `--check` and `--list-candidates`) and the full investigation are documented in [docs/qobuz-stock-firmware.md](docs/qobuz-stock-firmware.md).
 
 ### Your own server with a self-signed certificate
 
@@ -272,15 +148,7 @@ The setting is global — it applies to every `https://` connection the player o
 
 For a private development build, `sonix-player/tools/seal_streamkeys.py` can place a sealed credentials file in the assets before compilation. This format is **obfuscation, not secure encryption**: the key is compiled into the player binary and can be recovered by someone who analyzes it. Never publish a binary containing credentials you do not intend to disclose.
 
-## Subsonic / Gonic
-
-**Streaming → Subsonic → Server settings** connects to your own Subsonic-compatible server, including Gonic. Enter its base URL and your account, then select **Connect / save**. Browse Music folders or Artists and select a track to play the current page.
-
-MP3 at **256 kbps** is the default; **320 kbps**, **Opus**, and **Raw** (original FLAC/MP3/Opus) are available. Transcoding must be enabled on the server. Network workers feed two fixed **1 MiB RAM rings**, refill at about 50%, and pre-cache the next track's first **512 KiB** near 90% progress. There is no disk audio cache, localhost proxy, or socket read in the decoder.
-
-No application API key is needed. Prefer HTTPS; credentials stay in memory unless explicitly remembered, and remembered passwords are stored **unencrypted** in a private device-local file. A server with a self-signed certificate needs **Accept self-signed certificates** on its settings page — see [your own server with a self-signed certificate](#your-own-server-with-a-self-signed-certificate). Seeking and reboot restoration are not available for these ephemeral streams. Compatible-format gapless handoff uses the existing ALSA path; network, codec timing and physical-device limits still apply.
-
-See [setup, design, limitations and the V1 validation checklist](docs/subsonic.md), and [host integration tests](sonix-player/tests/README.md).
+Subsonic and Gonic have their own chapters: **Streaming → Subsonic → Server settings** takes the base URL and account, MP3 256 kbps is the default (320, Opus and Raw are available), and [docs/subsonic.md](docs/subsonic.md) covers the transport design, the limitations and the hardware checklist.
 
 ## Build from source
 
@@ -294,9 +162,6 @@ make host            # ./sonix_player_host, at the V1's 240x320
 ./sonix_player_host
 ```
 
-The simulator draws the same profile as the device: the 480-pixel layout the
-upstream tree also carried is not built here any more.
-
 **The device binary (target).** Needs the MIPS toolchain built from `sonix-player/rockboxdev/`; the workflow caches it, and building it by hand is a long first run.
 
 ```bash
@@ -304,33 +169,45 @@ cd sonix-player
 make target        # sonix_player, sonix_player_debug and sonix_launch
 ```
 
-**Headless suites.** Each one has its own target and runs on the host, against the real database or the real LVGL layout rather than a mock:
+**The firmware package.** `sonix-packer/sonix_firmware_packer.sh` takes the official stock `v1.upt`, swaps in the built binaries and assets, and repackages the update. `sonix-packer/verify_upt.sh` checks the result; the workflow runs both.
+
+## Tests
+
+Every suite runs on a Linux host against the real modules — the real database, the real LVGL layout, the real decoders — rather than against mocks, and none of them needs the device, a MIPS toolchain, a music server, an account or downloaded audio.
 
 ```bash
-make -C sonix-player/tests podcastplayed
-make -C sonix-player/tests mostplayed
-make -C sonix-player/tests eq
-make -C sonix-player/tests ui
+make -C sonix-player/tests all           # everything, in the order CI runs it
+make -C sonix-player/tests test          # Subsonic client, HTTP/TLS, RAM rings
+make -C sonix-player/tests ui            # main menu, screensaver, Tools, Wi-Fi pages
+make -C sonix-player/tests eq            # EQ, PEQ and MSEB on PCM, radio and USB DAC
+make -C sonix-player/tests ytmusic       # YouTube Music resolution against a fake network
+make -C sonix-player/tests earfun        # the EarFun control protocol
 ```
 
-[sonix-player/tests/README.md](sonix-player/tests/README.md) lists every suite and what it pins.
+There are suites for the battery guard, the boot picture, the screensaver folder, software volume, the keyboard layouts, the calculator, notes, AutoEQ layout, tag dates, lyric search, tags, covers, tag writing, radio FLAC, most played, podcast heard marks, ListenBrainz, the credential extractor and the relay. [sonix-player/tests/README.md](sonix-player/tests/README.md) lists every target and what it pins.
+
+`.github/workflows/tests.yml` runs all of them, and the firmware workflow calls it before packaging, so a release cannot be built from a tree whose tests fail.
 
 ## Project files and documentation
 
 - `sonix-player/` — player sources, LVGL configuration, launcher and build system.
 - `sonix-packer/` — stock-image preparation, firmware packaging and validation scripts.
-- `docs/collecting-logs.md` — which logs to send with a bug report, and how to take them.
-- `docs/subsonic.md` — Subsonic/Gonic setup, RAM transport and hardware validation.
-- `docs/sgm31324-led-control.md` — driving the RGB status LED directly over I²C.
-- `sonix-player/tools/sonix-bugreport.sh` — one-file diagnostic bundle, run on the device over ADB.
-- `sonix-player/tests/README.md` — the headless suites, and what each one pins.
-- `.github/workflows/build-tempotec-v1.yml` — the firmware build described above.
-- `docs/releases.md` — how `dev`, `personal` and `main` produce personal and shareable firmware.
-- `FEATURES.md` — detailed feature notes.
-- `PATCHES.md` — device-porting and implementation notes.
-- `LICENSE` — GNU General Public License, version 3. Third-party components retain their own licenses.
+- `sonix-player/tests/` — the headless suites, and [what each one pins](sonix-player/tests/README.md).
+- `sonix-player/tools/` — the credential extractor and sealer, the icon and web-asset generators, the touchscreen patches, the on-device bug-report bundle and the YouTube Music relay.
+- [FEATURES.md](FEATURES.md) — the detailed feature notes.
+- [PATCHES.md](PATCHES.md) — the V1 port, patch by patch, and why each one looks the way it does.
+- [docs/releases.md](docs/releases.md) — how `dev` and `personal` produce the firmware, and what the tests gate.
+- [docs/collecting-logs.md](docs/collecting-logs.md) — which logs to send with a bug report, and how to take them.
+- [docs/subsonic.md](docs/subsonic.md) — Subsonic/Gonic setup, RAM transport and hardware validation.
+- [docs/qobuz-stock-firmware.md](docs/qobuz-stock-firmware.md) — the stock firmware's Qobuz credentials, and the extractor.
+- [docs/ldac-diagnostics.md](docs/ldac-diagnostics.md) — reading an LDAC link's rate and quality from the device.
+- [docs/sgm31324-led-control.md](docs/sgm31324-led-control.md) — driving the RGB status LED directly over I²C.
+- [sonix-player/docs/ADDONS.md](sonix-player/docs/ADDONS.md) — the Plugins model, and how to add a module.
+- [sonix-player/YOUTUBE_MUSIC_SETUP.md](sonix-player/YOUTUBE_MUSIC_SETUP.md) — the InnerTube key, the sources and the session import.
+- `.github/workflows/` — `tests.yml` (every suite), `build-tempotec-v1.yml` (tests, then the image and the release).
+- [LICENSE](LICENSE) — GNU General Public License, version 3. Third-party components retain their own licences.
 
-For bug reports, include the exact model, the firmware build/commit and relevant logs — see [Collecting logs for a bug report](docs/collecting-logs.md) for what to turn on and where the files are. Remove personal data and **never attach streaming credentials**.
+For bug reports, include the exact model, the firmware build/commit and relevant logs — see [Collecting logs for a bug report](docs/collecting-logs.md) for what to turn on and where the files are. `sonix-player/tools/sonix-bugreport.sh` collects them into one file on the device over ADB. Remove personal data and **never attach streaming credentials**.
 
 ## Credits
 
@@ -361,4 +238,3 @@ Third-party components carried in the tree, or fetched by the build, keep their 
 | the [Rockbox](https://rockbox.org) toolchain scripts in `sonix-player/rockboxdev/` | the MIPS cross-compiler |
 
 The licence notice for each component sits with it in the source tree; [LICENSE](LICENSE) covers the project as a whole. The official TempoTec V1 firmware used as the base of a build is not part of this repository, and TempoTec, HiBy and the other vendors own their names and firmware.
-

@@ -1,0 +1,156 @@
+name: Tests
+
+# What has to pass before anything is packaged. One definition, used three ways:
+#
+#   - a push to dev or personal (fast feedback while working),
+#   - a pull request touching the player, the tests or the packer,
+#   - and the firmware workflow, which calls this file and waits for it before
+#     cross-compiling anything (see build-tempotec-v1.yml).
+#
+# Nothing here needs the device, a MIPS toolchain, a music server or an account:
+# every suite runs on the host against the real modules.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+      - personal
+    paths:
+      - .github/workflows/tests.yml
+      - sonix-player/Makefile
+      - sonix-player/lv_conf.h
+      - sonix-player/src/**
+      - sonix-player/tests/**
+      - sonix-player/tools/**
+      - sonix-player/assets/**
+      - sonix-packer/**
+  pull_request:
+    paths:
+      - .github/workflows/tests.yml
+      - sonix-player/Makefile
+      - sonix-player/lv_conf.h
+      - sonix-player/src/**
+      - sonix-player/tests/**
+      - sonix-player/tools/**
+      - sonix-player/assets/**
+      - sonix-packer/**
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Host build and the C suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git make pkg-config python3 \
+            libsdl2-dev libasound2-dev libfreetype6-dev \
+            libopusfile-dev libwavpack-dev
+
+      # The player's Makefile clones LVGL 9.6 into sonix-player/lvgl the first
+      # time it runs, which is also what the UI suites link against -- so this
+      # step is what makes every later one possible.
+      - name: Build the host player at the V1 profile
+        run: make -C sonix-player host -j"$(nproc)"
+
+      - name: Subsonic client, HTTP/TLS, RAM rings
+        run: make -C sonix-player/tests test
+
+      - name: The same under AddressSanitizer and UndefinedBehaviorSanitizer
+        run: make -C sonix-player/tests sanitize
+
+      - name: Real MP3, FLAC and Opus decoding
+        run: make -C sonix-player/tests codecs
+
+      - name: The codec suite under the sanitizers
+        run: make -C sonix-player/tests sanitize-codecs
+
+      - name: FLAC radio streams (native, mid-stream join, chained Ogg FLAC)
+        run: make -C sonix-player/tests radioflac
+
+      - name: The radio FLAC suite under the sanitizers
+        run: make -C sonix-player/tests sanitize-radioflac
+
+      - name: The battery guard (warning at five, shutdown at one)
+        run: make -C sonix-player/tests batteryguard
+
+      - name: The Screensaver folder's picture rules
+        run: make -C sonix-player/tests pictures
+
+      - name: The Bootlogo folder and the custom boot picture
+        run: make -C sonix-player/tests bootpic
+
+      - name: Software volume for the USB DAC
+        run: make -C sonix-player/tests swvolume
+
+      - name: The keyboard's layouts and accents
+        run: make -C sonix-player/tests kblayout
+
+      - name: EQ, PEQ and MSEB on PCM, including radio rates and USB DAC mode
+        run: make -C sonix-player/tests eq
+
+      - name: Wi-Fi hidden networks
+        run: make -C sonix-player/tests wifi
+
+      - name: The Calculator's arithmetic and the notes folder
+        run: make -C sonix-player/tests calculator notes
+
+      - name: Scrobbling to ListenBrainz
+        run: make -C sonix-player/tests listenbrainz
+
+      - name: Album Art Max's rows
+        run: make -C sonix-player/tests aamlayout
+
+      - name: The dates tags carry
+        run: make -C sonix-player/tests tagdate
+
+      - name: Lyrics search, ranking and sidecar save
+        run: make -C sonix-player/tests lrclib
+
+      - name: Tag reading, format sniffing and the cover cache
+        run: make -C sonix-player/tests tags covers
+
+      - name: Writing a cover into an MP3 or FLAC
+        run: make -C sonix-player/tests tagwrite
+
+      - name: Most played, against the real database
+        run: make -C sonix-player/tests mostplayed
+
+      - name: Heard podcast episodes
+        run: make -C sonix-player/tests podcastplayed
+
+      - name: The headless LVGL pages at 240x320
+        run: make -C sonix-player/tests ui
+
+      - name: The EarFun control protocol
+        run: make -C sonix-player/tests earfun
+
+      - name: YouTube Music resolution, and the build with no key
+        run: make -C sonix-player/tests ytmusic
+
+      - name: The stock-firmware credential extractor
+        run: make -C sonix-player/tests extractkeys
+
+      - name: The YouTube Music relay
+        run: make -C sonix-player/tests relay
+
+      - name: The packer scripts still parse
+        run: |
+          sh -n sonix-packer/sonix_firmware_packer.sh
+          sh -n sonix-packer/prepare_v1_stock.sh
+          sh -n sonix-packer/verify_upt.sh

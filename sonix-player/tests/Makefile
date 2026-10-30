@@ -477,6 +477,18 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 
 -include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d))
 
+# The EarFun control protocol, driven by replies instead of by earbuds: the
+# frame encoder and the decoders, with every socket call in the worker stubbed.
+# No Bluetooth adapter, no LVGL, and no hardware to be paired with.
+EARFUN_SRC = test_earfun.c $(ROOT)/src/system/bluetooth/earfun.c
+.PHONY: earfun
+earfun: $(BUILD)/test_earfun
+	$(BUILD)/test_earfun
+
+$(BUILD)/test_earfun: $(EARFUN_SRC) $(ROOT)/src/system/bluetooth/earfun.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(EARFUN_SRC) $(LDFLAGS) $(LDLIBS)
+
 # The YouTube Music playback resolver against a fake network: the real
 # ytmusic.c linked with a fake http layer, so the resolver runs end to end on
 # any host (real http.c needs the POSIX socket API, which is the Linux hosts'
@@ -525,3 +537,17 @@ $(BUILD)/test_ytmusic_keyless: $(YTM_SRC) $(ROOT)/src/system/streaming/ytmusic.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(BUILD) -include win_compat_host.h \
 		-DYTMUSIC_API_KEY='""' -DYTMUSIC_TEST_KEYLESS \
 		-o $@ $(YTM_SRC) $(LDFLAGS) $(LDLIBS)
+
+# Everything, in the order the workflow runs it. `make test` stays the default
+# target; this is the one to run before merging into personal.
+ALL_SUITES = test sanitize codecs sanitize-codecs radioflac sanitize-radioflac \
+             batteryguard pictures bootpic swvolume kblayout eq wifi calculator notes \
+             listenbrainz aamlayout tagdate lrclib tags covers tagwrite mostplayed \
+             podcastplayed ui earfun ytmusic extractkeys relay
+
+.PHONY: all
+all:
+	@set -e; for suite in $(ALL_SUITES); do \
+		echo "=== $$suite ==="; \
+		$(MAKE) --no-print-directory $$suite || exit 1; \
+	done

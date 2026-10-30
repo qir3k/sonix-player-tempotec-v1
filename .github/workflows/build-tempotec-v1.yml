@@ -29,20 +29,17 @@ on:
         description: Release tag to upload the built image to, replacing its assets (v1.upt, v1_md5.txt). Empty publishes nothing.
         required: false
         type: string
-  # Firmware builds are published only from the branches intended to produce
+  # Firmware builds are published only from the branch that produces
   # installable images. Develop on dev without running the long firmware build;
-  # merging dev into main or personal starts the build for that destination.
+  # merging dev into personal starts the build for that destination.
   # Manual dispatch and tags remain available for deliberate builds/releases.
   push:
     branches:
-      - main
       - personal
     tags:
       - '*'
 
 permissions:
-  # write: the last step publishes the boot-script report back to the
-  # working branch, [skip ci] and all, so the next build never flies blind.
   contents: write
 
 concurrency:
@@ -53,8 +50,16 @@ env:
   STOCK_FIRMWARE_URL: ${{ inputs.stock_firmware_url || 'https://drive.google.com/drive/folders/1jbT9lhRvJ8sbJuepnaBpss861mpsYwnv?usp=sharing' }}
 
 jobs:
+  # Before anything is cross-compiled: the host build and every suite, from the
+  # one definition in tests.yml. A red suite fails this job, and the firmware
+  # job never starts -- so a release cannot be cut from a tree whose tests fail.
+  tests:
+    name: Tests before packaging
+    uses: ./.github/workflows/tests.yml
+
   firmware:
     name: Cross-compile and package v1.upt
+    needs: tests
     runs-on: ubuntu-24.04
     timeout-minutes: 300
 
@@ -393,18 +398,3 @@ jobs:
             sonix-packer/v1_md5.txt
           fail_on_unmatched_files: true
 
-      # Working branches only: main is not a branch anybody builds as a
-      # scratch pad, and a report pushed there would be a commit on main for
-      # every merge into it. Nor after a run that built somebody else's ref --
-      # its report is that ref's, and this checkout is not where it belongs.
-      - name: Publish the boot-script report to the branch
-        if: github.ref_type == 'branch' && github.ref_name != 'main' && inputs.build_ref == ''
-        run: |
-          [ -f sonix-packer/boot-script-report.txt ] || exit 0
-          mkdir -p docs/ci
-          cp sonix-packer/boot-script-report.txt docs/ci/boot-script-report.txt
-          git config user.name "sonix-ci"
-          git config user.email "sonix-ci@users.noreply.github.com"
-          git add docs/ci/boot-script-report.txt
-          git commit -m "ci: what the packer found in the stock boot script [skip ci]" || exit 0
-          git push origin "HEAD:${GITHUB_REF_NAME}" || echo "report push skipped (branch busy)"

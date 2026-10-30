@@ -1,25 +1,46 @@
 # Subsonic / stream-bridge integration tests
 
-Run from the repository root on a Linux host:
+Run from the repository root on a Linux host. Every target there is, in the order the workflow runs them:
 
 ```sh
-make -C sonix-player/tests test
-make -C sonix-player/tests sanitize
-make -C sonix-player/tests swvolume
-make -C sonix-player/tests kblayout
-make -C sonix-player/tests eq
-make -C sonix-player/tests calculator
-make -C sonix-player/tests notes
-make -C sonix-player/tests tagdate
-make -C sonix-player/tests mostplayed
-make -C sonix-player/tests aamlayout
-make -C sonix-player/tests podcastplayed
-make -C sonix-player/tests extractkeys
-make -C sonix-player/tests ytmusic
-make -C sonix-player/tests relay
+make -C sonix-player/tests test            # Subsonic client, HTTP/TLS, the RAM rings
+make -C sonix-player/tests sanitize        # the same under ASan + UBSan
+make -C sonix-player/tests codecs          # real MP3/FLAC/Opus decoding
+make -C sonix-player/tests sanitize-codecs
+make -C sonix-player/tests radioflac       # native, mid-stream join, chained Ogg FLAC
+make -C sonix-player/tests sanitize-radioflac
+make -C sonix-player/tests batteryguard    # warning at five, shutdown at one
+make -C sonix-player/tests pictures        # the Screensaver folder's picture rules
+make -C sonix-player/tests bootpic         # the Bootlogo folder and the custom boot picture
+make -C sonix-player/tests swvolume        # the USB DAC's whole volume law
+make -C sonix-player/tests kblayout        # the on-screen keyboard's layouts and accents
+make -C sonix-player/tests eq              # EQ, PEQ and MSEB on PCM, radio and USB DAC
+make -C sonix-player/tests wifi            # hidden networks and the wpa_cli command
+make -C sonix-player/tests calculator       # the arithmetic
+make -C sonix-player/tests notes           # the notes folder's rules
+make -C sonix-player/tests listenbrainz    # the scrobbler and its queue
+make -C sonix-player/tests aamlayout       # Album Art Max's arithmetic
+make -C sonix-player/tests tagdate         # the dates tags carry
+make -C sonix-player/tests lrclib          # lyrics search, ranking and sidecar save
+make -C sonix-player/tests tags            # tag reading and format sniffing
+make -C sonix-player/tests covers          # the 1000-cover cache
+make -C sonix-player/tests tagwrite        # rewriting a cover into an MP3 or FLAC
+make -C sonix-player/tests mostplayed      # the Most played list, on the real database
+make -C sonix-player/tests podcastplayed   # heard podcast episodes
+make -C sonix-player/tests ui              # main menu, screensaver, Tools, Wi-Fi, charge, lyrics
+make -C sonix-player/tests earfun          # the EarFun control protocol
+make -C sonix-player/tests ytmusic         # YouTube Music resolution and the keyless build
+make -C sonix-player/tests extractkeys     # the stock-firmware credential extractor
+make -C sonix-player/tests relay           # tools/ytmusic-relay.py over a real socket
 ```
 
-These require only a C compiler, Make and Python 3 (plus standard pthread/dl/math libraries). They **do not require LVGL, ALSA, a MIPS toolchain, a music server, a real account, or downloaded audio**.
+Or all of them, in that order:
+
+```sh
+make -C sonix-player/tests all -j"$(nproc)"
+```
+
+These require only a C compiler, Make and Python 3 (plus standard pthread/dl/math libraries, and `libopusfile-dev`/`libwavpack-dev` for the codec suites). They **do not require ALSA, a MIPS toolchain, a music server, a real account, or downloaded audio**, and the `ui` suite needs only the LVGL checkout the host build already uses.
 
 `run_subsonic_tests.py` starts a temporary threaded localhost HTTP server plus three HTTPS servers carrying the certificates in `tls_fixtures.py`, runs the C binary with a private temporary config directory, verifies its requests, then shuts down. All account values are synthetic. Build products live in ignored `.build/`; response/PCM fixtures are generated in memory rather than added to Git, and the three test certificates are pasted into that Python file rather than downloaded.
 
@@ -459,3 +480,71 @@ structure, with filler where the picture data would be.
   them. It avoids the picture already up while there is another, and falls
   back to it when it is the only one. Twenty `._` files beside one picture
   never make it miss.
+
+## The battery guard
+
+`make -C sonix-player/tests batteryguard` runs `batteryguard.c`, the rule with
+no LVGL, no sysfs and no clock behind it: that five percent is where the red
+card is raised, that one percent is where the player switches itself off the
+ordinary way instead of letting the cell drop out from under it, that the
+warning is not raised twice for the same discharge, and that readings under ten
+percent keep the player out of standby. `power.c` reads the gauge and does the
+two things; the rules it asks are checked here.
+
+## The boot picture
+
+`make -C sonix-player/tests bootpic` links the real Bootlogo folder code and the
+player's own JPEG and PNG scalers. It checks which files the page offers (a
+JPEG or PNG the boot script can draw, in either extension case, with hidden and
+`._` files refused), that the copy written into the player comes out the other
+end as a **240x320 baseline JPEG**, and that decoding that copy back gives the
+picture it started from. A file too large to decode, or one that is not a
+picture at all, is refused with the note the page shows rather than half-written.
+
+## Tags, covers and the tag writer
+
+`make -C sonix-player/tests tags` reads tags and sniffs formats from files
+written in the test: ID3v2.2/2.3/2.4, APE and Vorbis comments, the Latin-1,
+UTF-16 and UTF-8 encodings ID3 allows, unsynchronised frames, and the formats
+the library has to recognise by their first bytes rather than their extension.
+`make -C sonix-player/tests covers` drives the cover cache to its thousand-entry
+ceiling and past it, including a card pulled out mid-decode.
+
+`make -C sonix-player/tests tagwrite` is the Cover Art Fetcher's writing half:
+it replaces the APIC frame of an MP3 and the PICTURE block of a FLAC, keeps
+every other frame and the audio bytes identical, refuses ID3v2.2, OGG, Opus and
+MP4 by name instead of half-rewriting them, and leaves a temporary file rather
+than a damaged song when the write is interrupted.
+
+## Lyrics search
+
+`make -C sonix-player/tests lrclib` covers the LRCLIB client: the request it
+builds from a title and artist, the ranking of what comes back (a synced lyric
+outranks a plain one, an exact title and artist outranks a near miss), the
+sidecar file saved beside the track, and the refusal of an answer that names
+nothing.
+
+## ListenBrainz
+
+`make -C sonix-player/tests listenbrainz` links the real scrobbler: what a
+listen looks like on the wire, the queue that holds one while the player is
+offline, the token stored and cleared from the card, and that listening with the
+module switched off sends nothing at all.
+
+## FLAC radio streams
+
+`make -C sonix-player/tests radioflac` runs the real radio decoder against FLAC
+stations: a native stream, one joined mid-way (the first frames of a stream
+that started before the player arrived), and a chained Ogg FLAC stream, which
+is the shape most FLAC radio serves. `sanitize-radioflac` is the same suite
+under ASan and UBSan.
+
+## EarFun earbuds
+
+`make -C sonix-player/tests earfun` drives the control protocol without a pair
+of earbuds: the frame encoder and the decoders, with every socket call in the
+worker stubbed. It checks the GAIA-shaped packets the page's switches send
+(noise control, its strength, transparency, Game Mode, in-ear detection) and
+that a reply the earbud sends back becomes the state the page draws -- including
+a truncated or unknown frame, which has to leave the last state alone rather
+than report a value nobody sent.
