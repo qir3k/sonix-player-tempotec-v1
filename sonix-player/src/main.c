@@ -50,7 +50,6 @@
 #include "src/system/audio/eq.h"
 #include "src/system/audio/headset.h"
 #include "src/system/input/keymap.h"
-#include "src/system/input/touch.h"
 #include "src/system/streaming/qobuz.h"
 #include "src/system/streaming/tidal.h"
 #include "src/system/remote/dlna.h"
@@ -1062,19 +1061,68 @@ static void install_signal_guards(void) {
 #define MAIN_LOOP_MAX_SLEEP_MS 250
 
 // ---------------------------------------------------------------------------
-// Pointer tuning: none.
+// Pointer tuning for the capacitive touchscreen.
 // ---------------------------------------------------------------------------
 //
-// This used to carry two things of its own: scroll_throw/scroll_limit of its
-// own choosing (4 and 5 in one release, 10 and 7 in the next) and a tap guard
-// that swallowed a click whenever the release point was more than 12 px from
-// the press point. Both were attempts to explain touch that did not land where
-// it was put, and the fault was underneath them the whole time: the pointer was
-// positioned from one coordinate source and scaled with the range of another
-// (see src/system/input/touch.h). With the position right, LVGL's own values
-// are the ones its scrolling was designed around, and the guard was only a way
-// for a tap to disappear -- which is what a press with a little wander in it
-// did, and why a firmly tapped row sometimes did nothing at all.
+// scroll_throw: the percentage the velocity drops on each frame of the throw
+// animation. At 10 (LVGL default), velocity drops 10% each frame, settling
+// smoothly in under a second without running at 100% CPU on single-core MIPS.
+//
+// scroll_limit: number of pixels before finger motion engages scrolling.
+// Set to 8 px to suppress stationary resting-finger sensor jitter (2-4 px)
+// so a tap does not turn into a drag, while keeping swipe engagement immediate.
+//
+// tap_guard_cb: swallows clicks if the release point has wandered significantly
+// from the initial press point (e.g. from an aborted drag or scroll release),
+// while allowing normal finger roll (up to 16 px).
+#define SCROLL_THROW_DECAY_PCT 10
+#define SCROLL_START_LIMIT_PX 8
+#define TAP_SLOP_PX 16
+
+static void tap_guard_cb(lv_event_t *e) {
+	lv_indev_t *indev = lv_indev_active();
+	if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) {
+		return;
+	}
+
+	static lv_point_t press_at;
+	static bool armed;
+
+	lv_point_t p;
+	lv_indev_get_point(indev, &p);
+
+	lv_event_code_t code = lv_event_get_code(e);
+	if (code == LV_EVENT_PRESSED) {
+		press_at = p;
+		armed = true;
+		return;
+	}
+	if (code == LV_EVENT_RELEASED) {
+		armed = false;
+		return;
+	}
+	if (code != LV_EVENT_SHORT_CLICKED && code != LV_EVENT_CLICKED) {
+		return;
+	}
+	if (!armed) {
+		return;
+	}
+
+	int32_t dx = p.x - press_at.x;
+	int32_t dy = p.y - press_at.y;
+	if (dx * dx + dy * dy > TAP_SLOP_PX * TAP_SLOP_PX) {
+		lv_indev_stop_processing(indev);
+	}
+}
+
+static void tune_pointer(lv_indev_t *indev) {
+	if (!indev) {
+		return;
+	}
+	lv_indev_set_scroll_throw(indev, SCROLL_THROW_DECAY_PCT);
+	lv_indev_set_scroll_limit(indev, SCROLL_START_LIMIT_PX);
+	lv_indev_add_event_cb(indev, tap_guard_cb, LV_EVENT_ALL, NULL);
+}
 
 // The panel of the player this binary was first written for, and what an
 // unrecognised device-name falls back to.
@@ -1196,6 +1244,7 @@ static lv_display_t *init_host_display(void) {
 	lv_indev_t *mouse = lv_sdl_mouse_create();
 	if (mouse) {
 		lv_indev_set_display(mouse, disp);
+		tune_pointer(mouse);
 	}
 
 	host_display = disp;
@@ -1378,10 +1427,7 @@ static lv_display_t *fb_display;   // the page-flipping display, NULL on the fal
 static lv_indev_t *fb_touch;	   // so it can be parked while an emulator reads the panel
 static bool fb_rotated;
 
-// The panel, read by this player rather than by lv_evdev (see touch.h).
-static touch_filter_t fb_touch_state;
 static int fb_touch_fd = -1;
-static lv_point_t fb_touch_last; // where the finger was last seen
 static uint8_t *rot_page;		   // the RAM page LVGL draws into while rotated
 
 // What this frame touched, and what each framebuffer page has not been given
@@ -1703,12 +1749,12 @@ const char *panel_touch_device(void) { return fb_touch_node[0] ? fb_touch_node :
 void panel_touch_flush(void) {
 	if (fb_touch_fd >= 0) {
 		struct input_event in;
-		while (read(fb_touch_fd, &in, sizeof(in)) == (ssize_t)sizeof(in)) {
+		while (read(fb_touch_fd, &in, sizeof(in)) > 0) {
 		}
 	}
-	touch_reset(&fb_touch_state);
 	if (fb_touch) {
 		lv_indev_wait_release(fb_touch);
+		lv_anim_delete(fb_touch, NULL);
 	}
 }
 
@@ -1756,12 +1802,14 @@ void display_set_rotated(bool rotated) {
 		lv_async_call(free_rot_pages_cb, NULL);
 	}
 
-	// The touch panel turns with the picture: the same finger is now at the
-	// opposite corner of the screen. The filter does that from the panel's own
-	// units rather than from the framebuffer's -- the two are not the same
-	// number, and assuming they were is what put a calibration in the wrong
-	// scale in the first place.
-	touch_set_rotated(&fb_touch_state, fb_rotated);
+	// Keep the pointer aligned with the rotated framebuffer.
+	if (fb_touch) {
+		if (fb_rotated) {
+			lv_evdev_set_calibration(fb_touch, (int)fb_var.xres - 1, (int)fb_var.yres - 1, 0, 0);
+		} else {
+			lv_evdev_set_calibration(fb_touch, 0, 0, (int)fb_var.xres - 1, (int)fb_var.yres - 1);
+		}
+	}
 
 	// Both framebuffer pages still hold the picture the other way up. One
 	// invalidation is enough: the page bookkeeping above already has each
@@ -1910,137 +1958,13 @@ static bool find_touch_node(char *out, size_t out_size) {
 // read and has no usable range -- a screen that is awkward to touch beats one
 // that cannot be touched at all.
 
-// The kernel's event, as the filter's tokens. This is the only place that knows
-// what the numbers in <linux/input.h> are, which is what keeps the filter
-// testable on a machine without them.
-static bool touch_token(const struct input_event *in, touch_event_t *out) {
-	out->value = in->value;
-	if (in->type == EV_ABS) {
-		out->type = TOUCH_EV_ABS;
-		switch (in->code) {
-		case ABS_X:
-			out->code = TOUCH_ABS_X;
-			return true;
-		case ABS_Y:
-			out->code = TOUCH_ABS_Y;
-			return true;
-		case ABS_MT_POSITION_X:
-			out->code = TOUCH_MT_X;
-			return true;
-		case ABS_MT_POSITION_Y:
-			out->code = TOUCH_MT_Y;
-			return true;
-		case ABS_MT_SLOT:
-			out->code = TOUCH_MT_SLOT;
-			return true;
-		case ABS_MT_TRACKING_ID:
-			out->code = TOUCH_MT_ID;
-			return true;
-		default:
-			return false;
-		}
-	}
-	if (in->type == EV_KEY && in->code == BTN_TOUCH) {
-		out->type = TOUCH_EV_KEY;
-		out->code = TOUCH_BTN_TOUCH;
-		return true;
-	}
-	return false;
-}
-
-// LVGL asks where the finger is every LV_DEF_REFR_PERIOD. Everything the panel
-// has sent since the last ask is read here and folded into the filter, and the
-// state it is left in is the answer. The lift keeps reporting the last place
-// the finger was, so a handler that acts on release acts where the finger was.
-static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
-	(void)indev;
-	if (fb_touch_fd < 0) {
-		data->state = LV_INDEV_STATE_RELEASED;
-		return;
-	}
-
-	struct input_event in;
-	while (read(fb_touch_fd, &in, sizeof(in)) == (ssize_t)sizeof(in)) {
-		touch_event_t ev;
-		if (touch_token(&in, &ev)) {
-			touch_feed(&fb_touch_state, &ev);
-		}
-	}
-
-	// A press only counts as pressed once it has a position of its own. Without
-	// that, the tick between a finger landing and its coordinate arriving would
-	// report a press at wherever the previous touch ended -- the tap that lands
-	// on the row above the one that was actually touched.
-	int x = 0, y = 0;
-	bool placed = touch_point(&fb_touch_state, &x, &y);
-	if (placed) {
-		fb_touch_last.x = x;
-		fb_touch_last.y = y;
-	}
-
-	data->point = fb_touch_last;
-	data->state = touch_pressed(&fb_touch_state) && placed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
-}
-
-// Opens the node and registers it as the pointer. NULL when the node cannot be
-// opened or reports no range worth scaling with.
-static lv_indev_t *open_panel_touch(lv_display_t *disp, const char *node) {
+static int open_touch_device(const char *node) {
 	int fd = open(node, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (fd < 0) {
 		fprintf(stderr, "input: cannot open %s: %s\n", node, strerror(errno));
-		return NULL;
+		return -1;
 	}
-
-	struct input_absinfo ax, ay, mx, my;
-	touch_range_t abs = {0}, mt = {0};
-	bool have_abs = ioctl(fd, EVIOCGABS(ABS_X), &ax) == 0 && ioctl(fd, EVIOCGABS(ABS_Y), &ay) == 0;
-	bool have_mt = ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &mx) == 0 && ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &my) == 0;
-	if (have_abs) {
-		abs.min_x = ax.minimum;
-		abs.max_x = ax.maximum;
-		abs.min_y = ay.minimum;
-		abs.max_y = ay.maximum;
-	}
-	if (have_mt) {
-		mt.min_x = mx.minimum;
-		mt.max_x = mx.maximum;
-		mt.min_y = my.minimum;
-		mt.max_y = my.maximum;
-	}
-	// A range may count either way round: max below min is a driver saying the
-	// axis is mirrored, not a broken range (the filter divides by the sign).
-	have_abs = have_abs && abs.max_x != abs.min_x && abs.max_y != abs.min_y;
-	have_mt = have_mt && mt.max_x != mt.min_x && mt.max_y != mt.min_y;
-	if (!have_abs && !have_mt) {
-		fprintf(stderr, "input: %s reports no usable coordinate range, leaving it to the evdev driver\n", node);
-		close(fd);
-		return NULL;
-	}
-
-	int width = (int)lv_display_get_horizontal_resolution(disp);
-	int height = (int)lv_display_get_vertical_resolution(disp);
-	touch_init(&fb_touch_state, width, height, have_abs, abs, have_mt, mt);
-	touch_set_rotated(&fb_touch_state, fb_rotated);
-
-	lv_indev_t *indev = lv_indev_create();
-	if (!indev) {
-		close(fd);
-		return NULL;
-	}
-	fb_touch_fd = fd;
-	lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-	lv_indev_set_read_cb(indev, touch_read_cb);
-	lv_indev_set_display(indev, disp);
-
-	printf("input: %s scaling to %dx%d from %s", node, width, height, touch_source_name(&fb_touch_state));
-	if (have_abs) {
-		printf(", ABS_X/Y %d..%d x %d..%d", abs.min_x, abs.max_x, abs.min_y, abs.max_y);
-	}
-	if (have_mt) {
-		printf(", ABS_MT %d..%d x %d..%d", mt.min_x, mt.max_x, mt.min_y, mt.max_y);
-	}
-	printf("\n");
-	return indev;
+	return fd;
 }
 
 static lv_display_t *init_target_display(void) {
@@ -2083,19 +2007,40 @@ static lv_display_t *init_target_display(void) {
 
 	lv_indev_t *touch = NULL;
 	if (fb_touch_node[0]) {
-		touch = open_panel_touch(disp, fb_touch_node);
-		if (!touch) {
-			touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, fb_touch_node);
-			if (touch) {
-				printf("input: %s opened by the evdev driver\n", fb_touch_node);
+		fb_touch_fd = open_touch_device(fb_touch_node);
+		if (fb_touch_fd >= 0) {
+			touch = lv_evdev_create_fd(LV_INDEV_TYPE_POINTER, fb_touch_fd);
+			if (!touch) {
+				close(fb_touch_fd);
+				fb_touch_fd = -1;
+			}
+		}
+	}
+	if (!touch) {
+		static const char *FALLBACKS[] = {"/dev/input/event1", "/dev/input/event0"};
+		for (size_t i = 0; i < sizeof(FALLBACKS) / sizeof(FALLBACKS[0]); i++) {
+			if (fb_touch_node[0] && strcmp(fb_touch_node, FALLBACKS[i]) == 0) {
+				continue;
+			}
+			fb_touch_fd = open_touch_device(FALLBACKS[i]);
+			if (fb_touch_fd >= 0) {
+				touch = lv_evdev_create_fd(LV_INDEV_TYPE_POINTER, fb_touch_fd);
+				if (touch) {
+					snprintf(fb_touch_node, sizeof(fb_touch_node), "%s", FALLBACKS[i]);
+					break;
+				}
+				close(fb_touch_fd);
+				fb_touch_fd = -1;
 			}
 		}
 	}
 
 	if (touch) {
 		lv_indev_set_display(touch, disp);
+		tune_pointer(touch);
 		fb_touch = touch;
-		printf("Touch screen input driver successfully registered.\n");
+		panel_touch_flush();
+		printf("Touch screen input driver successfully registered (%s, fd %d).\n", fb_touch_node, fb_touch_fd);
 	} else {
 		fb_touch_node[0] = '\0';
 		fprintf(stderr, "Warning: No touch input device found.\n");

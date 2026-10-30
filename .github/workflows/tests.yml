@@ -60,13 +60,15 @@ jobs:
       - name: Build the host player at the V1 profile
         run: make -C sonix-player host -j"$(nproc)"
 
-      - name: The touch filter compiles cleanly
+      # The host build uses SDL and never compiles the evdev input driver, so
+      # nothing would catch a mistake in it short of the twenty-minute MIPS
+      # build. This is the device configuration of that one file, parsed and
+      # type-checked: it is where the touch panel's coordinate handling lives.
+      - name: The device input driver still compiles
         working-directory: sonix-player
         run: |
-          cc -fsyntax-only -Wall -Wextra -Werror -I. src/system/input/touch.c
-
-      - name: The touch panel filter and coordinate scaling
-        run: make -C sonix-player/tests touch
+          cc -fsyntax-only -Wall -DLV_CONF_INCLUDE_SIMPLE=1 -DGB_CORE=1 \
+             -I. -Ilvgl lvgl/src/drivers/evdev/lv_evdev.c
 
       - name: The EarFun control protocol
         run: make -C sonix-player/tests earfun
