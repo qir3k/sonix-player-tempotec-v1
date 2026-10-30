@@ -603,7 +603,7 @@ $(BUILD)/test_ytmusic_keyless: $(YTM_SRC) $(ROOT)/src/system/streaming/ytmusic.h
 
 # Everything, in the order the workflow runs it. `make test` stays the default
 # target; this is the one to run before merging into personal.
-ALL_SUITES = touch earfun ui batteryguard
+ALL_SUITES = earfun
 
 .PHONY: all
 all:

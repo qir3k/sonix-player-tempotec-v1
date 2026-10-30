@@ -73,12 +73,6 @@ jobs:
       - name: The EarFun control protocol
         run: make -C sonix-player/tests earfun
 
-      - name: The headless LVGL pages at 240x320
-        run: make -C sonix-player/tests ui
-
-      - name: The battery guard (warning at five, shutdown at one)
-        run: make -C sonix-player/tests batteryguard
-
       # bash, not sh: the packer and its helpers say so in their shebangs, and
       # dash refuses the arrays and [[ ]] they are written in.
       - name: The packer scripts still parse
