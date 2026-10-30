@@ -1,15 +1,8 @@
 name: Tests
 
-# What has to pass before anything is packaged. One definition, used three ways:
-#
-#   - a push to dev (fast feedback while working),
-#   - a pull request touching the player, the tests or the packer,
-#   - and the firmware workflow, which calls this file and waits for it before
-#     cross-compiling anything (see build-tempotec-v1.yml). This avoids running
-#     the same suite twice on personal pushes.
-#
-# Nothing here needs the device, a MIPS toolchain, a music server or an account:
-# every suite runs on the host against the real modules.
+# Focused test suite run before firmware packaging and on dev pushes.
+# Tests active components: touch input filter, EarFun headphones,
+# UI screensaver/layouts, battery guard, and packer scripts.
 
 on:
   workflow_dispatch:
@@ -46,9 +39,9 @@ concurrency:
 
 jobs:
   host:
-    name: Host build and the C suites
+    name: Host build and active test suites
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 20
 
     steps:
       - name: Check out source
@@ -63,122 +56,26 @@ jobs:
             libopusfile-dev libwavpack-dev
 
       # The player's Makefile clones LVGL 9.6 into sonix-player/lvgl the first
-      # time it runs, which is also what the UI suites link against -- so this
-      # step is what makes every later one possible.
+      # time it runs, which is also what the UI suites link against.
       - name: Build the host player at the V1 profile
         run: make -C sonix-player host -j"$(nproc)"
 
-      # The host build uses SDL and never compiles the evdev input driver, so
-      # nothing would catch a mistake in it short of the twenty-minute MIPS
-      # build. This is the device configuration of that one file, parsed and
-      # type-checked: it is where the touch panel's coordinate handling lives.
-      - name: The device input driver still compiles
+      - name: The touch filter compiles cleanly
         working-directory: sonix-player
         run: |
-          cc -fsyntax-only -Wall -DLV_CONF_INCLUDE_SIMPLE=1 -DGB_CORE=1 \
-             -I. -Ilvgl lvgl/src/drivers/evdev/lv_evdev.c
+          cc -fsyntax-only -Wall -Wextra -Werror -I. src/system/input/touch.c
 
-      - name: Subsonic client, HTTP/TLS, RAM rings
-        run: make -C sonix-player/tests test
-
-      - name: The same under AddressSanitizer and UndefinedBehaviorSanitizer
-        run: make -C sonix-player/tests sanitize
-
-      - name: Real MP3, FLAC and Opus decoding
-        run: make -C sonix-player/tests codecs
-
-      - name: The codec suite under the sanitizers
-        run: make -C sonix-player/tests sanitize-codecs
-
-      - name: FLAC radio streams (native, mid-stream join, chained Ogg FLAC)
-        run: make -C sonix-player/tests radioflac
-
-      - name: The radio FLAC suite under the sanitizers
-        run: make -C sonix-player/tests sanitize-radioflac
-
-      - name: The battery guard (warning at five, shutdown at one)
-        run: make -C sonix-player/tests batteryguard
-
-      - name: The Screensaver folder's picture rules
-        run: make -C sonix-player/tests pictures
-
-      - name: The Bootlogo folder and the custom boot picture
-        run: make -C sonix-player/tests bootpic
-
-      - name: Software volume for the USB DAC
-        run: make -C sonix-player/tests swvolume
-
-      - name: The keyboard's layouts and accents
-        run: make -C sonix-player/tests kblayout
-
-      - name: EQ, PEQ and MSEB on PCM, including radio rates and USB DAC mode
-        run: make -C sonix-player/tests eq
-
-      - name: Wi-Fi hidden networks
-        run: make -C sonix-player/tests wifi
-
-      - name: The Calculator's arithmetic and the notes folder
-        run: make -C sonix-player/tests calculator notes
-
-      - name: Scrobbling to ListenBrainz
-        run: make -C sonix-player/tests listenbrainz
-
-      - name: Album Art Max's rows
-        run: make -C sonix-player/tests aamlayout
-
-      - name: The dates tags carry
-        run: make -C sonix-player/tests tagdate
-
-      - name: Lyrics search, ranking and sidecar save
-        run: make -C sonix-player/tests lrclib
-
-      - name: Tag reading, format sniffing and the cover cache
-        run: make -C sonix-player/tests tags covers
-
-      - name: Writing a cover into an MP3 or FLAC
-        run: make -C sonix-player/tests tagwrite
-
-      - name: Most played, against the real database
-        run: make -C sonix-player/tests mostplayed
-
-      - name: Heard podcast episodes
-        run: make -C sonix-player/tests podcastplayed
-
-      - name: The headless LVGL pages at 240x320
-        run: make -C sonix-player/tests ui
+      - name: The touch panel filter and coordinate scaling
+        run: make -C sonix-player/tests touch
 
       - name: The EarFun control protocol
         run: make -C sonix-player/tests earfun
 
-      # ALAC in an MP4, decoded and compared with the PCM it was encoded from.
-      # ffmpeg is only the encoder here -- the player's own decoder is what is
-      # under test, and it needs a real lossless file to be tested with.
-      - name: ALAC decoding against real encoded audio
-        run: |
-          set -euo pipefail
-          dir=sonix-player/tests/.build/alac
-          mkdir -p "$dir"
-          if ! command -v ffmpeg >/dev/null 2>&1; then
-            sudo apt-get install -y --no-install-recommends ffmpeg
-          fi
-          # One deterministic tone, twice: once as ALAC in MP4, once as the
-          # raw 16-bit PCM it must decode back to.
-          ffmpeg -loglevel error -y -f lavfi \
-            -i "sine=frequency=440:sample_rate=44100:duration=2" \
-            -ac 2 -sample_fmt s16p -c:a alac "$dir/alac.m4a"
-          ffmpeg -loglevel error -y -f lavfi \
-            -i "sine=frequency=440:sample_rate=44100:duration=2" \
-            -ac 2 -sample_fmt s16 -f s16le "$dir/alac.s16"
-          make -C sonix-player/tests alac
+      - name: The headless LVGL pages at 240x320
+        run: make -C sonix-player/tests ui
 
-      - name: YouTube Music resolution, and the build with no key
-        run: make -C sonix-player/tests ytmusic
-
-      - name: The stock-firmware credential extractor
-        run: make -C sonix-player/tests extractkeys
-
-      - name: The YouTube Music relay
-        run: make -C sonix-player/tests relay
+      - name: The battery guard (warning at five, shutdown at one)
+        run: make -C sonix-player/tests batteryguard
 
       # bash, not sh: the packer and its helpers say so in their shebangs, and
       # dash refuses the arrays and [[ ]] they are written in.

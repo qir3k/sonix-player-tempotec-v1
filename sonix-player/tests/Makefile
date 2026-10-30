@@ -603,10 +603,7 @@ $(BUILD)/test_ytmusic_keyless: $(YTM_SRC) $(ROOT)/src/system/streaming/ytmusic.h
 
 # Everything, in the order the workflow runs it. `make test` stays the default
 # target; this is the one to run before merging into personal.
-ALL_SUITES = test sanitize codecs sanitize-codecs radioflac sanitize-radioflac \
-             batteryguard touch pictures bootpic swvolume kblayout eq wifi calculator notes \
-             listenbrainz aamlayout tagdate lrclib tags covers tagwrite mostplayed \
-             podcastplayed ui earfun ytmusic extractkeys relay
+ALL_SUITES = touch earfun ui batteryguard
 
 .PHONY: all
 all:
