@@ -783,8 +783,9 @@ static void test_real_device_pages(void) {
 	}
 
 	// And the one page that is REALLY empty signed out: liked songs, which is
-	// Google's own "sign in" card. Zero rows is the correct answer there, with
-	// no error attached.
+	// Google's own "sign in" card. It comes back with no rows, and the player
+	// says which credential the page wants rather than showing an empty list
+	// that can never fill -- Favourites used to sit on "no results" forever.
 	char *vllm = load_fixture("fixtures/empty-VLLM.json");
 	if (vllm) {
 		fake_reset();
@@ -792,7 +793,11 @@ static void test_real_device_pages(void) {
 		ytmusic_item_t items[YTMUSIC_ITEMS_MAX];
 		char error[128] = "";
 		int count = ytmusic_browse_items("VLLM", items, YTMUSIC_ITEMS_MAX, error, sizeof(error));
-		CHECK(count == 0);
+		CHECK(count < 0);
+		CHECK(strcmp(error, "ytmusic_library_needs_session") == 0);
+		if (count >= 0 || strcmp(error, "ytmusic_library_needs_session") != 0) {
+			fprintf(stderr, "  VLLM signed out gave %d rows, error %s\n", count, error);
+		}
 		free(vllm);
 	}
 
