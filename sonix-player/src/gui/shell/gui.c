@@ -727,8 +727,17 @@ void gui_init(gui_config_t *cfg) {
 	airplay_page_init(cfg);		 // likewise
 	dlna_page_init(cfg);		 // likewise: its "no Wi-Fi" row points there too
 	sonixlink_page_init(cfg);	 // likewise
-	airpodspage_init(cfg);		 // before btaudio: its AirPods row points at this page
-	earfunpage_init(cfg);		 // ... and its EarFun row at this one
+	// Both are modules: the AirPods page only exists while its protocol worker
+	// does, and a build that switched either off keeps the RAM its battery
+	// rings and its rows would hold. The Bluetooth page asks the same gate
+	// before it draws the row that leads here, so an unbuilt page is never a
+	// screen somebody can walk onto.
+	if (addons_enabled("airpods")) {
+		airpodspage_init(cfg); // before btaudio: its AirPods row points at this page
+	}
+	if (addons_enabled("earfun")) {
+		earfunpage_init(cfg); // ... and its EarFun row at this one
+	}
 	btaudio_init(cfg);			 // before btsettings: its gear points at this page
 	btreceiverpage_init(cfg);	 // likewise, for the button beside the gear
 	btsettings_init(cfg);

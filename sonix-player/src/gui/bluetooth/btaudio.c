@@ -17,6 +17,7 @@
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
 #include "src/gui/shell/toast.h"
+#include "src/system/addons/addons.h"
 #include "src/system/device/power.h"
 #include "src/system/bluetooth/airpods.h"
 #include "src/system/bluetooth/earfun.h"
@@ -283,7 +284,9 @@ static void earfun_row_cb(lv_event_t *e) {
 
 static void refresh_earfun_row(void) {
 	earfun_state_t state;
-	bool present = earfun_get(&state);
+	// The module is asked every time rather than once at build: its page is
+	// only built when it is on, so the row that leads there has to go with it.
+	bool present = addons_enabled("earfun") && earfun_get(&state);
 	lv_obj_set_hidden(earfun_row, !present);
 	if (present) {
 		lv_label_set_text(settingsrow_name_label(earfun_row),
@@ -293,7 +296,7 @@ static void refresh_earfun_row(void) {
 
 static void refresh_airpods_row(void) {
 	airpods_state_t state;
-	bool present = airpods_get(&state);
+	bool present = addons_enabled("airpods") && airpods_get(&state);
 
 	if (present) {
 		lv_obj_set_hidden(airpods_row, false);

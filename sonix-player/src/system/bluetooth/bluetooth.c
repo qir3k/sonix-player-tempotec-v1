@@ -23,6 +23,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "src/system/addons/addons.h"
 #include "src/system/bluetooth/airpods.h"
 #include "src/system/bluetooth/earfun.h"
 #include "src/system/audio/audio.h"
@@ -3734,8 +3735,17 @@ void bluetooth_init(void) {
 
 	btvolume_init();
 	btvolume_set_sync(g_volume_sync);
-	airpods_init();
-	earfun_init();
+	// Each is a module of its own (Settings > Plugins > Earbuds): the worker
+	// behind one holds a socket and a parser for as long as the player runs,
+	// so a player whose owner has neither pair starts neither thread. Asked
+	// at the gate rather than compiled out, so switching one on takes effect
+	// at the next start like every other module.
+	if (addons_enabled("airpods")) {
+		airpods_init();
+	}
+	if (addons_enabled("earfun")) {
+		earfun_init();
+	}
 
 	if (pthread_create(&worker, NULL, bluetooth_worker, NULL) != 0) {
 		fprintf(stderr, "bluetooth: could not start the worker thread\n");

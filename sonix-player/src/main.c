@@ -1067,18 +1067,24 @@ static void install_signal_guards(void) {
 // screen. Two knobs, both per-indev:
 //
 //   * scroll_throw: the percentage the velocity drops on each frame of the
-//     throw animation. The default 10 kills the glide in half a second; at 5
-//     it lasts about twice as long and travels about twice as far.
+//     throw animation. The default 10 kills the glide in half a second; at 7
+//     it lasts long enough to feel like a throw without the list overshooting
+//     a screenful and drifting back, which is what 5 did: every quick tap that
+//     moved a pixel or two became a fling that sailed past the row and
+//     returned.
 //   * scroll_limit: how many pixels the finger must move before LVGL calls it
-//     a scroll rather than a tap. The default 10 is a lot on a 480x720 panel
-//     and the scroll starts late; at 4 the list latches on immediately.
+//     a scroll rather than a tap. Four was too eager on this panel -- the
+//     controller reports jitter of a few pixels while a finger rests -- so a
+//     tap could turn into a scroll, the row was never clicked, and the list
+//     moved instead. Ten is LVGL's own default and a finger that means to
+//     scroll passes it in the first frame of the drag.
 //
 // Applied to both the device touch panel and the simulator mouse, so the two
 // feel the same.
 // ---------------------------------------------------------------------------
 
-#define SCROLL_THROW_DECAY_PCT 5
-#define SCROLL_START_LIMIT_PX 4
+#define SCROLL_THROW_DECAY_PCT 7
+#define SCROLL_START_LIMIT_PX 10
 
 // ---------------------------------------------------------------------------
 // A drag is not a tap.
@@ -1092,6 +1098,12 @@ static void install_signal_guards(void) {
 //
 // The distance is from the press point to the release point; the indev
 // callback is not offered PRESSING, so the path in between is not seen.
+//
+// A click with no press seen before it is left alone. That happens when the
+// interface was busy enough that the press fell between two reads -- and
+// measuring it against the *previous* press's point dropped clicks that had not
+// moved anywhere at all, which is what "sometimes the first tap does nothing"
+// was.
 #define TAP_SLOP_PX 12
 
 static void tap_guard_cb(lv_event_t *e) {
@@ -1100,8 +1112,9 @@ static void tap_guard_cb(lv_event_t *e) {
 		return;
 	}
 
-	// One point for all pointers: there is only ever one pointer pressed.
+	// One pointer, one press at a time.
 	static lv_point_t press_at;
+	static bool armed;
 
 	lv_point_t p;
 	lv_indev_get_point(indev, &p);
@@ -1109,10 +1122,19 @@ static void tap_guard_cb(lv_event_t *e) {
 	lv_event_code_t code = lv_event_get_code(e);
 	if (code == LV_EVENT_PRESSED) {
 		press_at = p;
+		armed = true;
+		return;
+	}
+	if (code == LV_EVENT_RELEASED) {
+		// The press this click belongs to has been accounted for either way.
+		armed = false;
 		return;
 	}
 	if (code != LV_EVENT_SHORT_CLICKED && code != LV_EVENT_CLICKED) {
 		return;
+	}
+	if (!armed) {
+		return; // no press was seen: nothing to measure, so do not judge it
 	}
 
 	int32_t dx = p.x - press_at.x;
@@ -1836,6 +1858,31 @@ static bool input_bit(const unsigned long *bits, int bit) {
 	return (bits[bit / (8 * (int)sizeof(long))] >> (bit % (8 * (int)sizeof(long)))) & 1UL;
 }
 
+// What the panel reports about itself: the ranges its coordinates use, and
+// whether it speaks the multi-touch protocol at all. Printed once, because the
+// two questions a wrong-looking touch asks first are "which controller is
+// this" and "in what units does it think", and neither is answerable from the
+// log without it.
+static void log_touch_ranges(int fd) {
+	static const struct {
+		int code;
+		const char *name;
+	} AXES[] = {{ABS_X, "ABS_X"}, {ABS_Y, "ABS_Y"}, {ABS_MT_POSITION_X, "ABS_MT_POSITION_X"},
+				{ABS_MT_POSITION_Y, "ABS_MT_POSITION_Y"}};
+
+	for (size_t i = 0; i < sizeof(AXES) / sizeof(AXES[0]); i++) {
+		struct input_absinfo info;
+		if (ioctl(fd, EVIOCGABS(AXES[i].code), &info) == 0) {
+			printf("input: %s %d..%d\n", AXES[i].name, (int)info.minimum, (int)info.maximum);
+		}
+	}
+
+	unsigned long keys[(KEY_MAX + 8 * sizeof(long)) / (8 * sizeof(long))] = {0};
+	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keys)), keys) >= 0 && input_bit(keys, BTN_TOUCH)) {
+		printf("input: BTN_TOUCH reported (protocol A)\n");
+	}
+}
+
 static bool find_touch_node(char *out, size_t out_size) {
 	for (int waited = 0; waited <= TOUCH_PROBE_WAIT_MS; waited += 100) {
 		int fallback = -1;
@@ -1859,6 +1906,13 @@ static bool find_touch_node(char *out, size_t out_size) {
 			if (direct) {
 				snprintf(out, out_size, "%s", node);
 				printf("input: %s is the touch panel (%s)\n", node, name);
+				// Reopened for the report so the ranges describe the node that
+				// was chosen rather than one that was passed over.
+				int again = open(node, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+				if (again >= 0) {
+					log_touch_ranges(again);
+					close(again);
+				}
 				return true;
 			}
 			if (fallback < 0) {
@@ -1868,12 +1922,61 @@ static bool find_touch_node(char *out, size_t out_size) {
 		if (fallback >= 0) {
 			snprintf(out, out_size, "/dev/input/event%d", fallback);
 			printf("input: %s is the touch panel (absolute axes, no direct property)\n", out);
+			int again = open(out, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+			if (again >= 0) {
+				log_touch_ranges(again);
+				close(again);
+			}
 			return true;
 		}
 		usleep(100 * 1000);
 	}
 	fprintf(stderr, "input: no touch panel among the event devices\n");
 	return false;
+}
+
+// The range the panel's own coordinates use, put where LVGL's calibration
+// reads it.
+//
+// lv_evdev_create() asks the device for ABS_X and ABS_Y. A controller that
+// reports only the multi-touch axes answers neither of those, and the range it
+// leaves behind is 0..0 -- which is not "no scaling" in _evdev_calibrate():
+// with in_min == in_max the raw value is passed straight through. A finger
+// halfway down a 0..1023 panel then becomes 512 px on a 320 px screen, clamps
+// to the bottom edge, and every drag starts by jumping: the pointer is not
+// where the finger is, so the list scrolls the wrong way and comes back, and a
+// tap can land on a row that was never touched. The MT axes carry the same
+// range, so they are asked when the plain ones say nothing.
+static void fix_touch_range(lv_indev_t *indev, const char *node) {
+	int fd = open(node, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		return;
+	}
+
+	struct input_absinfo info_x, info_y;
+	bool have_x = ioctl(fd, EVIOCGABS(ABS_X), &info_x) == 0 && info_x.maximum > info_x.minimum;
+	bool have_y = ioctl(fd, EVIOCGABS(ABS_Y), &info_y) == 0 && info_y.maximum > info_y.minimum;
+
+	struct input_absinfo mt;
+	if (!have_x && ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &mt) == 0 && mt.maximum > mt.minimum) {
+		info_x = mt;
+		have_x = true;
+		printf("input: X range taken from ABS_MT_POSITION_X\n");
+	}
+	if (!have_y && ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &mt) == 0 && mt.maximum > mt.minimum) {
+		info_y = mt;
+		have_y = true;
+		printf("input: Y range taken from ABS_MT_POSITION_Y\n");
+	}
+	close(fd);
+
+	// One axis without the other is not a calibration; leave LVGL's alone.
+	if (!have_x || !have_y) {
+		return;
+	}
+	lv_evdev_set_calibration(indev, info_x.minimum, info_y.minimum, info_x.maximum, info_y.maximum);
+	printf("input: touch calibrated to %d..%d x %d..%d\n", (int)info_x.minimum, (int)info_x.maximum,
+		   (int)info_y.minimum, (int)info_y.maximum);
 }
 
 static lv_display_t *init_target_display(void) {
@@ -1916,6 +2019,7 @@ static lv_display_t *init_target_display(void) {
 	}
 
 	if (touch) {
+		fix_touch_range(touch, fb_touch_node);
 		lv_indev_set_display(touch, disp);
 		tune_pointer(touch);
 		fb_touch = touch;

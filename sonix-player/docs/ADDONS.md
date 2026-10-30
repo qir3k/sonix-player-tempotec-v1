@@ -59,6 +59,8 @@ what makes a hand-edited config safe.
 | `listenbrainz` | Scrobbling to ListenBrainz, on its own switch | Music features |
 | `subsonic` | A Subsonic / Navidrome server | Streaming |
 | `radio` | Internet radio and the station directory | Streaming |
+| `airpods` | AirPods and Beats: battery, noise control, stem presses, and the row that opens the page | Earbuds |
+| `earfun` | EarFun earbuds over GAIA: battery, noise control, game mode, in-ear detection | Earbuds |
 | `metronome` | The metronome | More |
 | `calculator` | The calculator | More |
 | `notes` | The notes shelf and its editor | More |

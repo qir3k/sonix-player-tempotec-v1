@@ -21,6 +21,13 @@ static const addon_t ADDONS[] = {
 	{"podcasts", "podcasts", "addon_podcasts_note", "plugins_section_services"},
 	{"radio", "radio", "addon_radio_note", "plugins_section_services"},
 	{"subsonic", "subsonic", "addon_subsonic_note", "plugins_section_services"},
+	// What talks to a pair of earbuds over the Bluetooth link rather than to a
+	// service: the AirPods' battery and noise control through Apple's own
+	// protocol, and the EarFun family's through GAIA. Off means the worker that
+	// speaks it is never started and the row that leads to its page is not in
+	// the Bluetooth page -- the memory a socket and a parser hold stays free.
+	{"airpods", "airpods", "addon_airpods_note", "plugins_section_earbuds"},
+	{"earfun", "earfun", "addon_earfun_note", "plugins_section_earbuds"},
 	// The shelves are a place of their own: a book is not a music feature, and
 	// nobody would look for it under one.
 	{"audiobooks", "audiobooks", "addon_audiobooks_note", "plugins_section_library"},
