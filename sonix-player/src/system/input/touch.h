@@ -21,6 +21,14 @@
 // comes from one source at a time. Nothing is ever scaled with somebody else's
 // units.
 //
+// The source that one point comes from is ABS_X/ABS_Y whenever the panel sends
+// it, because that pair is the driver's own presentation of the contact: a
+// driver turns the panel round for how the glass is mounted, and the
+// multi-touch pair is left as the controller sent it. Following the latter on a
+// panel whose driver corrects only the former puts a finger at the bottom of
+// the glass at the top of the screen. The multi-touch pair is used when it is
+// the only one there is.
+//
 // Nothing here knows about the kernel: main.c translates struct input_event into
 // touch_event_t, which is what lets the whole filter be tested on the host.
 
@@ -58,7 +66,8 @@ typedef struct {
 	bool rotated;
 
 	// Which of the two sources this panel sends, and the range of each. A
-	// source is only used for a point if its range is real (max > min).
+	// source is usable when neither axis has a zero-width range; descending
+	// ranges are valid and mirror that axis.
 	bool have_abs, have_mt;
 	touch_range_t abs, mt;
 
@@ -86,7 +95,7 @@ typedef struct {
 } touch_filter_t;
 
 // Sets up the filter for one panel. `have_abs`/`have_mt` say which sources the
-// device actually emits; a range whose max is not above its min is ignored.
+// device actually emits; a range with equal endpoints on either axis is ignored.
 void touch_init(touch_filter_t *f, int screen_w, int screen_h, bool have_abs, touch_range_t abs, bool have_mt,
 				touch_range_t mt);
 

@@ -8,8 +8,15 @@
 // panel and a 240-pixel screen that is the identity; in a 0..1023 panel and a
 // 240-pixel screen it is the only thing standing between a finger near the
 // right edge and a pointer pinned to it.
+//
+// A range whose maximum is BELOW its minimum is not an error and must not be
+// thrown away: it is how a driver says the axis counts the other way, which is
+// what a panel mounted upside down looks like from here. Dividing by a negative
+// span mirrors the axis, so the sign of the division is doing the work -- and
+// refusing those ranges was how a finger at the bottom of the glass came to be
+// reported at the top of the screen.
 static int to_pixels(int value, int in_min, int in_max, int out_max) {
-	if (in_max <= in_min || out_max <= 1) {
+	if (in_max == in_min || out_max <= 1) {
 		return 0;
 	}
 	int64_t span = (int64_t)in_max - in_min;
@@ -23,6 +30,11 @@ static int to_pixels(int value, int in_min, int in_max, int out_max) {
 	return (int)scaled;
 }
 
+// A range is usable when both axes span something. Which way they span is not
+// this test's business: an inverted axis is a transformed axis, not a broken one
+// (see to_pixels).
+static bool usable_range(touch_range_t r) { return r.max_x != r.min_x && r.max_y != r.min_y; }
+
 static bool has_abs_point(const touch_filter_t *f) { return f->have_abs && f->have_abs_point; }
 
 static bool has_mt_point(const touch_filter_t *f) { return f->have_mt && f->have_mt_point; }
@@ -35,9 +47,9 @@ void touch_init(touch_filter_t *f, int screen_w, int screen_h, bool have_abs, to
 	f->screen_w = screen_w > 1 ? screen_w : 1;
 	f->screen_h = screen_h > 1 ? screen_h : 1;
 	f->rotated = false;
-	f->have_abs = have_abs && abs.max_x > abs.min_x && abs.max_y > abs.min_y;
+	f->have_abs = have_abs && usable_range(abs);
 	f->abs = abs;
-	f->have_mt = have_mt && mt.max_x > mt.min_x && mt.max_y > mt.min_y;
+	f->have_mt = have_mt && usable_range(mt);
 	f->mt = mt;
 	f->slot = 0;
 	f->btn_down = false;
@@ -61,11 +73,13 @@ const char *touch_source_name(const touch_filter_t *f) {
 	if (!f) {
 		return "none";
 	}
-	if (has_mt_point(f)) {
-		return "ABS_MT_POSITION";
-	}
-	if (has_abs_point(f)) {
+	// The source the next point will come from -- not "the one with a point
+	// right now", which at startup is neither of them.
+	if (f->have_abs) {
 		return "ABS_X/ABS_Y";
+	}
+	if (f->have_mt) {
+		return "ABS_MT_POSITION";
 	}
 	return "none";
 }
@@ -81,23 +95,28 @@ bool touch_point(const touch_filter_t *f, int *x, int *y) {
 	}
 
 	int raw_x, raw_y, min_x, max_x, min_y, max_y;
-	// The multi-touch pair wins when the panel sends it: it is the one that
-	// describes the contact being followed rather than the panel's idea of
-	// "the" finger. Either way the range is that source's own.
-	if (has_mt_point(f)) {
-		raw_x = f->mt_raw_x;
-		raw_y = f->mt_raw_y;
-		min_x = f->mt.min_x;
-		max_x = f->mt.max_x;
-		min_y = f->mt.min_y;
-		max_y = f->mt.max_y;
-	} else if (has_abs_point(f)) {
+	// ABS_X/ABS_Y wins whenever the panel reports it, and the reason is not
+	// arbitrary: that pair is the driver's own presentation of the contact. It is
+	// where a panel driver puts whatever correction the glass needs -- how it is
+	// mounted, whether the ribbon leaves the panel at the far end -- while the
+	// multi-touch pair is the controller's frame as it arrived. On this device
+	// the driver turns ABS round and leaves the multi-touch pair alone, so
+	// following the latter puts a finger at the bottom of the glass at the top of
+	// the screen. Either way the range belongs to the source the value came from.
+	if (has_abs_point(f)) {
 		raw_x = f->abs_raw_x;
 		raw_y = f->abs_raw_y;
 		min_x = f->abs.min_x;
 		max_x = f->abs.max_x;
 		min_y = f->abs.min_y;
 		max_y = f->abs.max_y;
+	} else if (has_mt_point(f)) {
+		raw_x = f->mt_raw_x;
+		raw_y = f->mt_raw_y;
+		min_x = f->mt.min_x;
+		max_x = f->mt.max_x;
+		min_y = f->mt.min_y;
+		max_y = f->mt.max_y;
 	} else {
 		return false;
 	}

@@ -593,6 +593,13 @@ rules it keeps are:
 * **One source per point.** A position from `ABS_X/ABS_Y` is scaled with the
   `ABS_X/ABS_Y` range; one from the multi-touch pair with the multi-touch
   range. They are never mixed, which is the whole bug above.
+* **ABS positions the pointer where the panel sends it.** That pair is the
+  driver's own presentation of the contact -- it is where a driver applies
+  whatever the glass needs, such as being mounted the other way up -- while the
+  multi-touch pair arrives as the controller sent it. This panel's driver turns
+  `ABS` round and leaves the multi-touch pair alone, so following the latter put
+  a finger at the bottom of the glass at the top of the screen. The
+  multi-touch pair is used only when a press brings no `ABS` position at all.
 * **A press owns its coordinate.** Both protocol A (`BTN_TOUCH`) and protocol B
   (a tracking id) are understood. A press reports nothing until a coordinate
   for *that* press has arrived, so it cannot reuse where the last finger was.

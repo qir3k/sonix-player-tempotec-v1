@@ -46,6 +46,16 @@ static void slot(touch_filter_t *f, int n) { touch_feed(f, &(touch_event_t){TOUC
 
 static void tracking(touch_filter_t *f, int id) { touch_feed(f, &(touch_event_t){TOUCH_EV_ABS, TOUCH_MT_ID, id}); }
 
+// The same panel, with one range counting the other way round -- a driver saying
+// the axis is mirrored, which is what a panel mounted the other way up gives.
+static touch_filter_t panel_with_inverted_y(bool have_abs, bool have_mt) {
+	touch_filter_t f;
+	touch_range_t abs = {0, SCREEN_W - 1, SCREEN_H - 1, 0};
+	touch_range_t mt = {0, 1023, 0, 1023};
+	touch_init(&f, SCREEN_W, SCREEN_H, have_abs, abs, have_mt, mt);
+	return f;
+}
+
 static void point_is(const touch_filter_t *f, int want_x, int want_y) {
 	int x = -1, y = -1;
 	assert(touch_point(f, &x, &y));
@@ -53,27 +63,29 @@ static void point_is(const touch_filter_t *f, int want_x, int want_y) {
 	assert(y == want_y);
 }
 
-// Each source is scaled with its own range, so the same finger described by
-// both lands in the same place. Scaling the raw count with the pixel range --
-// what the evdev driver did -- clamps it to the right edge instead.
-static void check_each_source_keeps_its_own_units(void) {
+// The same finger described by both lands where ABS says it is, whatever the
+// multi-touch pair carries: the driver's pair is the corrected one. Scaling the
+// raw count with the pixel range -- what the evdev driver did -- clamps it to
+// the edge instead.
+static void check_abs_positions_the_pointer_when_present(void) {
 	touch_filter_t f = panel(true, true);
 
 	abs_at(&f, 120, 160);
 	point_is(&f, 120, 160);
 
-	// 512 of 0..1023 is half way across, and half of 240 is 120.
-	mt_at(&f, 512, 512);
-	int x = -1, y = -1;
-	assert(touch_point(&f, &x, &y));
-	assert(x >= 118 && x <= 120);
-	assert(y != SCREEN_H - 1); // not pinned to the bottom by a 0..239 range
+	// The multi-touch pair arrives in its own units, possibly turned over; it
+	// must neither move the pointer nor be scaled with the ABS range.
+	mt_at(&f, 512, 0);
+	point_is(&f, 120, 160);
+
+	abs_at(&f, 30, 300);
+	point_is(&f, 30, 300);
 }
 
-static void check_multi_touch_wins_when_both_report(void) {
-	touch_filter_t f = panel(true, true);
+// With no ABS on the panel, the multi-touch pair is the only thing there is.
+static void check_multi_touch_positions_the_pointer_when_alone(void) {
+	touch_filter_t f = panel(false, true);
 
-	abs_at(&f, 0, 0);
 	mt_at(&f, 1023, 1023);
 	point_is(&f, SCREEN_W - 1, SCREEN_H - 1);
 }
@@ -160,6 +172,39 @@ static void check_rotation_turns_the_point_over(void) {
 	point_is(&f, 0, 0);
 }
 
+// A range whose maximum is below its minimum is a mirrored axis, not an
+// unusable one: the filter must keep it and divide by its sign. Dropping it was
+// how a finger at the bottom of the glass was reported at the top of the screen.
+static void check_an_inverted_range_mirrors_the_axis(void) {
+	touch_filter_t f = panel_with_inverted_y(true, true);
+
+	// The ascending multi-touch range must not replace the valid, inverted ABS
+	// range: these coordinates are the panel driver's corrected positions.
+	abs_at(&f, 0, 0);
+	point_is(&f, 0, SCREEN_H - 1);
+	mt_at(&f, 0, 0);
+	point_is(&f, 0, SCREEN_H - 1);
+
+	abs_at(&f, SCREEN_W - 1, SCREEN_H - 1);
+	point_is(&f, SCREEN_W - 1, 0);
+
+	// With an even-sized screen the two center pixels are adjacent; reversing
+	// the axis maps the upper center pixel onto the lower one.
+	abs_at(&f, 120, 160);
+	point_is(&f, 120, SCREEN_H / 2 - 1);
+}
+
+static void check_an_inverted_multi_touch_range_is_usable_alone(void) {
+	touch_filter_t f;
+	touch_range_t mt = {0, 1023, 1023, 0};
+	touch_init(&f, SCREEN_W, SCREEN_H, false, (touch_range_t){0}, true, mt);
+
+	mt_at(&f, 0, 0);
+	point_is(&f, 0, SCREEN_H - 1);
+	mt_at(&f, 1023, 1023);
+	point_is(&f, SCREEN_W - 1, 0);
+}
+
 static void check_out_of_range_is_clamped(void) {
 	touch_filter_t f = panel(true, false);
 
@@ -191,12 +236,14 @@ static void check_an_idle_panel(void) {
 
 int main(void) {
 	check_an_idle_panel();
-	check_each_source_keeps_its_own_units();
-	check_multi_touch_wins_when_both_report();
+	check_abs_positions_the_pointer_when_present();
+	check_multi_touch_positions_the_pointer_when_alone();
 	check_a_press_waits_for_its_own_coordinate();
 	check_protocol_b_tracking_id();
 	check_a_second_finger_is_ignored();
 	check_rotation_turns_the_point_over();
+	check_an_inverted_range_mirrors_the_axis();
+	check_an_inverted_multi_touch_range_is_usable_alone();
 	check_out_of_range_is_clamped();
 	check_a_multi_touch_only_panel();
 	printf("touch: all checks passed\n");

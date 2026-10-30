@@ -1988,8 +1988,10 @@ static lv_indev_t *open_panel_touch(lv_display_t *disp, const char *node) {
 		mt.min_y = my.minimum;
 		mt.max_y = my.maximum;
 	}
-	have_abs = have_abs && abs.max_x > abs.min_x && abs.max_y > abs.min_y;
-	have_mt = have_mt && mt.max_x > mt.min_x && mt.max_y > mt.min_y;
+	// A range may count either way round: max below min is a driver saying the
+	// axis is mirrored, not a broken range (the filter divides by the sign).
+	have_abs = have_abs && abs.max_x != abs.min_x && abs.max_y != abs.min_y;
+	have_mt = have_mt && mt.max_x != mt.min_x && mt.max_y != mt.min_y;
 	if (!have_abs && !have_mt) {
 		fprintf(stderr, "input: %s reports no usable coordinate range, leaving it to the evdev driver\n", node);
 		close(fd);
