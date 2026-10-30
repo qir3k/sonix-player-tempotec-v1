@@ -77,6 +77,14 @@ void earfun_set_device(const char *mac, const char *name);
 // the numbers of earbuds that have gone.
 bool earfun_get(earfun_state_t *out);
 
+// Informs the worker whether the EarFun settings page is currently visible on screen.
+// When active, noise and sound modes are polled rapidly so that changes made by tapping
+// the earbuds reflect on screen immediately.
+void earfun_set_active_view(bool active);
+
+// Requests an immediate query of the sound and battery settings.
+void earfun_request_refresh(void);
+
 // The setters queue a command and return at once; it goes out on the session's
 // own thread, and what the earbuds answer is what the state above then holds.
 // Nothing happens with no session, and a mode the earbuds never named is not

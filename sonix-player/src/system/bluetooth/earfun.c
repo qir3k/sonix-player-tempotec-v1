@@ -68,7 +68,9 @@ struct sockaddr_rc {
 #define READ_BUF 512
 #define POLL_MS 250
 #define BATTERY_EVERY_MS 15000 // three requests, so not on every tick
-#define SETTINGS_EVERY_MS 20000
+#define SOUND_ACTIVE_EVERY_MS 600
+#define SOUND_IDLE_EVERY_MS 2500
+#define MISC_SETTINGS_EVERY_MS 10000
 #define RETRY_MS 6000	   // between attempts to open a session
 #define GIVE_UP_AFTER 3	   // first retry notice for one address
 #define CHANNEL_MAX 30	   // the RFCOMM channel range SDP may name
@@ -86,6 +88,8 @@ static char want_name[NAME_LEN];
 static int failures; // consecutive connect failures for the address above
 static char failed_mac[MAC_LEN];
 static earfun_state_t g_state;
+static bool active_view;
+static bool refresh_requested;
 
 // A command asked for on the interface thread, waiting for the session thread
 // to write it. Small and bounded: four commands is more than any one tap can
@@ -186,11 +190,11 @@ static void handle_frame(const uint8_t *frame, size_t length) {
 	if (length < FRAME_HEADER) {
 		return;
 	}
-	uint16_t command = (uint16_t)((frame[6] << 8) | frame[7]);
-	if (!(command & FRAME_REPLY)) {
+	uint16_t raw_cmd = (uint16_t)((frame[6] << 8) | frame[7]);
+	if (!(raw_cmd & (FRAME_REPLY | 0x4000))) {
 		return; // something the player itself wrote, echoed back
 	}
-	command &= (uint16_t)~FRAME_REPLY;
+	uint16_t command = raw_cmd & 0x3FFF;
 	const uint8_t *payload = frame + FRAME_HEADER;
 	size_t payload_length = frame[3];
 
@@ -213,12 +217,18 @@ static void handle_frame(const uint8_t *frame, size_t length) {
 		if (payload_length >= 2 && payload[1] <= 2) {
 			g_state.noise = (earfun_noise_t)(payload[1] + 1); // 0 off, 1 ANC, 2 transparency
 			g_state.serial++;
+		} else if (payload_length == 1 && payload[0] <= 2) {
+			g_state.noise = (earfun_noise_t)(payload[0] + 1);
+			g_state.serial++;
 		}
 		break;
 	case EARFUN_CMD_ANC_GET:
 	case EARFUN_CMD_ANC_SET:
 		if (payload_length >= 2) {
 			g_state.anc_level = payload[1];
+			g_state.serial++;
+		} else if (payload_length == 1) {
+			g_state.anc_level = payload[0];
 			g_state.serial++;
 		}
 		break;
@@ -227,12 +237,19 @@ static void handle_frame(const uint8_t *frame, size_t length) {
 		if (payload_length >= 2) {
 			g_state.transparency_mode = payload[1];
 			g_state.serial++;
+		} else if (payload_length == 1) {
+			g_state.transparency_mode = payload[0];
+			g_state.serial++;
 		}
 		break;
 	case EARFUN_CMD_GAME_GET:
 	case EARFUN_CMD_GAME_SET:
 		if (payload_length >= 2) {
 			g_state.game_mode = payload[1] == 0x01;
+			g_state.game_mode_known = true;
+			g_state.serial++;
+		} else if (payload_length == 1) {
+			g_state.game_mode = payload[0] == 0x01;
 			g_state.game_mode_known = true;
 			g_state.serial++;
 		}
@@ -243,6 +260,10 @@ static void handle_frame(const uint8_t *frame, size_t length) {
 		// how the switch reads, and this is the one place that is undone.
 		if (payload_length >= 2) {
 			g_state.in_ear = payload[1] == 0x00;
+			g_state.in_ear_known = true;
+			g_state.serial++;
+		} else if (payload_length == 1) {
+			g_state.in_ear = payload[0] == 0x00;
 			g_state.in_ear_known = true;
 			g_state.serial++;
 		}
@@ -413,18 +434,24 @@ static bool should_stop(const char *mac) {
 	return stop;
 }
 
-// The settings the page shows, asked for in one go. The order is the one the
-// Gadgetbridge implementation polls in, minus the touch gestures and the
-// multi-device switch this player has no page for yet.
+static void poll_sound_settings(int fd) {
+	send_command(fd, EARFUN_CMD_NOISE_GET, NULL, 0);
+	send_command(fd, EARFUN_CMD_ANC_GET, NULL, 0);
+	send_command(fd, EARFUN_CMD_TRANSPARENCY_GET, NULL, 0);
+}
+
+static void poll_misc_settings(int fd) {
+	send_command(fd, EARFUN_CMD_GAME_GET, NULL, 0);
+	send_command(fd, EARFUN_CMD_IN_EAR_GET, NULL, 0);
+}
+
+// The settings the page shows, asked for in one go.
 static void poll_settings(int fd) {
 	send_command(fd, EARFUN_CMD_BATTERY_LEFT, NULL, 0);
 	send_command(fd, EARFUN_CMD_BATTERY_RIGHT, NULL, 0);
 	send_command(fd, EARFUN_CMD_BATTERY_CASE, NULL, 0);
-	send_command(fd, EARFUN_CMD_NOISE_GET, NULL, 0);
-	send_command(fd, EARFUN_CMD_ANC_GET, NULL, 0);
-	send_command(fd, EARFUN_CMD_TRANSPARENCY_GET, NULL, 0);
-	send_command(fd, EARFUN_CMD_GAME_GET, NULL, 0);
-	send_command(fd, EARFUN_CMD_IN_EAR_GET, NULL, 0);
+	poll_sound_settings(fd);
+	poll_misc_settings(fd);
 }
 
 // Runs the session until it ends. The socket is read through poll() rather than
@@ -443,7 +470,8 @@ static void run_session(int fd, const char *mac) {
 	printf("earfun: session open with %s\n", mac);
 
 	uint32_t battery_at = 0;
-	uint32_t settings_at = 0;
+	uint32_t sound_at = 0;
+	uint32_t misc_at = 0;
 	while (!should_stop(mac)) {
 		struct pollfd pfd = {.fd = fd, .events = POLLIN, .revents = 0};
 		int ready = poll(&pfd, 1, POLL_MS);
@@ -516,7 +544,23 @@ static void run_session(int fd, const char *mac) {
 		}
 
 		uint32_t now = now_ms();
-		if (battery_at == 0 || (int32_t)(now - battery_at) >= BATTERY_EVERY_MS) {
+		bool is_active = false;
+		bool force_refresh = false;
+		pthread_mutex_lock(&lock);
+		is_active = active_view;
+		if (refresh_requested) {
+			force_refresh = true;
+			refresh_requested = false;
+		}
+		pthread_mutex_unlock(&lock);
+
+		uint32_t sound_interval = is_active ? SOUND_ACTIVE_EVERY_MS : SOUND_IDLE_EVERY_MS;
+		if (force_refresh || sound_at == 0 || (int32_t)(now - sound_at) >= (int32_t)sound_interval) {
+			sound_at = now;
+			poll_sound_settings(fd);
+		}
+
+		if (force_refresh || battery_at == 0 || (int32_t)(now - battery_at) >= BATTERY_EVERY_MS) {
 			battery_at = now;
 			if (!send_command(fd, EARFUN_CMD_BATTERY_LEFT, NULL, 0) ||
 				!send_command(fd, EARFUN_CMD_BATTERY_RIGHT, NULL, 0) ||
@@ -524,9 +568,10 @@ static void run_session(int fd, const char *mac) {
 				break;
 			}
 		}
-		if (settings_at == 0 || (int32_t)(now - settings_at) >= SETTINGS_EVERY_MS) {
-			settings_at = now;
-			poll_settings(fd);
+
+		if (force_refresh || misc_at == 0 || (int32_t)(now - misc_at) >= MISC_SETTINGS_EVERY_MS) {
+			misc_at = now;
+			poll_misc_settings(fd);
 		}
 	}
 closed:
@@ -548,6 +593,7 @@ static void clear_state(void) {
 	// queued would go out to whichever pair connects next.
 	pending_head = 0;
 	pending_count = 0;
+	refresh_requested = false;
 	pthread_mutex_unlock(&lock);
 }
 
@@ -777,5 +823,20 @@ void earfun_set_in_ear(bool on) {
 		g_state.in_ear_known = true;
 		g_state.serial++;
 	}
+	pthread_mutex_unlock(&lock);
+}
+
+void earfun_set_active_view(bool active) {
+	pthread_mutex_lock(&lock);
+	active_view = active;
+	if (active) {
+		refresh_requested = true;
+	}
+	pthread_mutex_unlock(&lock);
+}
+
+void earfun_request_refresh(void) {
+	pthread_mutex_lock(&lock);
+	refresh_requested = true;
 	pthread_mutex_unlock(&lock);
 }

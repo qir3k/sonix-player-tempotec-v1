@@ -15,7 +15,9 @@
 
 lv_obj_t *earfunpage_screen;
 
-#define POLL_MS 700
+#define POLL_MS 250
+
+static void refresh(bool force);
 
 static lv_obj_t *left_value;
 static lv_obj_t *right_value;
@@ -42,22 +44,27 @@ static bool drawn_connected;
 
 static void noise_cb(lv_event_t *e) {
 	earfun_set_noise((earfun_noise_t)(intptr_t)lv_event_get_user_data(e));
+	refresh(false);
 }
 
 static void anc_cb(lv_event_t *e) {
 	earfun_set_anc_level((int)(intptr_t)lv_event_get_user_data(e));
+	refresh(false);
 }
 
 static void transparency_cb(lv_event_t *e) {
 	earfun_set_transparency_mode((int)(intptr_t)lv_event_get_user_data(e));
+	refresh(false);
 }
 
 static void game_cb(lv_event_t *e) {
 	earfun_set_game_mode(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+	refresh(false);
 }
 
 static void in_ear_cb(lv_event_t *e) {
 	earfun_set_in_ear(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+	refresh(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -173,12 +180,14 @@ static void poll_cb(lv_timer_t *timer) {
 
 static void screen_loaded_cb(lv_event_t *e) {
 	(void)e;
+	earfun_set_active_view(true);
 	refresh(true);
 	lv_timer_resume(poll_timer);
 }
 
 static void screen_unloaded_cb(lv_event_t *e) {
 	(void)e;
+	earfun_set_active_view(false);
 	lv_timer_pause(poll_timer);
 }
 

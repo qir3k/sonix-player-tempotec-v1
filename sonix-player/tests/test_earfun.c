@@ -112,6 +112,9 @@ int main(void) {
 	// Nothing to send with no session, and the setters must survive that.
 	earfun_set_noise(EARFUN_NOISE_TRANSPARENCY);
 	earfun_set_game_mode(false);
+	earfun_set_active_view(true);
+	earfun_request_refresh();
+	earfun_set_active_view(false);
 	earfun_get(&state);
 	check(state.noise == EARFUN_NOISE_TRANSPARENCY, "the mode asked for is taken as done");
 
