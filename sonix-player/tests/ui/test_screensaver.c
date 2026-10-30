@@ -452,13 +452,14 @@ static void check_frame(int w, int h) {
 	assert(lv_obj_get_style_bg_image_src(info_strip(), 0) == NULL);
 }
 
-// What the page round the frame is: the player's blurred copy when it made
-// one the size of the screen, in Dark and Light; the palette's own colour in
-// the palettes; black otherwise.
+// What the page round the frame is: the player's blurred copy when it made one
+// the size of the screen, in every palette -- the space around the sleeve shows
+// the record there too, while the words and the field keep the palette's own
+// colour; black, or the palette's field, when there is no such copy.
 static void check_page(void) {
 	bool field = theme_is_monochrome();
 	const lv_image_dsc_t *backdrop = player_backdrop_image();
-	bool blur = !field && backdrop && (int)backdrop->header.w == screen_w && (int)backdrop->header.h == screen_h;
+	bool blur = backdrop && (int)backdrop->header.w == screen_w && (int)backdrop->header.h == screen_h;
 	assert(lv_obj_get_style_bg_image_src(saver_obj(), 0) == (blur ? (const void *)backdrop : NULL));
 	assert(lv_obj_get_style_bg_opa(cover_box(), 0) == (blur ? LV_OPA_TRANSP : LV_OPA_COVER));
 	lv_color_t page = field ? theme()->screen_bg : lv_color_black();
