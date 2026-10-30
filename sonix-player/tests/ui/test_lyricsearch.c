@@ -326,7 +326,9 @@ static void check_all_languages_and_themes(const char *language_dir, gui_config_
 	closedir(dir);
 	assert(languages == 11);
 	assert(lang_set("English"));
-	theme_set_kind(THEME_KIND_TOKYO_NIGHT);
+	// Back to the palette the rest of the run drew in: every theme the player
+	// still carries is checked above, and the one this used to name has gone.
+	theme_set_kind(THEME_KIND_DARK);
 }
 
 int main(int argc, char **argv) {
