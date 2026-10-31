@@ -35,7 +35,6 @@ static lv_obj_t *volume_switch;
 static lv_obj_t *output_row;
 static lv_obj_t *output_value;
 static lv_obj_t *airpods_row;
-static lv_obj_t *airpods_icon;
 static lv_obj_t *earfun_row;
 static lv_obj_t *codec_row;
 static lv_obj_t *codec_value;
@@ -256,8 +255,6 @@ static void codec_row_cb(lv_event_t *e) {
 // value would use on any other row.
 // ---------------------------------------------------------------------------
 
-#define AIRPODS_ICON_INSET 48 // clears the chevron at the row's right edge
-
 static void airpods_row_cb(lv_event_t *e) {
 	(void)e;
 	switch_screen(airpodspage_screen);
@@ -292,24 +289,16 @@ static void refresh_earfun_row(void) {
 	bool present = addons_enabled("earfun") && (is_earfun_audio || protocol_ready);
 	lv_obj_set_hidden(earfun_row, !present);
 	if (present) {
-		const char *name = protocol_ready && state.name[0] ? state.name :
-			(is_earfun_audio && device.name[0] ? device.name : tr("earfun"));
-		lv_label_set_text(settingsrow_name_label(earfun_row), name);
+		lv_label_set_text(settingsrow_name_label(earfun_row), tr("device_additional_settings"));
 	}
 }
 
 static void refresh_airpods_row(void) {
 	airpods_state_t state;
 	bool present = addons_enabled("airpods") && airpods_get(&state);
-
+	lv_obj_set_hidden(airpods_row, !present);
 	if (present) {
-		lv_obj_set_hidden(airpods_row, false);
-		lv_image_set_src(airpods_icon, airpodspage_model_icon(state.model));
-		// The product name, not the tag: "AirPods Pro 2" rather than "AirPods",
-		// so the row says which pair is on the other end.
-		lv_label_set_text(settingsrow_name_label(airpods_row), state.name[0] ? state.name : tr("airpods"));
-	} else {
-		lv_obj_set_hidden(airpods_row, true);
+		lv_label_set_text(settingsrow_name_label(airpods_row), tr("device_additional_settings"));
 	}
 }
 
@@ -614,20 +603,12 @@ void btaudio_init(gui_config_t *cfg) {
 	}
 	lv_obj_set_hidden(output_row, true);
 
-	// The AirPods row, above the codec: it is about the headphones themselves
-	// rather than about the link, and it is the one row here that is not
-	// always there.
-	airpods_row = settingsrow_add(container, "airpods", NULL, airpods_row_cb, NULL);
-	airpods_icon = lv_image_create(airpods_row);
-	lv_obj_add_style(airpods_icon, &theme_style_icon, 0);
-	lv_image_set_src(airpods_icon, airpodspage_model_icon(AIRPODS_MODEL_UNKNOWN));
-	lv_obj_align(airpods_icon, LV_ALIGN_RIGHT_MID, -AIRPODS_ICON_INSET, 0);
+	// Additional device settings row: appears only when a supported pair of
+	// earbuds (AirPods or EarFun) is connected.
+	airpods_row = settingsrow_add(container, "device_additional_settings", NULL, airpods_row_cb, NULL);
 	lv_obj_set_hidden(airpods_row, true);
 
-	// And the EarFun row, the same way: it exists only while a pair that
-	// speaks the serial-port protocol is the connected sink.
-	earfun_row = settingsrow_add(container, "earfun", NULL, earfun_row_cb, NULL);
-	settingsrow_add_icon(earfun_row, &icon_headphones, THEME_SEMANTIC_CYAN);
+	earfun_row = settingsrow_add(container, "device_additional_settings", NULL, earfun_row_cb, NULL);
 	lv_obj_set_hidden(earfun_row, true);
 
 	// The codec in use, and the list of what the sink offered.
