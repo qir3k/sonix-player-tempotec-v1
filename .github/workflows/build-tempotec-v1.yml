@@ -35,8 +35,6 @@ on:
   push:
     branches:
       - personal
-    tags:
-      - '*'
 
 permissions:
   contents: write
@@ -165,7 +163,7 @@ jobs:
               # Tag the current commit and push to origin
               subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
               subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
-              subprocess.check_call(["git", "tag", "-a", new_tag, "-m", f"Release {new_tag}"])
+              subprocess.check_call(["git", "tag", new_tag])
 
               token = os.environ.get("GH_TOKEN", "")
               repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -400,11 +398,11 @@ jobs:
           # A commit saying #none leaves the action with a tag it never made:
           # no release can be published for it, and saying so beats a release
           # page that points at a version nobody can check out.
-          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+          if ! git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null; then
             echo "::error::no tag ${TAG} was created for this build; nothing was released."
             exit 1
           fi
-          tag_sha="$(git rev-parse "refs/tags/${TAG}")"
+          tag_sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
           if [ "$tag_sha" != "$BUILT_SHA" ]; then
             echo "::error::${TAG} names ${tag_sha} and this image was built from ${BUILT_SHA}."
             exit 1
@@ -421,7 +419,7 @@ jobs:
           NEW_TAG: ${{ steps.version.outputs.new_tag }}
         run: |
           set -euo pipefail
-          if git rev-parse -q --verify "refs/tags/${OLD_TAG}" >/dev/null; then
+          if git rev-parse -q --verify "refs/tags/${OLD_TAG}^{commit}" >/dev/null; then
             range="${OLD_TAG}..${NEW_TAG}"
           elif git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
             # The first release: what this branch carries and main does not.
@@ -435,7 +433,7 @@ jobs:
             # shellcheck disable=SC2086
             git log --no-merges --invert-grep --grep='^ci:' --pretty='- %s (`%h`)' $range
             echo
-            echo "Built from \`$(git rev-parse --short "${NEW_TAG}")\` on the \`personal\` branch."
+            echo "Built from \`$(git rev-parse --short "${NEW_TAG}^{commit}")\` on the \`personal\` branch."
           } > "$RUNNER_TEMP/release-notes.md"
           cat "$RUNNER_TEMP/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
 
