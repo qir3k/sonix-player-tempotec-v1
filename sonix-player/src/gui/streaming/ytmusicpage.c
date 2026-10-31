@@ -1571,6 +1571,7 @@ static void track_from_item(const ytmusic_item_t *item, ytmusic_track_t *track) 
 	// The row's cover goes with the track: the downloader fetches it beside the
 	// audio, which is where the player looks for a file's artwork.
 	snprintf(track->thumbnail, sizeof(track->thumbnail), "%s", item->thumbnail);
+	track->duration = item->duration;
 }
 
 // Downloading without playing. The same cache file is made, and then handed to
@@ -1598,13 +1599,18 @@ static void *save_worker(void *arg) {
 	result->ok = ytmusic_download_for_playback(&result->track, result->path, sizeof(result->path),
 											   result->error, sizeof(result->error));
 
-	if (result->ok && !streamkeep_keep(result->path, true)) {
-		// No card, or one the computer is using: the keep worker records why
-		// without a toast of its own, so the reason is read back here.
-		char why[192] = "";
-		result->ok = false;
-		if (streamkeep_last_error(why, sizeof(why)) && why[0]) {
-			snprintf(result->error, sizeof(result->error), "%s", why);
+	if (result->ok) {
+		for (int tick = 0; tick < 50 && streamkeep_busy(); tick++) {
+			usleep(100 * 1000);
+		}
+		if (!streamkeep_keep(result->path, true)) {
+			// No card, or one the computer is using: the keep worker records why
+			// without a toast of its own, so the reason is read back here.
+			char why[192] = "";
+			result->ok = false;
+			if (streamkeep_last_error(why, sizeof(why)) && why[0]) {
+				snprintf(result->error, sizeof(result->error), "%s", why);
+			}
 		}
 	}
 	if (!gui_post(save_done, result)) {

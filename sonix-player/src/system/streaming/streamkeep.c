@@ -336,13 +336,21 @@ static bool wait_for_download(const char *path, const char *marker) {
 	int waited = 0;
 	while (waited < KEEP_WAIT_MAX_MS) {
 		struct stat st;
-		if (stat(marker, &st) != 0) {
+		if (ytmusic_cache_owns(path)) {
+			if (ytmusic_cache_whole(path)) {
+				return true;
+			}
+		} else if (stat(marker, &st) != 0) {
 			return true; // finished, or never was in flight
 		}
 		if (!growfile_is_growing(path)) {
 			for (int i = 0; i < 10; i++) {
 				usleep(100 * 1000);
-				if (stat(marker, &st) != 0) {
+				if (ytmusic_cache_owns(path)) {
+					if (ytmusic_cache_whole(path)) {
+						return true;
+					}
+				} else if (stat(marker, &st) != 0) {
 					return true;
 				}
 			}

@@ -2192,13 +2192,18 @@ bool ytmusic_cache_write_sidecars(const ytmusic_track_t *track, const char *path
 
 static void mark_complete(const char *path, bool done) {
 	char marker[700];
-	if (snprintf(marker, sizeof(marker), "%s.done", path) >= (int)sizeof(marker)) {
+	char marker_inc[700];
+	if (snprintf(marker, sizeof(marker), "%s.done", path) >= (int)sizeof(marker) ||
+		snprintf(marker_inc, sizeof(marker_inc), "%s.incompleto", path) >= (int)sizeof(marker_inc)) {
 		return;
 	}
 	if (done) {
 		FILE *f = fopen(marker, "w");
 		if (f) fclose(f);
+		remove(marker_inc);
 	} else {
+		FILE *f = fopen(marker_inc, "w");
+		if (f) fclose(f);
 		remove(marker);
 	}
 }
@@ -2639,7 +2644,7 @@ static void prune_playback_cache(const char *keep_id) {
 		char *dot = strrchr(entry->d_name, '.');
 		if (!dot || (strcmp(dot, ".m4a") != 0 && strcmp(dot, ".tags") != 0 &&
 					 strcmp(dot, ".part") != 0 && strcmp(dot, ".jpg") != 0 &&
-					 strcmp(dot, ".done") != 0)) {
+					 strcmp(dot, ".done") != 0 && strcmp(dot, ".incompleto") != 0)) {
 			continue;
 		}
 		if (strncmp(entry->d_name, keep_id, 11) == 0 && entry->d_name[11] == '.') continue;
@@ -2677,7 +2682,7 @@ void ytmusic_cache_clear(void) {
 		}
 		char *dot = strrchr(entry->d_name, '.');
 		if (!dot || (strcmp(dot, ".m4a") != 0 && strcmp(dot, ".tags") != 0 && strcmp(dot, ".part") != 0 &&
-					 strcmp(dot, ".jpg") != 0 && strcmp(dot, ".done") != 0)) {
+					 strcmp(dot, ".jpg") != 0 && strcmp(dot, ".done") != 0 && strcmp(dot, ".incompleto") != 0)) {
 			continue;
 		}
 		char path[640];
@@ -2843,6 +2848,27 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 	}
 	prune_playback_cache(track->id);
 
+	if (ytmusic_cache_whole(final)) {
+		printf("ytmusic: %.11s: already complete in cache\n", track->id);
+		snprintf(path, path_size, "%s", final);
+		if (streaming && hook) {
+			hook->called = true;
+			if (hook->ready) hook->ready(final, hook->user);
+		}
+		return true;
+	}
+
+	if (!streaming && growfile_is_growing(final)) {
+		printf("ytmusic: %.11s: waiting for active stream to finish\n", track->id);
+		for (int wait_tick = 0; wait_tick < 300 && growfile_is_growing(final); wait_tick++) {
+			usleep(100 * 1000);
+		}
+		if (ytmusic_cache_whole(final)) {
+			snprintf(path, path_size, "%s", final);
+			return true;
+		}
+	}
+
 	char sources[YTMUSIC_SOURCES_MAX][YTMUSIC_SOURCE_MAX];
 	int count = play_sources(sources, YTMUSIC_SOURCES_MAX);
 	char last[192] = "";
@@ -2862,11 +2888,15 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 		uint64_t expected = 0;
 		source_label(sources[i], label, sizeof(label));
 		printf("ytmusic: %.11s: asking %s\n", track->id, label);
-		if (!resolve_via(sources[i], track->id, url, sizeof(url), NULL, NULL, 0, NULL, 0,
+		int source_duration = 0;
+		if (!resolve_via(sources[i], track->id, url, sizeof(url), &source_duration, NULL, 0, NULL, 0,
 						 &proxied, &expected, reason, sizeof(reason))) {
 			fprintf(stderr, "ytmusic: %.11s: %s had nothing (%s)\n", track->id, label,
 					reason[0] ? reason : "no reason given");
 			continue;
+		}
+		if (track->duration <= 0 && source_duration > 0) {
+			((ytmusic_track_t *)track)->duration = source_duration;
 		}
 		printf("ytmusic: %.11s: fetching from %s: %s\n", track->id, label, url);
 		// The loading card's bar: the total is what this source said the file
@@ -2914,6 +2944,7 @@ static bool download_for_playback(const ytmusic_track_t *track, char *path, size
 			}
 		} else {
 			remove(part);
+			mark_complete(final, false);
 		}
 		uint64_t downloaded = 0;
 		bool complete = false;
