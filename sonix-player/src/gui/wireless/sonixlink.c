@@ -810,23 +810,23 @@ void sonixlink_page_init(gui_config_t *cfg) {
 	// takes only the space it visibly occupies.
 	glyph = lv_image_create(container);
 	lv_image_set_src(glyph, &icon_sonixlink_page);
-	int icon_size = compact ? 96 : 200;
+	int icon_size = compact ? 52 : 200;
 	int source_side = LV_MAX((int)icon_sonixlink_page.header.w, (int)icon_sonixlink_page.header.h);
 	lv_obj_set_size(glyph, icon_size, icon_size);
 	lv_image_set_inner_align(glyph, LV_IMAGE_ALIGN_CENTER);
 	if (source_side > 0) {
 		lv_image_set_scale(glyph, (uint32_t)(LV_SCALE_NONE * icon_size / source_side));
 	}
-	lv_obj_set_style_margin_top(glyph, compact ? 8 : 40, 0);
+	lv_obj_set_style_margin_top(glyph, compact ? 4 : 40, 0);
 
 	status_label = lv_label_create(container);
 	lv_obj_set_width(status_label, lv_pct(100));
 	lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
 	lv_obj_add_style(status_label, &theme_style_text_dim, 0);
-	lv_obj_set_style_text_font(status_label, &font_ui_22, 0);
+	lv_obj_set_style_text_font(status_label, compact ? &font_ui_14 : &font_ui_22, 0);
 	lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_set_style_pad_hor(status_label, 4, 0);
-	lv_obj_set_style_margin_top(status_label, compact ? 8 : 20, 0);
+	lv_obj_set_style_margin_top(status_label, compact ? 6 : 20, 0);
 
 	// The notice says what is missing; these lead to where it is fixed. Two
 	// halves of one row, since either link will do.
@@ -835,7 +835,7 @@ void sonixlink_page_init(gui_config_t *cfg) {
 	lv_obj_set_size(links_row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_flex_flow(links_row, LV_FLEX_FLOW_ROW);
 	lv_obj_set_style_pad_column(links_row, 12, 0);
-	lv_obj_set_style_margin_top(links_row, compact ? 8 : 16, 0);
+	lv_obj_set_style_margin_top(links_row, compact ? 6 : 16, 0);
 	lv_obj_set_scrollable(links_row, false);
 	lv_obj_set_event_bubble(links_row, true);
 	lv_obj_t *wifi_half = settingsrow_add(links_row, "wi_fi", NULL, wifi_row_cb, NULL);
@@ -845,6 +845,9 @@ void sonixlink_page_init(gui_config_t *cfg) {
 	lv_obj_set_width(bluetooth_half, 1);
 	lv_obj_set_flex_grow(bluetooth_half, 1);
 	hide(links_row);
+	if (compact) {
+		lv_obj_set_scrollable(container, false);
+	}
 
 	page_timer = lv_timer_create(page_poll_cb, PAGE_POLL_MS, NULL);
 	lv_timer_pause(page_timer);
