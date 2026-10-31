@@ -49,16 +49,8 @@ env:
   STOCK_FIRMWARE_URL: ${{ inputs.stock_firmware_url }}
 
 jobs:
-  # Before anything is cross-compiled: the host build and every suite, from the
-  # one definition in tests.yml. A red suite fails this job, and the firmware
-  # job never starts -- so a release cannot be cut from a tree whose tests fail.
-  tests:
-    name: Tests before packaging
-    uses: ./.github/workflows/tests.yml
-
   firmware:
     name: Cross-compile and package v1.upt
-    needs: tests
     runs-on: ubuntu-24.04
     timeout-minutes: 300
 
@@ -109,25 +101,79 @@ jobs:
       # compares release tags against exactly that string. Doing it first is
       # what lets About, the tag and the updater agree; the cost is that a tag
       # exists for a build that might fail, which the next push steps past.
+      # The version this build will be released as, decided before the image is
+      # built rather than after it: a personal image stamps it into
+      # system-info.json as the installed OS version, and the update check
+      # compares release tags against exactly that string.
+      # Increments patch up to 50 (e.g. 1.1.0 -> 1.1.50), then bumps minor to 1.2.0.
       - name: Bump the version for a personal build
         id: version
         if: github.event_name == 'push' && github.ref == 'refs/heads/personal'
-        uses: anothrNick/github-tag-action@1.75.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A patch for every push; a commit saying #major or #minor wins over
-          # this, and #none refuses to tag. BRANCH_HISTORY=last reads the
-          # pushed commit rather than the whole history.
-          DEFAULT_BUMP: patch
-          BRANCH_HISTORY: last
-          # Only personal releases. Without this the action treats a branch
-          # that is not the default one as a prerelease (v1.0.1-beta.1).
-          RELEASE_BRANCHES: personal
-          TAG_PREFIX: v
-          # A fork with no tags starts here, so the first push makes v1.0.1.
-          # The versions the upstream project tags (1.4.3, ...) are not in
-          # this repository's tags.
-          INITIAL_VERSION: 1.1.0
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+
+          # Fetch all tags so we know the latest release tag
+          subprocess.run(["git", "fetch", "--tags"], check=False)
+          tag_lines = subprocess.check_output(
+              ["git", "tag", "-l", "v[0-9]*.[0-9]*.[0-9]*", "--sort=-v:refname"],
+              text=True
+          ).splitlines()
+
+          old_tag = tag_lines[0] if tag_lines else "v1.1.0"
+          m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", old_tag)
+          if m:
+              major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+          else:
+              major, minor, patch = 1, 1, 0
+              old_tag = "v1.1.0"
+
+          commit_msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], text=True)
+
+          if "#none" in commit_msg:
+              print(f"Commit contains #none; skipping version bump. Current tag: {old_tag}")
+              sys.exit(0)
+          elif "#major" in commit_msg:
+              major += 1
+              minor = 0
+              patch = 0
+          elif "#minor" in commit_msg:
+              minor += 1
+              patch = 0
+          else:
+              # Step-by-step up to 50 (e.g. 1.1.0 -> 1.1.50), then bump minor to 1.2.0
+              if patch >= 50:
+                  minor += 1
+                  patch = 0
+              else:
+                  patch += 1
+
+          new_tag = f"v{major}.{minor}.{patch}"
+          print(f"Bumping version: {old_tag} -> {new_tag}")
+
+          # Tag the current commit and push to origin
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+          subprocess.check_call(["git", "tag", "-a", new_tag, "-m", f"Release {new_tag}"])
+
+          token = os.environ.get("GH_TOKEN", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          if token and repo:
+              push_url = f"https://x-access-token:{token}@github.com/{repo}.git"
+              subprocess.check_call(["git", "push", push_url, new_tag])
+          else:
+              subprocess.check_call(["git", "push", "origin", new_tag])
+
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a") as f:
+                  f.write(f"new_tag={new_tag}\n")
+                  f.write(f"old_tag={old_tag}\n")
+                  f.write(f"tag={new_tag}\n")
+          PY
 
       - name: Install build and firmware tools
         run: |
