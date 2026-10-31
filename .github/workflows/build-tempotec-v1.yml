@@ -127,7 +127,7 @@ jobs:
           # A fork with no tags starts here, so the first push makes v1.0.1.
           # The versions the upstream project tags (1.4.3, ...) are not in
           # this repository's tags.
-          INITIAL_VERSION: 1.0.0
+          INITIAL_VERSION: 1.1.0
 
       - name: Install build and firmware tools
         run: |
