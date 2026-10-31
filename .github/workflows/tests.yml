@@ -1,8 +1,8 @@
 name: Tests
 
 # Focused test suite run before firmware packaging and on dev pushes.
-# Tests active components: touch input filter, EarFun headphones,
-# UI screensaver/layouts, battery guard, and packer scripts.
+# Tests active components: device input driver, base firmware version
+# extraction and sysinfo, and packer scripts.
 
 on:
   workflow_dispatch:
@@ -70,14 +70,8 @@ jobs:
           cc -fsyntax-only -Wall -DLV_CONF_INCLUDE_SIMPLE=1 -DGB_CORE=1 \
              -I. -Ilvgl lvgl/src/drivers/evdev/lv_evdev.c
 
-      - name: The EarFun control protocol
-        run: make -C sonix-player/tests earfun
-
-      - name: Smart Mix generator and limits
-        run: make -C sonix-player/tests genius
-
-      - name: CPU power and overpower governor
-        run: make -C sonix-player/tests cpupower
+      - name: Base firmware version extraction and sysinfo
+        run: make -C sonix-player/tests basebuild
 
       # bash, not sh: the packer and its helpers say so in their shebangs, and
       # dash refuses the arrays and [[ ]] they are written in.

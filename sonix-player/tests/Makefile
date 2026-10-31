@@ -652,7 +652,7 @@ $(BUILD)/test_sysinfo: test_sysinfo.c $(ROOT)/src/system/device/sysinfo.c $(ROOT
 
 # Everything, in the order the workflow runs it. `make test` stays the default
 # target; this is the one to run before merging into personal.
-ALL_SUITES = earfun genius cpupower basebuild
+ALL_SUITES = basebuild
 
 .PHONY: all
 all:

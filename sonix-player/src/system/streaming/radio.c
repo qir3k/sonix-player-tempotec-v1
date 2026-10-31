@@ -2176,6 +2176,27 @@ static bool radio_art_base(const char *url, char *out, size_t size) {
 	return true;
 }
 
+// The folder beside the one the station list lives in; it may not exist yet on
+// a card that has only ever played music.
+static bool radio_art_dir_make(const char *path) {
+	char dir[512];
+	snprintf(dir, sizeof(dir), "%s", path);
+	char *slash = strrchr(dir, '/');
+	if (!slash) {
+		return false;
+	}
+	*slash = '\0';
+	for (char *p = dir + 1; *p; p++) {
+		if (*p == '/') {
+			*p = '\0';
+			mkdir(dir, 0777);
+			*p = '/';
+		}
+	}
+	mkdir(dir, 0777);
+	return true;
+}
+
 // The cached icon for this address, whichever of the two shapes it was saved
 // as. The old ".img" spelling is deliberately not looked for: nothing could
 // decode it, so the station is better off downloading its icon once more than
@@ -2238,27 +2259,6 @@ bool radio_station_art_path(const char *favicon, char *out, size_t out_size) {
 	}
 	out[0] = '\0';
 	return radio_art_find(favicon, out, out_size);
-}
-
-// The folder beside the one the station list lives in; it may not exist yet on
-// a card that has only ever played music.
-static bool radio_art_dir_make(const char *path) {
-	char dir[512];
-	snprintf(dir, sizeof(dir), "%s", path);
-	char *slash = strrchr(dir, '/');
-	if (!slash) {
-		return false;
-	}
-	*slash = '\0';
-	for (char *p = dir + 1; *p; p++) {
-		if (*p == '/') {
-			*p = '\0';
-			mkdir(dir, 0777);
-			*p = '/';
-		}
-	}
-	mkdir(dir, 0777);
-	return true;
 }
 
 // Downloads an icon into the cache. Best effort in every sense: no icon, an
