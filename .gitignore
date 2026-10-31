@@ -51,6 +51,7 @@ subsonic-credentials.json.tmp
 sonix-player/tests/.build/
 sonix-player/tests/__pycache__/
 sonix-player/tools/__pycache__/
+sonix-packer/__pycache__/
 
 # The InnerTube key the build compiles in, read by sonix-player/Makefile.
 sonix-player/.ytmusic-key
