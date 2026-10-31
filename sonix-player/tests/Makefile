@@ -619,9 +619,19 @@ $(BUILD)/test_ytmusic_keyless: $(YTM_SRC) $(ROOT)/src/system/streaming/ytmusic.h
 		-DYTMUSIC_API_KEY='""' -DYTMUSIC_TEST_KEYLESS \
 		-o $@ $(YTM_SRC) $(LDFLAGS) $(LDLIBS)
 
+# The stock TempoTec release version and its separate Sonix metadata field.
+.PHONY: basebuild
+basebuild: $(BUILD)/test_sysinfo
+	python3 test_base_build.py
+	$(BUILD)/test_sysinfo
+
+$(BUILD)/test_sysinfo: test_sysinfo.c $(ROOT)/src/system/device/sysinfo.c $(ROOT)/src/system/device/sysinfo.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DHOST_BUILD -o $@ test_sysinfo.c $(ROOT)/src/system/device/sysinfo.c $(LDFLAGS) $(LDLIBS)
+
 # Everything, in the order the workflow runs it. `make test` stays the default
 # target; this is the one to run before merging into personal.
-ALL_SUITES = earfun genius cpupower
+ALL_SUITES = earfun genius cpupower basebuild
 
 .PHONY: all
 all:

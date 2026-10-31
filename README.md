@@ -11,6 +11,7 @@ Sonix Player for the TempoTec Variations V1 follows a clear lineage: **[Jepl4r's
 - **Streaming that behaves like the local library** — Tidal, Qobuz, Podcasts, Radio and YouTube Music share one region list (Worldwide by default), one sleep timer, one favourites mark, one illustration of lists and one set of download pages.
 - **Bluetooth** — LDAC quality settings, AirPods battery and noise control, and EarFun earbuds over the GAIA serial protocol.
 - **Useful diagnostics** — slow GUI event-loop passes are logged with timing and callback context to help investigate pauses and lag ([log details](docs/collecting-logs.md#the-interfaces-own-timing-ui-lines)).
+- **TempoTec base version** — Settings → System → About shows the official base firmware release version (e.g. `1.2` or `1.3`), read from the stock firmware's product configuration.
 
 The firmware builder starts with an official V1 update package, replaces the stock music player and interface with Sonix, then repackages the update as `v1.upt`.
 
@@ -131,6 +132,8 @@ Only attempt this on a TempoTec Variations V1. Read the warning above before pro
 2. Download `v1.upt` and `v1_md5.txt` together from the personal release in this repository, and check that its build report names the intended commit. Copy both files to the root of a microSD card supported by the device.
 3. Charge the player adequately, insert the card and start the device's built-in firmware update process. Menu names vary by stock firmware version; follow the device's on-screen instructions and do not interrupt the update.
 4. If you want to restore stock firmware, put the original vendor `v1.upt` and its matching checksum file at the card root and use the same update process.
+
+The build workflow defaults to the supplied V1 1.3 stock archive; an optional workflow URL selects a different stock image. See [stock firmware input](sonix-packer/firmware-input/README.md) for local preparation. The 1.3 archive has been inspected, but a Sonix image based on it has not been verified on hardware.
 
 The package builder is designed to preserve the stock `xImage` kernel and leave the existing update/recovery path in place. This is checked during the build, but it is **not** a guarantee that recovery will work on every device or in every failure case.
 
