@@ -131,41 +131,49 @@ jobs:
               major, minor, patch = 1, 1, 0
               old_tag = "v1.1.0"
 
-          commit_msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], text=True)
+          # If HEAD is already tagged with a matching version tag, reuse it
+          head_tags = subprocess.check_output(
+              ["git", "tag", "--points-at", "HEAD", "v[0-9]*.[0-9]*.[0-9]*"],
+              text=True
+          ).splitlines()
 
-          if "#none" in commit_msg:
-              print(f"Commit contains #none; skipping version bump. Current tag: {old_tag}")
-              sys.exit(0)
-          elif "#major" in commit_msg:
-              major += 1
-              minor = 0
-              patch = 0
-          elif "#minor" in commit_msg:
-              minor += 1
-              patch = 0
+          if head_tags:
+              new_tag = head_tags[0]
+              old_tag = new_tag
+              print(f"HEAD is already tagged: {new_tag}")
           else:
-              # Step-by-step up to 50 (e.g. 1.1.0 -> 1.1.50), then bump minor to 1.2.0
-              if patch >= 50:
+              commit_msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], text=True)
+
+              if "#major" in commit_msg:
+                  major += 1
+                  minor = 0
+                  patch = 0
+              elif "#minor" in commit_msg:
                   minor += 1
                   patch = 0
               else:
-                  patch += 1
+                  # Step-by-step up to 50 (e.g. 1.1.0 -> 1.1.50), then bump minor to 1.2.0
+                  if patch >= 50:
+                      minor += 1
+                      patch = 0
+                  else:
+                      patch += 1
 
-          new_tag = f"v{major}.{minor}.{patch}"
-          print(f"Bumping version: {old_tag} -> {new_tag}")
+              new_tag = f"v{major}.{minor}.{patch}"
+              print(f"Bumping version: {old_tag} -> {new_tag}")
 
-          # Tag the current commit and push to origin
-          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
-          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
-          subprocess.check_call(["git", "tag", "-a", new_tag, "-m", f"Release {new_tag}"])
+              # Tag the current commit and push to origin
+              subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+              subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+              subprocess.check_call(["git", "tag", "-a", new_tag, "-m", f"Release {new_tag}"])
 
-          token = os.environ.get("GH_TOKEN", "")
-          repo = os.environ.get("GITHUB_REPOSITORY", "")
-          if token and repo:
-              push_url = f"https://x-access-token:{token}@github.com/{repo}.git"
-              subprocess.check_call(["git", "push", push_url, new_tag])
-          else:
-              subprocess.check_call(["git", "push", "origin", new_tag])
+              token = os.environ.get("GH_TOKEN", "")
+              repo = os.environ.get("GITHUB_REPOSITORY", "")
+              if token and repo:
+                  push_url = f"https://x-access-token:{token}@github.com/{repo}.git"
+                  subprocess.check_call(["git", "push", push_url, new_tag])
+              else:
+                  subprocess.check_call(["git", "push", "origin", new_tag])
 
           gh_out = os.environ.get("GITHUB_OUTPUT")
           if gh_out:
