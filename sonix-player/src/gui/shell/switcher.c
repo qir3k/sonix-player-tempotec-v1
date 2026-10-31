@@ -822,6 +822,9 @@ void back_btn_init(gui_config_t *cfg) {
 	back_btn = lv_btn_create(lv_layer_top());
 	back_btn_size = bp_header_button_size();
 	lv_obj_set_size(back_btn, back_btn_size, back_btn_size);
+	if (bp_is_tempotec_v1()) {
+		lv_obj_set_ext_click_area(back_btn, 8); // nothing beside it to collide with
+	}
 	// Bare chevron, no disc behind it. The button stays the full size so it is
 	// still an easy target; it just does not draw itself.
 	lv_obj_set_style_bg_opa(back_btn, LV_OPA_TRANSP, 0);

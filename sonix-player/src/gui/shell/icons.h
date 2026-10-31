@@ -263,4 +263,7 @@ extern const lv_image_dsc_t icon_menu_metronome;
 // svg and generator entry exist, so a regeneration can take it over.
 extern const lv_image_dsc_t icon_plug;
 
+extern const lv_image_dsc_t icon_battery_warning;
+extern const lv_image_dsc_t icon_sd_card;
+
 #endif // ICONS_H

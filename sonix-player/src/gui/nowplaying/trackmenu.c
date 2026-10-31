@@ -1,3 +1,4 @@
+#include "src/gui/nowplaying/coversearch.h"
 #include "trackmenu.h"
 
 #include <stdio.h>
@@ -1350,6 +1351,12 @@ static void keep_on_card_cb(void *user) {
 	}
 }
 
+// Looks the album up online for a cover to keep in its folder.
+static void find_cover_cb(void *user) {
+	(void)user;
+	coversearch_start();
+}
+
 static void open_settings_cb(void *user) {
 	(void)user;
 	player_sheet_close(false);
@@ -1403,6 +1410,7 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"add_to_playlist", add_to_playlist_cb, NULL},
 		{"show_album", open_album_cb, NULL},
 		{"show_artist", open_artist_cb, NULL},
+		{"trackmenu_find_cover", find_cover_cb, NULL},
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},
 	};
@@ -1416,6 +1424,7 @@ void trackmenu_open(lv_obj_t *anchor) {
 		{"smartmix_start", start_genius_cb, NULL},
 		{"add_to_playlist", add_to_playlist_cb, NULL},
 		{"show_album", open_album_cb, NULL},
+		{"trackmenu_find_cover", find_cover_cb, NULL},
 		{"find_artwork", find_artwork_cb, NULL},
 		{"details", open_details_cb, NULL},
 		{"settings", open_settings_cb, NULL},

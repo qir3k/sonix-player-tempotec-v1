@@ -27,6 +27,10 @@ void player_refresh_artist(void);
 // brings their page in when it is the file playing.
 void player_lyrics_reload(const char *path);
 
+// True while the player is on a file of the card (not a stream, an episode, a
+// book or another source), which is what has tags and a folder to search for.
+bool player_playing_local_file(void);
+
 // Reads the artwork of what is playing again, once a cover has been written
 // beside it: the sleeve on screen belongs to the old picture, and the loader's
 // answer to "the same picture?" would be about a path that now holds another.

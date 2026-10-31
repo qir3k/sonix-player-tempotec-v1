@@ -1,3 +1,5 @@
+#include <stdlib.h>
+#include "src/system/device/usb.h"
 #include "gridpage.h"
 
 #include "lvgl/lvgl.h"
@@ -627,6 +629,18 @@ void gridpage_replace_entries(lv_obj_t *grid, gui_config_t *cfg, const grid_entr
 	lv_obj_update_layout(grid);
 }
 
+// What the empty panel was built with, so it can go back to saying "scan"
+// after it has said "no card", and the check that waits for the card.
+typedef struct {
+	const lv_image_dsc_t *icon;
+	const char *text;
+	lv_timer_t *card_timer;
+	void (*card_back)(void);
+} empty_panel_t;
+
+// How often a panel saying "no card" looks for the card again.
+#define CARD_CHECK_MS 1000
+
 lv_obj_t *gridpage_empty_panel(lv_obj_t *screen, gui_config_t *cfg, const lv_image_dsc_t *icon, const char *text,
 							   lv_event_cb_t scan_cb) {
 	const bool compact = compact_grid();
@@ -694,7 +708,61 @@ lv_obj_t *gridpage_empty_panel(lv_obj_t *screen, gui_config_t *cfg, const lv_ima
 	lv_obj_set_style_text_color(button_label, theme_on_accent(), 0);
 	lv_obj_center(button_label);
 
+	empty_panel_t *state = calloc(1, sizeof(*state));
+	if (state) {
+		state->icon = icon;
+		state->text = text;
+	}
+	lv_obj_set_user_data(panel, state);
+
 	return panel;
+}
+
+// The panel's picture, line and button, in the order gridpage_empty_panel()
+// creates them. The picture keeps the box the compact layout gave it: both
+// glyphs it shows are drawn at the same 128 px.
+static void empty_panel_say(lv_obj_t *panel, const lv_image_dsc_t *icon, const char *text, bool button) {
+	lv_image_set_src(lv_obj_get_child(panel, 0), icon);
+	lv_label_set_text(lv_obj_get_child(panel, 1), tr(text));
+	lv_obj_set_hidden(lv_obj_get_child(panel, 2), !button);
+}
+
+static void card_check_cb(lv_timer_t *timer) {
+	lv_obj_t *panel = lv_timer_get_user_data(timer);
+	empty_panel_t *state = lv_obj_get_user_data(panel);
+	// Only while the panel is up on the page on show; a page left behind looks
+	// again when it is opened.
+	if (!state || lv_obj_is_hidden(panel) || lv_obj_get_screen(panel) != lv_screen_active()) {
+		lv_timer_pause(timer);
+		return;
+	}
+	if (gui_card_available()) {
+		lv_timer_pause(timer);
+		if (state->card_back) {
+			state->card_back();
+		}
+	}
+}
+
+void gridpage_show_no_card(lv_obj_t *grid, lv_obj_t *panel, void (*card_back)(void)) {
+	if (grid) {
+		lv_obj_set_hidden(grid, true);
+	}
+	if (!panel) {
+		return;
+	}
+	empty_panel_say(panel, &icon_sd_card, usb_storage_active() ? "usb_storage_shared" : "sd_card_missing", false);
+	lv_obj_set_hidden(panel, false);
+
+	empty_panel_t *state = lv_obj_get_user_data(panel);
+	if (!state) {
+		return;
+	}
+	state->card_back = card_back;
+	if (!state->card_timer) {
+		state->card_timer = lv_timer_create(card_check_cb, CARD_CHECK_MS, panel);
+	}
+	lv_timer_resume(state->card_timer);
 }
 
 void gridpage_show_empty(lv_obj_t *grid, lv_obj_t *panel, bool empty) {
@@ -706,6 +774,15 @@ void gridpage_show_empty(lv_obj_t *grid, lv_obj_t *panel, bool empty) {
 		}
 	}
 	if (panel) {
+		// Back to the scan panel it was built as, should it have been saying
+		// that the card is missing.
+		empty_panel_t *state = lv_obj_get_user_data(panel);
+		if (state) {
+			if (state->card_timer) {
+			lv_timer_pause(state->card_timer);
+			}
+			empty_panel_say(panel, state->icon, state->text, true);
+		}
 		if (empty) {
 			// The accent may have changed since the panel was built.
 			lv_obj_t *button = lv_obj_get_child(panel, 2);

@@ -252,6 +252,12 @@ void http_stream_wake(http_stream_t *st);
 // both use this file and must not overwrite each other's answer.
 const char *http_last_error(void);
 
+// Text added after the user agent of the requests THIS thread makes next, such
+// as " (me@example.org)": MusicBrainz asks for a way to reach whoever is
+// calling it. Control characters are dropped. NULL or "" takes it away again;
+// other threads, and the radio streams, never carry it.
+void http_set_user_agent_suffix(const char *suffix);
+
 // Percent-encodes `in` into `out` for use inside a URL path segment or query
 // value. Returns out.
 char *http_url_encode(const char *in, char *out, size_t out_size);

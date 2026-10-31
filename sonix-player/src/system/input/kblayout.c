@@ -154,6 +154,21 @@ static const layout_info_t layouts[KB_LAYOUT_COUNT] = {
 							  "\xd0\xa6\xd0\xa7\xd0\xa8\xd0\xa9",
 							  "\xd0\xac\xd0\xae\xd0\xaf"},
 							 "Ukrainian"},
+	// QWERTZ, as Czech keyboards are. The diacritics come from holding the base
+	// letter, and a Czech phone keypad puts each of them on its base letter's
+	// key.
+	[KB_LAYOUT_CZECH] = {"\xc4\x8c"
+						 "e\xc5\xa1tina",
+						 {"qwertzuiop", "asdfghjkl", "yxcvbnm"},
+						 {"QWERTZUIOP", "ASDFGHJKL", "YXCVBNM"},
+						 {".,?!'", "abc\xc3\xa1\xc4\x8d", "def\xc4\x8f\xc3\xa9\xc4\x9b", "ghi\xc3\xad", "jkl",
+						  "mno\xc5\x88\xc3\xb3", "pqrs\xc5\x99\xc5\xa1", "tuv\xc5\xa5\xc3\xba\xc5\xaf",
+						  "wxyz\xc3\xbd\xc5\xbe"},
+						 {".,?!'", "ABC\xc3\x81\xc4\x8c", "DEF\xc4\x8e\xc3\x89\xc4\x9a", "GHI\xc3\x8d", "JKL",
+						  "MNO\xc5\x87\xc3\x93", "PQRS\xc5\x98\xc5\xa0", "TUV\xc5\xa4\xc3\xc5\xae",
+						  "WXYZ\xc3\x9d\xc5\xbd"},
+						 "\xc4\x8c"
+						 "e\xc5\xa1tina"},
 };
 
 // The letters a held key offers, the way a phone keyboard does: one entry per
@@ -166,24 +181,30 @@ static const struct {
 } VARIANTS[] = {
 	{"a", "\xc3\xa0\xc3\xa1\xc3\xa2\xc3\xa4\xc3\xa6\xc3\xa3\xc3\xa5\xc4\x81\xc4\x85"}, // à á â ä æ ã å ā ą
 	{"A", "\xc3\x80\xc3\x81\xc3\x82\xc3\x84\xc3\x86\xc3\x83\xc3\x85\xc4\x80\xc4\x84"}, // À Á Â Ä Æ Ã Å Ā Ą
-	{"c", "\xc3\xa7\xc4\x87\xc4\x8d"},												   // ç ć č
-	{"C", "\xc3\x87\xc4\x86\xc4\x8c"},												   // Ç Ć Č
-	{"e", "\xc3\xa8\xc3\xa9\xc3\xaa\xc3\xab\xc4\x93\xc4\x97\xc4\x99"},				   // è é ê ë ē ė ę
-	{"E", "\xc3\x88\xc3\x89\xc3\x8a\xc3\x8b\xc4\x92\xc4\x96\xc4\x98"},				   // È É Ê Ë Ē Ė Ę
+	{"c", "\xc3\xa7\xc4\x87\xc4\x8d"},
+	{"d", "\xc4\x8f"},												   // ç ć č
+	{"C", "\xc3\x87\xc4\x86\xc4\x8c"},
+	{"D", "\xc4\x8e"},												   // Ç Ć Č
+	{"e", "\xc3\xa8\xc3\xa9\xc3\xaa\xc3\xab\xc4\x93\xc4\x97\xc4\x99\xc4\x9b"},				   // è é ê ë ē ė ę
+	{"E", "\xc3\x88\xc3\x89\xc3\x8a\xc3\x8b\xc4\x92\xc4\x96\xc4\x98\xc4\x9a"},				   // È É Ê Ë Ē Ė Ę
 	{"i", "\xc3\xac\xc3\xad\xc3\xae\xc3\xaf\xc4\xab\xc4\xaf"},						   // ì í î ï ī į
 	{"I", "\xc3\x8c\xc3\x8d\xc3\x8e\xc3\x8f\xc4\xaa\xc4\xae"},						   // Ì Í Î Ï Ī Į
 	{"l", "\xc5\x82"},																   // ł
 	{"L", "\xc5\x81"},																   // Ł
-	{"n", "\xc3\xb1\xc5\x84"},														   // ñ ń
-	{"N", "\xc3\x91\xc5\x83"},														   // Ñ Ń
+	{"n", "\xc3\xb1\xc5\x84\xc5\x88"},														   // ñ ń
+	{"N", "\xc3\x91\xc5\x83\xc5\x87"},														   // Ñ Ń
 	// ó first, not third: this is a Polish player, and a held O that offers an
 	// oe-ligature before the accent Poles type every day is the wrong default.
 	{"o", "\xc3\xb3\xc3\xb2\xc3\xb4\xc3\xb6\xc3\xb5\xc3\xb8\xc5\x8d\xc5\x93"},		   // ó ò ô ö õ ø ō œ
 	{"O", "\xc3\x93\xc3\x92\xc3\x94\xc3\x96\xc3\x95\xc3\x98\xc5\x8c\xc5\x92"},		   // Ó Ò Ô Ö Õ Ø Ō Œ
+	{"r", "\xc5\x99"},
 	{"s", "\xc3\x9f\xc5\x9b\xc5\xa1"},												   // ß ś š
+	{"R", "\xc5\x98"},
 	{"S", "\xc5\x9a\xc5\xa0"},														   // Ś Š
-	{"u", "\xc3\xb9\xc3\xba\xc3\xbb\xc3\xbc\xc5\xab"},								   // ù ú û ü ū
-	{"U", "\xc3\x99\xc3\x9a\xc3\x9b\xc3\x9c\xc5\xaa"},								   // Ù Ú Û Ü Ū
+	{"t", "\xc5\xa5"},
+	{"u", "\xc3\xb9\xc3\xba\xc3\xbb\xc3\xbc\xc5\xab\xc5\xaf"},								   // ù ú û ü ū
+	{"T", "\xc5\xa4"},
+	{"U", "\xc3\x99\xc3\x9a\xc3\x9b\xc3\x9c\xc5\xaa\xc5\xae"},								   // Ù Ú Û Ü Ū
 	{"y", "\xc3\xbf\xc3\xbd"},														   // ÿ ý
 	{"Y", "\xc5\xb8\xc3\x9d"},														   // Ÿ Ý
 	// ż first: it is the one a Polish keyboard exists to type, and ź used to
@@ -200,7 +221,7 @@ static const struct {
 
 // The config file keeps names, not indices.
 static const char *const layout_keys[KB_LAYOUT_COUNT] = {"english", "italian", "german",     "spanish",   "french",
-														 "russian", "dutch",   "polish",     "portuguese", "ukrainian"};
+														 "russian", "dutch",   "polish",     "portuguese", "ukrainian", "czech"};
 
 static uint8_t in_use[KB_LAYOUT_COUNT];
 static uint8_t in_use_n;
@@ -360,6 +381,9 @@ static const char *const ACCENTS_FRENCH =
 // Portuguese: the cedilla and the tilted vowels first.
 static const char *const ACCENTS_PORTUGUESE =
 	"\xc3\xa7\xc3\xa3\xc3\xb5\xc3\xa1\xc3\xa9\xc3\xad\xc3\xb3\xc3\xba\xc3\xa2\xc3\xea\xc3\xb4"; // ç ã õ á é í ó ú â ê ô
+// Czech: acute, háček and ring above.
+static const char *const ACCENTS_CZECH =
+	"\xc3\xa1\xc4\x8d\xc4\x8f\xc3\xa9\xc4\x9b\xc3\xad\xc5\x88\xc3\xb3\xc5\x99\xc5\xa1\xc5\xa5\xc3\xba\xc5\xaf\xc3\xbd\xc5\xbe";
 // Italian: the vowels a grave accent strip buries.
 static const char *const ACCENTS_ITALIAN = "\xc3\xa0\xc3\xa8\xc3\xa9\xc3\xac\xc3\xb2\xc3\xb9"; // à è é ì ò ù
 // And the ones the western European languages use, which English reads as the
@@ -384,6 +408,8 @@ static const char *accents_for(kblayout_t layout) {
 		return ACCENTS_PORTUGUESE;
 	case KB_LAYOUT_ITALIAN:
 		return ACCENTS_ITALIAN;
+	case KB_LAYOUT_CZECH:
+		return ACCENTS_CZECH;
 	case KB_LAYOUT_ENGLISH:
 	case KB_LAYOUT_DUTCH:
 	case KB_LAYOUT_RUSSIAN:
@@ -606,6 +632,15 @@ kblayout_t kblayout_others_at(int position) {
 kblayout_t kblayout_default(void) {
 	load();
 	return in_use_n ? (kblayout_t)in_use[0] : KB_LAYOUT_ENGLISH;
+}
+
+void kblayout_language_changed(void) {
+	const char *on = config_get("keyboard", "layouts", "");
+	const char *off = config_get("keyboard", "layouts_off", "");
+	if ((on && on[0]) || (off && off[0])) {
+		return;
+	}
+	loaded = false;
 }
 
 bool kblayout_is_in_use(kblayout_t layout) {

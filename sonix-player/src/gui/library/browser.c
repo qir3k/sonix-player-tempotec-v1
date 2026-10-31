@@ -1,3 +1,4 @@
+#include "src/system/library/folderorder.h"
 #include "browser.h"
 
 #include <dirent.h>
@@ -133,6 +134,7 @@ static gui_config_t *config;
 typedef struct {
 	uint32_t name_offset; // what the row says
 	uint32_t file_offset; // what gets appended to the folder path
+	folder_place_t place; // where a track sits on its record
 	uint8_t is_dir;
 } entry_t;
 
@@ -219,6 +221,7 @@ static bool listing_add(listing_t *list, const char *name, const char *file, boo
 	}
 
 	list->entries[list->count].is_dir = is_dir ? 1 : 0;
+	memset(&list->entries[list->count].place, 0, sizeof(list->entries[list->count].place));
 	list->count++;
 
 	return true;
@@ -240,6 +243,11 @@ static int entry_cmp(const void *a, const void *b) {
 
 	if (ea->is_dir != eb->is_dir) {
 		return ea->is_dir ? -1 : 1;
+	}
+
+	int by_place = folderorder_cmp(&ea->place, &eb->place);
+	if (by_place) {
+		return by_place;
 	}
 
 	const char *fa = sort_pool + ea->file_offset;
@@ -289,6 +297,37 @@ static void adopt_listing(void);
 static bool reader_has_result(void);
 static bool reader_busy(void);
 static void row_update_selection(row_t *row);
+static void listing_place_tracks(const char *path, listing_t *list) {
+	size_t files = 0;
+	for (size_t i = 0; i < list->count; i++) {
+		files += list->entries[i].is_dir ? 0 : 1;
+	}
+	if (files == 0) {
+		return;
+	}
+
+	const char **names = malloc(files * sizeof(*names));
+	size_t *index = malloc(files * sizeof(*index));
+	folder_place_t *places = malloc(files * sizeof(*places));
+	if (names && index && places) {
+		size_t n = 0;
+		for (size_t i = 0; i < list->count; i++) {
+		if (!list->entries[i].is_dir) {
+			names[n] = list->pool + list->entries[i].file_offset;
+			index[n] = i;
+			n++;
+		}
+		}
+		folderorder_places(path, names, n, true, places);
+		for (size_t i = 0; i < n; i++) {
+			list->entries[index[i]].place = places[i];
+		}
+	}
+	free(names);
+	free(index);
+	free(places);
+}
+
 static bool list_directory(const char *path, listing_t *out, cue_sheet_t *sheets, char (*claims)[512]);
 
 static void row_show_glyph(row_t *row, bool is_dir) {
@@ -789,7 +828,7 @@ static void gather_done_cb(void *arg) {
 	case SEND_QUEUE: {
 		int queued = 0;
 		for (int i = 0; i < g->count; i++) {
-			queued += playlist_insert_next(g->paths[i]) ? 1 : 0;
+			queued += playlist_enqueue(g->paths[i]) ? 1 : 0;
 		}
 		if (queued > 0) {
 			// Written down now: the mirror on disk is otherwise refreshed only
@@ -1274,6 +1313,8 @@ static bool list_directory(const char *path, listing_t *out, cue_sheet_t *sheets
 	if (skipped > 0) {
 		fprintf(stderr, "browser: '%s' holds more than %d entries, %zu not shown\n", path, MAX_ENTRIES, skipped);
 	}
+
+	listing_place_tracks(path, out);
 
 	sort_pool = out->pool;
 	qsort(out->entries, out->count, sizeof(*out->entries), entry_cmp);

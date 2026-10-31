@@ -37,6 +37,7 @@ void settingsrow_title_realign(lv_obj_t *title);
 // layouts keep their original 56 px targets. New and migrated pages should use
 // settingsrow_place_corner_button() rather than repeating those constants.
 int settingsrow_corner_button_size(gui_config_t *cfg);
+void settingsrow_widen_corner_touch(lv_obj_t *button, gui_config_t *cfg);
 int settingsrow_corner_button_gap(gui_config_t *cfg);
 void settingsrow_place_corner_button(lv_obj_t *button, gui_config_t *cfg, int slot);
 
@@ -122,6 +123,12 @@ lv_obj_t *settingsrow_slider(lv_obj_t *parent, const char *name, int steps, lv_o
 
 // The same card with a switch on the right instead of a value.
 lv_obj_t *settingsrow_toggle(lv_obj_t *parent, const char *name, lv_obj_t **switch_out, lv_event_cb_t cb);
+
+// A switch as every page draws it, in the theme colours and with a touch area
+// larger than the switch. It changes on a tap, never at the end of a drag or a
+// scroll that started on it. cb, if given, gets LV_EVENT_VALUE_CHANGED with the
+// new state already set, as with a plain lv_switch.
+lv_obj_t *settingsrow_switch(lv_obj_t *parent, lv_event_cb_t cb);
 
 // Both on one card: the name and its switch on the top line, a stepped slider
 // (marks and all) with its value underneath. For an option whose "how long"

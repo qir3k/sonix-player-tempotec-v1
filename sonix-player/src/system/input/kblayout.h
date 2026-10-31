@@ -34,6 +34,7 @@ typedef enum {
 	KB_LAYOUT_POLISH,
 	KB_LAYOUT_PORTUGUESE,
 	KB_LAYOUT_UKRAINIAN,
+	KB_LAYOUT_CZECH,
 	KB_LAYOUT_COUNT,
 } kblayout_t;
 
@@ -71,6 +72,11 @@ kblayout_t kblayout_in_use_at(int position);
 int kblayout_others_count(void);
 kblayout_t kblayout_others_at(int position);
 kblayout_t kblayout_default(void);
+
+// The interface language has changed. While no layout has been chosen on the
+// settings page, the lists are worked out again from the new language: the
+// first boot reads them in English, before the language is picked.
+void kblayout_language_changed(void);
 
 // True while `layout` is one of the ones in use.
 bool kblayout_is_in_use(kblayout_t layout);

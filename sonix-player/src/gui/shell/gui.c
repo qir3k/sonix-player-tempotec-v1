@@ -1,3 +1,5 @@
+#include "src/gui/shell/lowbattery.h"
+#include "src/gui/nowplaying/coversearch.h"
 #include "gui.h"
 
 #include <pthread.h>
@@ -668,6 +670,7 @@ void gui_init(gui_config_t *cfg) {
 	audiobookscan_screen = lv_obj_create(NULL);
 	chapters_screen = lv_obj_create(NULL);
 	lyricsearch_screen = lv_obj_create(NULL);
+	coversearch_screen = lv_obj_create(NULL);
 	artworkpage_screen = lv_obj_create(NULL);
 	queue_screen = lv_obj_create(NULL);
 	details_screen = lv_obj_create(NULL);
@@ -816,6 +819,7 @@ void gui_init(gui_config_t *cfg) {
 	if (addons_enabled("autoeq")) {
 		peqautoeq_init(cfg); // the waveform entry on that page searches AutoEq profiles
 	}
+	coversearch_init(cfg); // before Music settings, which has its contact row
 	musicsettings_init(cfg);
 	search_init(cfg);
 	medialist_init(cfg);
@@ -868,6 +872,7 @@ void gui_init(gui_config_t *cfg) {
 		medialist_screen,  medialist_tracks_screen, medialist_albums_screen, audiobooks_screen, audiobooksettings_screen,
 		queue_screen,	  chapters_screen,		 details_screen,   audiobookcontrols_screen,
 		lyricsearch_screen,
+		coversearch_screen,
 		wireless_screen,
 		wifisettings_screen,
 		btsettings_screen, btaudio_screen,	 airpodspage_screen, earfunpage_screen, airplay_screen,   streaming_screen,
@@ -963,6 +968,7 @@ void gui_init(gui_config_t *cfg) {
 	// and time-zone setup), then the manual clock only when automatic setup is
 	// disabled or Wi-Fi is skipped.
 	welcome_init(cfg);
+	lowbattery_init(cfg);
 
 	// Ahead of everything else, and only on a device that has never been booted:
 	// the greeting. Its button opens the language picker; confirming that starts

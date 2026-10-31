@@ -326,6 +326,15 @@ int library_for_each_ordered(library_list_t kind, library_filter_t filter, const
 // False when the file is not in the index; `out` untouched then.
 bool library_track_title(const char *path, char *out, size_t out_size);
 
+// Where each of `count` paths sits on its record, as the scan stored it: the
+// album, the disc (1 when the file has no disc tag) and the track number (0
+// when it has none). `cb` is called once for every path the index holds, with
+// its position in `paths`, and never for one it does not. Called with the
+// index locked: `cb` must not call back into the library. Returns how many
+// were found.
+typedef void (*library_place_cb)(size_t index, const char *album, int disc, int track, void *user);
+size_t library_track_places(const char *const *paths, size_t count, library_place_cb cb, void *user);
+
 // An album is its name AND whose it is: two records called "Greatest Hits" by
 // two different artists are two albums. Whose is the album artist, the artist
 // on a file that has no album artist, and the folder on a file that has
@@ -383,6 +392,25 @@ bool library_track_names(const char *path, char *title_out, size_t title_size, c
 // that track's artist when it has none -- the name the album list shows. False
 // when the album has no tracks. `album` is an album value (see above).
 bool library_album_artist(const char *album, char *out, size_t size);
+
+// What the head of an album's page says about it: the artist it is credited
+// to (as library_album_artist() names it), the genre of its first track, and
+// its year -- the latest any of its tracks carries, the same year the Albums
+// list sorts it by. Empty strings and a year of 0 for what the tags do not
+// say. False when the album has no tracks. `album` is an album value.
+typedef struct {
+	char artist[256];
+	char genre[128];
+	int year;
+} library_album_info_t;
+bool library_album_info(const char *album, library_album_info_t *out);
+
+// The disc and the track number of every track of one album, in the order its
+// track list runs (by disc, then by track number), into disc[] and track[].
+// A track with no disc tag is on disc 1 and one with no number is track 0.
+// Either array may be NULL. Returns how many tracks there are, which can be
+// more than `max`: only the first `max` are written.
+int library_album_places(const char *album, uint16_t *disc, uint16_t *track, int max);
 
 // --- Audio quality ---
 //

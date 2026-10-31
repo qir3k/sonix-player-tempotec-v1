@@ -326,6 +326,19 @@ void sync_battery_from_sysfs(void) {
 
 char *read_battery_percent() { return battery_cache; }
 
+int read_battery_millivolts(void) {
+	if (g_battery_cfg && g_battery_cfg->battery_capacity_file) {
+		return -1;
+	}
+	char text[24];
+	if (!battery_source[0] || !read_sysfs_line(POWER_SUPPLY_DIR, battery_source, "voltage_now", text, sizeof(text)) ||
+		text[0] < '0' || text[0] > '9') {
+		return -1;
+	}
+	long microvolts = atol(text);
+	return microvolts > 0 ? (int)(microvolts / 1000) : -1;
+}
+
 // Set while something has deliberately stopped the charger -- DAC mode with
 // charging switched off. The hardware may still report a healthy charger on
 // the other end of the cable; what the user is told has to follow the choice
@@ -1205,7 +1218,26 @@ static void log_key_event(const char *node, const struct input_event *ev) {
 // and a hold sweeps the whole range in a few seconds.
 #define VOLUME_REPEAT_DELAY_MS 400
 #define VOLUME_REPEAT_PERIOD_MS 70
-#define VOLUME_STEP_PERCENT 1
+
+// How far one press of a volume key moves the volume, in percent (Settings >
+// More > Volume steps). Read by the key threads, written by the interface.
+static volatile int volume_step_percent = VOLUME_STEP_MIN;
+
+void input_set_volume_step(int percent) {
+	if (percent < VOLUME_STEP_MIN) {
+		percent = VOLUME_STEP_MIN;
+	}
+	if (percent > VOLUME_STEP_MAX) {
+		percent = VOLUME_STEP_MAX;
+	}
+	volume_step_percent = percent;
+}
+
+// One step up or down, as a signed change of the volume.
+static int volume_step_delta(int code) {
+	int step = volume_step_percent;
+	return code == KEY_VOLUMEUP ? step : -step;
+}
 
 // Hold the power key this long and it stops being a screen toggle: what the
 // hold does then is the power menu, or the power-off itself -- see
@@ -1222,7 +1254,7 @@ static uint32_t now_ms(void) {
 // reaches the stream itself, so synchronised, bluealsa passes it on to the
 // headphones, and separate, bluealsa attenuates on this side.
 static void apply_volume_step(int code) {
-	device_state_change_volume_percent(code == KEY_VOLUMEUP ? VOLUME_STEP_PERCENT : -VOLUME_STEP_PERCENT);
+	device_state_change_volume_percent(volume_step_delta(code));
 	gui_notify_volume(device_state_get_volume_percent());
 }
 
@@ -2341,7 +2373,7 @@ static void handle_bt_remote_key(const char *node, int code, bool usb) {
 	// here the headphones themselves are asking, so it is carried out.
 	case KEY_VOLUMEUP:
 	case KEY_VOLUMEDOWN:
-		device_state_change_volume_percent(code == KEY_VOLUMEUP ? VOLUME_STEP_PERCENT : -VOLUME_STEP_PERCENT);
+		device_state_change_volume_percent(volume_step_delta(code));
 		gui_notify_volume(device_state_get_volume_percent());
 		break;
 

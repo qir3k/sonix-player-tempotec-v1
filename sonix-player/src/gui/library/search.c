@@ -236,7 +236,7 @@ static void menu_genius_action(void *user) {
 // queue on disk is written now so a power-off does not lose the addition.
 static void menu_queue_action(void *user) {
 	(void)user;
-	if (menu_path[0] && playlist_insert_next(menu_path)) {
+	if (menu_path[0] && playlist_enqueue(menu_path)) {
 		device_state_queue_changed();
 		toast_success("added_to_the_queue");
 	}

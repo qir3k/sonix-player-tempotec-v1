@@ -691,6 +691,16 @@ static void music_recent_refresh(void) {
 }
 
 static void music_update_visibility(void) {
+	// No card, or the card at a computer: the index lives on it, so the page
+	// says so instead of offering tiles, shortcuts or a scan. Every theme gets
+	// the same notice, and the page comes back by itself with the card.
+	if (!gui_card_available()) {
+		if (tokyo_music_panel) {
+			lv_obj_set_hidden(tokyo_music_panel, true);
+		}
+		gridpage_show_no_card(tile_grid, empty_panel, music_update_visibility);
+		return;
+	}
 	bool tokyo_v1 = bp_is_tempotec_v1() && theme_uses_function_glyphs();
 	bool empty_library = !library_scan_running() && library_track_count() == 0;
 	if (tokyo_v1 && tokyo_music_panel) {

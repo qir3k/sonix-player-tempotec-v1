@@ -1428,7 +1428,7 @@ static void sel_queue_go(panel_t *p) {
 	sel_gather(p, &list);
 	int queued = 0;
 	for (int i = 0; i < list.count; i++) {
-		queued += playlist_insert_next(list.paths[i]) ? 1 : 0;
+		queued += playlist_enqueue(list.paths[i]) ? 1 : 0;
 	}
 	if (queued > 0) {
 		device_state_queue_changed();
@@ -2673,6 +2673,7 @@ static lv_obj_t *corner_button(lv_obj_t *parent, const lv_image_dsc_t *glyph, lv
 	lv_obj_t *btn = lv_btn_create(parent);
 	int size = settingsrow_corner_button_size(p->cfg);
 	lv_obj_set_size(btn, size, size);
+	settingsrow_widen_corner_touch(btn, p->cfg);
 	lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
 	lv_obj_set_style_border_width(btn, 0, 0);
 	lv_obj_set_style_shadow_width(btn, 0, 0);
@@ -3362,7 +3363,7 @@ static void play_menu_random_track_cb(lv_event_t *e) {
 		library_index_close(ix);
 	}
 
-	if (path[0] && playlist_insert_next(path)) {
+	if (path[0] && playlist_enqueue(path)) {
 		device_state_queue_changed();
 		toast_success("added_to_the_queue");
 	}
@@ -3580,7 +3581,7 @@ static void menu_queue_action(void *user) {
 	if (!menu_path[0]) {
 		return;
 	}
-	if (playlist_insert_next(menu_path)) {
+	if (playlist_enqueue(menu_path)) {
 		device_state_queue_changed();
 		toast_success("added_to_the_queue");
 	}

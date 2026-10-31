@@ -1,3 +1,5 @@
+#include "src/system/library/folderorder.h"
+#include <limits.h>
 #include "playlist.h"
 
 #include "src/system/core/config.h"
@@ -241,16 +243,63 @@ bool playlist_is_playable_file(const char *name) {
 // single folder.
 #define PLAYLIST_CUE_CLAIM_MAX 8
 
-static int path_cmp(const void *a, const void *b) {
-	const char *const *pa = a;
-	const char *const *pb = b;
-	// Two tracks of one cue sheet go in the order the record is in, not in the
-	// order their virtual names spell: "?track=10" sorts between 1 and 2.
+// A folder's track and its place on the record, while the folder is sorted.
+typedef struct {
+	char *path;
+	folder_place_t place;
+} placed_path_t;
+
+// The browser's order (browser.c, entry_cmp): by disc and track number, then
+// by name. Two tracks of one cue sheet go in the order the record is in, not
+// in the order their virtual names spell: "?track=10" sorts between 1 and 2.
+static int placed_path_cmp(const void *a, const void *b) {
+	const placed_path_t *pa = a;
+	const placed_path_t *pb = b;
+	int by_place = folderorder_cmp(&pa->place, &pb->place);
+	if (by_place) {
+		return by_place;
+	}
 	int by_track = 0;
-	if (cue_order_tracks(*pa, *pb, &by_track)) {
+	if (cue_order_tracks(pa->path, pb->path, &by_track)) {
 		return by_track;
 	}
-	return strcasecmp(*pa, *pb);
+	return strcasecmp(pa->path, pb->path);
+}
+
+// Sorts the folder just loaded into `paths`. Files are not opened for their
+// tags here -- this can run on the interface thread -- so a file the library
+// has not indexed has the place the browser read for it when it listed the
+// folder, or none, and goes by its name.
+static void sort_folder(const char *folder) {
+	if (entry_count < 2) {
+		return;
+	}
+	placed_path_t *placed = calloc(entry_count, sizeof(*placed));
+	if (!placed) {
+		return; // out of memory: the queue keeps the order the card gave
+	}
+	const char **names = malloc(entry_count * sizeof(*names));
+	folder_place_t *places = malloc(entry_count * sizeof(*places));
+	if (names && places) {
+		for (size_t i = 0; i < entry_count; i++) {
+			const char *slash = strrchr(paths[i], '/');
+			names[i] = slash ? slash + 1 : paths[i];
+		}
+		folderorder_places(folder, names, entry_count, false, places);
+	}
+	for (size_t i = 0; i < entry_count; i++) {
+		placed[i].path = paths[i];
+		if (names && places) {
+			placed[i].place = places[i];
+		}
+	}
+	qsort(placed, entry_count, sizeof(*placed), placed_path_cmp);
+	for (size_t i = 0; i < entry_count; i++) {
+		paths[i] = placed[i].path;
+	}
+	free(placed);
+	free(names);
+	free(places);
 }
 
 void playlist_clear(void) {
@@ -521,7 +570,7 @@ void playlist_load_folder(const char *folder, const char *selected_filename) {
 
 	closedir(dir);
 
-	qsort(paths, entry_count, sizeof(*paths), path_cmp);
+	sort_folder(folder);
 
 	// Point the current position at the selected file, defaulting to the first.
 	size_t start = 0;
@@ -683,6 +732,23 @@ bool playlist_insert_at(const char *path, int slot) {
 	custom_queue = true;
 	revision++;
 	return true;
+}
+
+bool playlist_enqueue_at_end(void) { return config_get_int("player", "queue_add_end", 0) != 0; }
+
+void playlist_set_enqueue_at_end(bool at_end) {
+	config_set_int("player", "queue_add_end", at_end ? 1 : 0);
+	config_save();
+}
+
+bool playlist_enqueue(const char *path) {
+	if (!playlist_enqueue_at_end()) {
+		return playlist_insert_next(path);
+	}
+	// A slot past the last appends: the end of the queue in playing order,
+	// which with shuffle on is the end of the order dealt. Ahead of playback
+	// unless the queue is empty, when the track simply becomes the queue.
+	return playlist_insert_at(path, INT_MAX);
 }
 
 bool playlist_is_custom(void) { return custom_queue; }

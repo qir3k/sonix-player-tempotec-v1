@@ -39,6 +39,17 @@
 // putting on the screen, not a log line.
 
 static __thread char last_error[192];
+static __thread char agent_suffix[130];
+
+void http_set_user_agent_suffix(const char *suffix) {
+	size_t w = 0;
+	for (; suffix && *suffix && w + 1 < sizeof(agent_suffix); suffix++) {
+		if ((unsigned char)*suffix >= ' ' && *suffix != 0x7f) {
+			agent_suffix[w++] = *suffix;
+		}
+	}
+	agent_suffix[w] = '\0';
+}
 
 // URL of the last hop of this thread's last successful request; see
 // http_last_final_url() in http.h.
@@ -766,14 +777,14 @@ static bool get_once(const url_t *u, const http_req_t *req, char **out, size_t *
 	int n = snprintf(request, sizeof(request),
 					 "%s %s HTTP/1.0\r\n"
 					 "Host: %s\r\n"
-					 "User-Agent: " HTTP_USER_AGENT "\r\n"
+					 "User-Agent: " HTTP_USER_AGENT "%s\r\n"
 					 "Accept: */*\r\n"
 					 "Accept-Encoding: identity\r\n"
 					 "Connection: close\r\n"
 					 "%s"
 					 "%s"
 					 "\r\n",
-					 method, u->path, host_header, body_headers, extra_headers ? extra_headers : "");
+					 method, u->path, host_header, agent_suffix, body_headers, extra_headers ? extra_headers : "");
 	// Compare the length against the buffer, not just against zero: snprintf
 	// truncates but returns what it would have written, so an over-long
 	// request would put bytes from past the end of the stack on the wire. It

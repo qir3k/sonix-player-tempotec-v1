@@ -1,3 +1,5 @@
+#include "src/system/input/kblayout.h"
+#include "src/gui/shell/keyboard.h"
 #include "language.h"
 
 #include "src/gui/board_profile.h"
@@ -120,6 +122,9 @@ static void pick_cb(lv_event_t *e) {
 	if (!lang_set(entries[index].name)) {
 		fonts_set_language(lang_current());
 	}
+	// The keyboard follows the language until a layout has been picked by hand.
+	kblayout_language_changed();
+	keyboard_refresh_layout();
 	paint_checks();
 	refresh_titles();
 	// The short power-menu actions can share their translation with another

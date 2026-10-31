@@ -434,6 +434,19 @@ build_one() {
 		warn "no /etc/ssl/cert.pem in the image: https streaming will refuse to connect."
 		warn "add Mozilla's bundle at assets/$MODEL_DIR/etc/ssl/cert.pem -- https://curl.se/ca/cacert.pem"
 	fi
+
+	# The stock wifi_on.sh copies this to /data/wpa_supplicant.conf the first
+	# time the radio is switched on. The stock V1 1.3 rootfs does not carry it
+	# (the HiBy player presumably wrote the config itself), and without it
+	# wpa_supplicant exits at once: wlan0 stays down and no network is ever
+	# listed. assets/V1 supplies a minimal one.
+	WPA_DEFAULT="$SQUASH_DIR/etc/wpa_supplicant_default.conf"
+	if [ -s "$WPA_DEFAULT" ]; then
+		say "    etc/wpa_supplicant_default.conf: present"
+	else
+		warn "no /etc/wpa_supplicant_default.conf in the image: Wi-Fi will never find a network."
+		warn "add one at assets/$MODEL_DIR/etc/wpa_supplicant_default.conf (ctrl_interface=/var/run/wpa_supplicant)"
+	fi
 	say ""
 
 	# ==========================================================================

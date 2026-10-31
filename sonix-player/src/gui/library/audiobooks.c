@@ -1347,6 +1347,15 @@ static void tokyo_glyphs_paint(void) {
 }
 
 static void section_refresh_theme(void) {
+	// The books and their index are on the card: without it the page says so,
+	// in every theme, and comes back by itself when the card does.
+	if (!gui_card_available()) {
+		if (tokyo_books_panel) {
+			lv_obj_set_hidden(tokyo_books_panel, true);
+		}
+		gridpage_show_no_card(section_grid, section_empty, section_refresh_theme);
+		return;
+	}
 	bool tokyo = bp_is_tempotec_v1() && theme_uses_function_glyphs();
 	if (tokyo && tokyo_books_panel) {
 		tokyo_glyphs_paint();
@@ -1964,10 +1973,6 @@ void audiobooks_init(gui_config_t *cfg) {
 	theme_register_refresh(section_refresh_theme);
 }
 
-void audiobooks_open(void) {
-	if (!gui_card_available()) {
-		gui_notify_no_card();
-		return;
-	}
-	switch_screen(audiobooks_screen);
-}
+// Opens with the card out or at a computer too: the page says so itself,
+// as Music does.
+void audiobooks_open(void) { switch_screen(audiobooks_screen); }

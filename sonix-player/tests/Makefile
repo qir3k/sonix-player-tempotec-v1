@@ -224,6 +224,15 @@ $(BUILD)/test_tagdate: $(TAGDATE_SRC) $(ROOT)/src/system/library/tagdate.h
 
 # LRCLIB search ranking, retry policy, free-text fallback and atomic sidecar
 # .lrc writes against a stubbed HTTP transport. Plain C, no LVGL.
+COVERART_SRC = test_coverart.c $(ROOT)/src/system/library/coverart.c $(ROOT)/src/system/core/json.c
+.PHONY: coverart
+coverart: $(BUILD)/test_coverart
+	$(BUILD)/test_coverart ../../sonix-packer/assets/V1/usr/resource/sonix/language
+
+$(BUILD)/test_coverart: $(COVERART_SRC) $(ROOT)/src/system/library/coverart.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(COVERART_SRC) $(LDFLAGS) $(LDLIBS)
+
 LRCLIB_SRC = test_lrclib.c $(ROOT)/src/system/core/json.c
 .PHONY: lrclib
 lrclib: $(BUILD)/test_lrclib
@@ -536,6 +545,18 @@ $(BUILD)/test_wifi_pages: $(WIFIPAGE_OBJ)
 $(BUILD)/test_lyricsearch: $(LYRICSEARCH_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
+COVERSEARCH_SRC = $(ROOT)/tests/ui/test_coverart_search.c $(ROOT)/src/gui/nowplaying/coversearch.c \
+            $(ROOT)/src/system/library/coverart.c $(ROOT)/src/system/core/json.c \
+            $(ROOT)/src/gui/shell/settingsrow.c \
+            $(ROOT)/src/gui/shell/theme.c $(ROOT)/src/gui/shell/icons.c \
+            $(ROOT)/src/gui/board_profile.c \
+            $(ROOT)/src/system/core/config.c $(ROOT)/src/system/core/lang.c
+COVERSEARCH_OBJ = $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(COVERSEARCH_SRC)) \
+            $(patsubst $(ROOT)/%.c,$(BUILD)/ui/%.o,$(UI_LVGL_SRC))
+
+$(BUILD)/test_coverart_search: $(COVERSEARCH_OBJ)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
 $(BUILD)/ui/%.o: $(ROOT)/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(UI_CPPFLAGS) $(UI_CFLAGS) -c $< -o $@
@@ -545,7 +566,7 @@ $(BUILD)/ui/lvgl/%.o: $(ROOT)/lvgl/%.c ui/lv_conf.h $(ROOT)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(UI_CPPFLAGS) $(filter-out -Werror,$(UI_CFLAGS)) -c $< -o $@
 
--include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(LYRICSEARCH_OBJ:.o=.d))
+-include $(sort $(UI_OBJ:.o=.d) $(SAVER_OBJ:.o=.d) $(WIFIPAGE_OBJ:.o=.d) $(LYRICSEARCH_OBJ:.o=.d) $(COVERSEARCH_OBJ:.o=.d))
 
 # Smart Mix track-count limits and traversal, with a memory-only graph fixture.
 GENIUS_SRC = test_genius.c $(ROOT)/src/system/library/genius.c
