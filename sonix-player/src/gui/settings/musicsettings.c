@@ -2683,11 +2683,13 @@ void musicsettings_init(gui_config_t *cfg) {
 	if (addons_enabled("lastfm")) {
 		lastfmsettings_init(cfg);
 		settingsrow_add(container, "lastfm", NULL, switch_screen_cb, lastfmsettings_screen());
-	coversearch_contact_row(container);
 	}
 	if (addons_enabled("listenbrainz")) {
 		listenbrainzsettings_init(cfg);
 		settingsrow_add(container, "listenbrainz", NULL, switch_screen_cb, listenbrainzsettings_screen());
+	}
+	if (addons_enabled("artwork")) {
+		coversearch_contact_row(container);
 	}
 
 	// Each of the three is a module of its own (Plugins -> Music features): off,
