@@ -1688,6 +1688,9 @@ static void run(const job_t *job, const char *waiting_text) {
 	}
 
 	start_worker();
+	if (job->kind == JOB_PLAY) {
+		player_pause_for_loading();
+	}
 	// No veil for playback: it starts right away and there is nothing to wait
 	// for.
 	if (job->kind != JOB_PLAY) {

@@ -492,6 +492,8 @@ void screensaver_set_enabled(bool on) {
 			drop_next();
 			drop_frame();
 		}
+	} else {
+		request_next();
 	}
 }
 
@@ -1156,6 +1158,9 @@ static void drag_cb(lv_event_t *e) {
 	if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
 		tracking = false;
 		if (!engaged) {
+			if (code == LV_EVENT_RELEASED) {
+				screensaver_hide();
+			}
 			return;
 		}
 		engaged = false;
@@ -1682,4 +1687,5 @@ void screensaver_init(gui_config_t *cfg) {
 	power_pause_in_standby(clock_timer);
 	theme_register_refresh(screensaver_refresh_theme);
 	screensaver_refresh_theme();
+	power_set_wake_hook(screensaver_prepare);
 }

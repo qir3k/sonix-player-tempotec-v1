@@ -1729,7 +1729,6 @@ void panel_touch_flush(void) {
 		fb_touch->read_cb(fb_touch, &discard);
 	}
 	lv_indev_wait_release(fb_touch);
-	lv_anim_delete(fb_touch, NULL);
 }
 
 void panel_touch_enable(bool enabled) {

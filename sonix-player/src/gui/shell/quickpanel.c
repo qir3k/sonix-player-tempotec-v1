@@ -543,11 +543,6 @@ static void refresh_audio_buttons(void);
 // every step, on a CPU that is also feeding the DAC.
 static void anim_y_cb(void *obj, int32_t v) { lv_obj_set_y((lv_obj_t *)obj, v); }
 
-// True when the sheet raised the status bar itself and so has to put it away
-// again. That happens exactly when the control centre is opened from the
-// player, the one page that hides the bar.
-static bool raised_topbar;
-
 // Restores whatever the page underneath had. Called when the sheet has finished
 // sliding away, not when it starts: the bar has to stay up for the whole slide,
 // or it flickers out from under a sheet still on screen.
@@ -558,11 +553,10 @@ static bool raised_topbar;
 // the bar would be hidden on that page a fifth of a second after it appeared,
 // taking the grabber under it with it.
 static void restore_topbar(void) {
-	if (raised_topbar) {
-		raised_topbar = false;
-		if (player_sheet_is_open()) {
-			topbar_set_hidden(true);
-		}
+	if (player_sheet_is_open()) {
+		topbar_set_hidden(true);
+	} else {
+		topbar_set_hidden(false);
 	}
 }
 
@@ -833,17 +827,9 @@ static void panel_prepare(void) {
 	lv_obj_set_hidden(veil, false);
 	lv_obj_move_foreground(veil);
 
-	// The player hides the status bar so artwork can run to the top edge. The
-	// control centre needs it back: the clock, battery and volume belong with
-	// these controls, and the sheet covers the artwork anyway while it is up.
-	if (topbar_is_hidden()) {
-		raised_topbar = true;
-		topbar_set_hidden(false);
-	}
-
-	// The bar is also restacked above the sheet, so clock, battery and volume
-	// stay readable with the control centre open.
-	topbar_bring_to_front();
+	// The control centre covers the screen; hide the status bar while it is up
+	// so the bar does not overlay the extended controls or buttons.
+	topbar_set_hidden(true);
 }
 
 // While the device is acting as a USB sound card, a Wi-Fi file server or a

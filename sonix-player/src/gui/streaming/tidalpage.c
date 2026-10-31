@@ -263,6 +263,11 @@ static void waiting_spinner_hide(void) {
 	busy_hide();
 }
 
+static void waiting_spinner_hide_async(void *user) {
+	(void)user;
+	waiting_spinner_hide();
+}
+
 static void busy_show(const char *text) {
 	(void)text;
 	if (!busy_layer) {
@@ -2071,6 +2076,7 @@ static bool track_is_playable(const char *path) {
 static void waiting_note_async(void *user) {
 	(void)user;
 	if (waiting_for_track) {
+		player_pause_for_loading();
 		waiting_spinner_active = true;
 		busy_show("loading");
 	}
@@ -2550,7 +2556,7 @@ static void queue_watch_cb(lv_timer_t *timer) {
 		if (index >= 0 && playlist_path_at(index, wanted, sizeof(wanted)) && !tidalcache_owns(wanted)) {
 			waiting_for_track = false;
 			waiting_track_id = 0;
-			gui_post(waiting_spinner_hide, NULL);
+			gui_post(waiting_spinner_hide_async, NULL);
 		}
 	}
 
@@ -3206,6 +3212,9 @@ static void run(const job_t *job, const char *waiting_text) {
 	}
 
 	start_worker();
+	if (job->kind == JOB_PLAY) {
+		player_pause_for_loading();
+	}
 	// Playback shows the same wait indicator as list requests when the caller
 	// knows a network load is ahead. Login has its own code-page spinner.
 	if (waiting_text && job->kind != JOB_LOGIN_BEGIN && job->kind != JOB_LOGIN_POLL) {

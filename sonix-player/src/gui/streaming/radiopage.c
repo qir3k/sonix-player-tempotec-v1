@@ -962,6 +962,7 @@ static void row_clicked_cb(lv_event_t *e) {
 	if (list_mode != LIST_CUSTOM) {
 		radio_set_list(stations, station_count);
 	}
+	player_pause_for_loading();
 	if (radio_play(&stations[index])) {
 		player_refresh_now_playing();
 		player_sheet_open(true);
@@ -1069,11 +1070,6 @@ static const flylo_station_t FLYLO_STATIONS[] = {
 static void list_reload_stored(void) {
 	term_count = 0;
 	station_count = 0;
-	// Only the built-in list has icons on their way; a page that is no longer
-	// that one has nothing to keep looking for.
-	if (list_mode != LIST_FLYLO) {
-		flylo_art_ticks = 0;
-	}
 
 	int max = (int)(sizeof(stations) / sizeof(stations[0]));
 	int n;
@@ -1136,11 +1132,11 @@ static void list_reload_stored(void) {
 	// own only when it has been played, and these have just appeared on a page.
 	// Asked for here, off this thread, and the rows look at the card again for
 	// the next few seconds so the pictures arrive without leaving the page.
-	if (list_mode == LIST_FLYLO && station_count > 0) {
-		const char *missing[FLYLO_STATION_COUNT];
+	if (station_count > 0) {
+		const char *missing[16];
 		char cached[512];
 		int n = 0;
-		for (int i = 0; i < station_count; i++) {
+		for (int i = 0; i < station_count && n < 16; i++) {
 			if (stations[i].favicon[0] &&
 				!radio_station_art_path(stations[i].favicon, cached, sizeof(cached))) {
 				missing[n++] = stations[i].favicon;
@@ -1298,6 +1294,22 @@ static void list_poll_cb(lv_timer_t *timer) {
 
 	station_count = appending ? station_count + got : got;
 	term_count = 0;
+
+	if (station_count > 0) {
+		const char *missing[16];
+		char cached[512];
+		int n = 0;
+		for (int i = 0; i < station_count && n < 16; i++) {
+			if (stations[i].favicon[0] &&
+				!radio_station_art_path(stations[i].favicon, cached, sizeof(cached))) {
+				missing[n++] = stations[i].favicon;
+			}
+		}
+		if (n > 0) {
+			radio_art_prefetch(missing, n);
+			flylo_art_ticks = 30;
+		}
+	}
 
 	list_rebuild_keep(appending);
 	set_message(station_count ? NULL : empty_stations_message());

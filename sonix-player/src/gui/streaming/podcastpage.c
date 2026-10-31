@@ -1507,6 +1507,9 @@ static void run_ex(const job_t *job, bool root) {
 	// The veil DOES cover the wait before an episode starts, and it stays up
 	// until job_done_cb takes it down, which is the moment playback has really
 	// begun -- a timed toast would leave before the download it is about.
+	if (job->kind == JOB_PLAY) {
+		player_pause_for_loading();
+	}
 	if (job->kind != JOB_FOLLOWED) {
 		busy_show_text(job->kind == JOB_PLAY);
 	}
@@ -1641,6 +1644,7 @@ static bool podcastpage_prepare_track(char *path, size_t path_size) {
 	// advances by itself onto another missing episode.
 	podcastcache_set_network_wanted(true);
 	waiting_for_episode = true;
+	player_pause_for_loading();
 	device_state_stop();
 	prefetch_urgent(path);
 	gui_post(downloading_note_async, NULL);

@@ -39,7 +39,7 @@ static const sysinfo_model_t MODELS[] = {
 		.update_stem = "v1",
 		.serial_prefix = "V1",
 		.pmic_charger = true,
-		.sgm31324_led = true,
+		.sgm31324_led = false,
 		.tap_wake = false,
 		.one_flank = true,
 		// The V1 kernel labels the physical next and previous keys in the

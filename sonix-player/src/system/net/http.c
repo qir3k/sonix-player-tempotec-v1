@@ -372,6 +372,7 @@ static void conn_close(conn_t *c) {
 		c->tls = NULL;
 	}
 	if (c->fd >= 0) {
+		shutdown(c->fd, SHUT_RDWR);
 		close(c->fd);
 		c->fd = -1;
 	}
@@ -1404,6 +1405,7 @@ void http_stream_close(http_stream_t *st) {
 		st->tls = NULL;
 	}
 	if (st->fd >= 0) {
+		shutdown(st->fd, SHUT_RDWR);
 		close(st->fd);
 		st->fd = -1;
 	}

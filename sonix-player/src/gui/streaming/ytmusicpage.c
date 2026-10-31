@@ -1479,6 +1479,7 @@ static void play_item_at(const ytmusic_item_t *items, int count, int index) {
 		return;
 	}
 	if (!begin_busy()) return;
+	player_pause_for_loading();
 	yt_fetching = true;
 	busy_show();
 	if (!start_transfer(&yt_queue_tracks[slot], slot)) {

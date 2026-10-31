@@ -6449,6 +6449,17 @@ void player_output_unplugged(const char *what) {
 	apply_playback_status(AUDIO_STATUS_PAUSED);
 }
 
+void player_pause_for_loading(void) {
+	if (radio_is_active()) {
+		radio_stop();
+		player_refresh_now_playing();
+	}
+	if (audio_get_status() == AUDIO_STATUS_PLAYING) {
+		audio_pause();
+		apply_playback_status(AUDIO_STATUS_PAUSED);
+	}
+}
+
 // A pause and not a stop, and for the same reason as the one above: the point
 // of falling asleep to something is finding it where it was in the morning.
 static void sleep_timer_cb(lv_timer_t *timer) {

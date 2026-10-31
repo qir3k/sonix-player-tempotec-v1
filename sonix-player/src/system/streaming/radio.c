@@ -2223,6 +2223,13 @@ static bool radio_art_dir_make(const char *path) {
 		return false;
 	}
 	*slash = '\0';
+	for (char *p = dir + 1; *p; p++) {
+		if (*p == '/') {
+			*p = '\0';
+			mkdir(dir, 0777);
+			*p = '/';
+		}
+	}
 	mkdir(dir, 0777);
 	return true;
 }

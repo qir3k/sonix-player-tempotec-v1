@@ -122,6 +122,10 @@ void player_aam_leftie_set(bool enabled);
 // that went away was the one in use; this only acts on the decision.
 void player_output_unplugged(const char *what);
 
+// Pauses whatever audio/radio is playing when loading/buffering begins,
+// freeing CPU resources and preventing stuttering while the network fetches.
+void player_pause_for_loading(void);
+
 // ---------------------------------------------------------------------------
 // The player as a sheet
 //

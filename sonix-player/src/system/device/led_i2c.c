@@ -51,6 +51,8 @@ static int unload_driver(void) {
 	return errno ? errno : EIO;
 }
 
+static int s_fail_count = 0;
+
 static void write_reg(unsigned char reg, unsigned char value) {
 	if (i2c_fd < 0) {
 		return;
@@ -58,6 +60,13 @@ static void write_reg(unsigned char reg, unsigned char value) {
 	unsigned char buf[2] = {reg, value};
 	if (write(i2c_fd, buf, sizeof(buf)) != (ssize_t)sizeof(buf)) {
 		fprintf(stderr, "led: i2c write reg 0x%02x failed\n", reg);
+		if (++s_fail_count >= 3) {
+			fprintf(stderr, "led: repeated i2c failures -- closing bus to prevent system freeze\n");
+			close(i2c_fd);
+			i2c_fd = -1;
+		}
+	} else {
+		s_fail_count = 0;
 	}
 }
 
