@@ -583,7 +583,7 @@ static void art_request_visible(void) {
 
 		slot_owner[free_slot] = row;
 		art_wake();
-		qobuzart_request(&podcast_art_owner, free_slot, row_cover_url[row], ROW_THUMB);
+		qobuzart_request(&podcast_art_owner, "podcast-cache", free_slot, row_cover_url[row], ROW_THUMB);
 	}
 }
 

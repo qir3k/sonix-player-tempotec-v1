@@ -236,6 +236,10 @@ static int scan(entry_t *out, int max, long *total_out) {
 		if (e->d_name[0] == '.') {
 			continue;
 		}
+		const char *img_ext = strrchr(e->d_name, '.');
+		if (img_ext && strcmp(img_ext, ".img") == 0) {
+			continue; // keep list artwork cached on card
+		}
 		char path[640];
 		if ((size_t)snprintf(path, sizeof(path), "%s/%s", cache_dir, e->d_name) >= sizeof(path)) {
 			continue;
@@ -416,6 +420,10 @@ static void clear_files(bool keep_playing) {
 		if (e->d_name[0] == '.') {
 			continue;
 		}
+		const char *img_ext = strrchr(e->d_name, '.');
+		if (img_ext && strcmp(img_ext, ".img") == 0) {
+			continue; // keep list artwork cached on card
+		}
 		char path[640];
 		if ((size_t)snprintf(path, sizeof(path), "%s/%s", cache_dir, e->d_name) >= sizeof(path)) {
 			continue;
@@ -524,7 +532,7 @@ void tidalcache_clear_on_exit(void) {
 	}
 	printf("tidalcache: shutting down, clearing the cache\n");
 	clear_files(false);
-	clear_art_files();
+	// Cached artwork (.img) is retained on the SD card to avoid re-downloading
 }
 
 // ---------------------------------------------------------------------------

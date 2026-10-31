@@ -2158,7 +2158,7 @@ static void radio_buffer_prefill(radio_buffer_t *b, unsigned mine, int bytes, in
 // and a station icon kept as "<hash>.img" fell through to the track path -- no
 // tags, no folder, no sibling cover -- so every station showed the radio
 // placeholder however well the download had gone. .jpg or .png, from the bytes.
-#define RADIO_ART_DIR ".local/radio-art"
+#define RADIO_ART_DIR ".local/radio-cache"
 
 static bool radio_art_base(const char *url, char *out, size_t size) {
 	char root[sizeof(store_root)];
@@ -2196,6 +2196,33 @@ static bool radio_art_find(const char *url, char *out, size_t size) {
 			return true;
 		}
 	}
+
+	// Legacy migration: check if station icon was cached under .local/radio-art
+	char root[sizeof(store_root)];
+	pthread_mutex_lock(&store_lock);
+	snprintf(root, sizeof(root), "%s", store_root);
+	pthread_mutex_unlock(&store_lock);
+	if (root[0]) {
+		char hash[MD5_HEX_LEN];
+		md5_hex(url, strlen(url), hash);
+		for (size_t i = 0; i < sizeof(EXTS) / sizeof(EXTS[0]); i++) {
+			char legacy[544];
+			snprintf(legacy, sizeof(legacy), "%s/.local/radio-art/%.32s%s", root, hash, EXTS[i]);
+			struct stat st;
+			if (stat(legacy, &st) == 0 && st.st_size > 0) {
+				char path[544];
+				snprintf(path, sizeof(path), "%s%s", base, EXTS[i]);
+				radio_art_dir_make(path);
+				if (rename(legacy, path) == 0) {
+					snprintf(out, size, "%s", path);
+					return true;
+				}
+				snprintf(out, size, "%s", legacy);
+				return true;
+			}
+		}
+	}
+
 	out[0] = '\0';
 	return false;
 }
@@ -2347,7 +2374,7 @@ static void fetch_favicon(const char *url) {
 // playing station gets, so the cache is shared and the page finds the file with
 // radio_station_art_path() once it lands.
 // ---------------------------------------------------------------------------
-#define RADIO_ART_PREFETCH_MAX 8
+#define RADIO_ART_PREFETCH_MAX 32
 
 typedef struct {
 	int count;

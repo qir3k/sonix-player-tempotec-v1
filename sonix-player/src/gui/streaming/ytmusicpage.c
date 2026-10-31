@@ -864,7 +864,7 @@ static void art_request_visible(void) {
 
 		art_slot_row[free_slot] = row;
 		art_wake();
-		qobuzart_request(&ytmusic_art_owner, free_slot, art_active->items[row].thumbnail, YTMUSIC_ROW_THUMB);
+		qobuzart_request(&ytmusic_art_owner, "ytmusic-cache", free_slot, art_active->items[row].thumbnail, YTMUSIC_ROW_THUMB);
 	}
 }
 

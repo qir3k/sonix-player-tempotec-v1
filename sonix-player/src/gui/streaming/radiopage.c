@@ -1133,10 +1133,10 @@ static void list_reload_stored(void) {
 	// Asked for here, off this thread, and the rows look at the card again for
 	// the next few seconds so the pictures arrive without leaving the page.
 	if (station_count > 0) {
-		const char *missing[16];
+		const char *missing[32];
 		char cached[512];
 		int n = 0;
-		for (int i = 0; i < station_count && n < 16; i++) {
+		for (int i = 0; i < station_count && n < 32; i++) {
 			if (stations[i].favicon[0] &&
 				!radio_station_art_path(stations[i].favicon, cached, sizeof(cached))) {
 				missing[n++] = stations[i].favicon;
@@ -1296,10 +1296,10 @@ static void list_poll_cb(lv_timer_t *timer) {
 	term_count = 0;
 
 	if (station_count > 0) {
-		const char *missing[16];
+		const char *missing[32];
 		char cached[512];
 		int n = 0;
-		for (int i = 0; i < station_count && n < 16; i++) {
+		for (int i = 0; i < station_count && n < 32; i++) {
 			if (stations[i].favicon[0] &&
 				!radio_station_art_path(stations[i].favicon, cached, sizeof(cached))) {
 				missing[n++] = stations[i].favicon;

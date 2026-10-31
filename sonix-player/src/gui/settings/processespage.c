@@ -343,11 +343,12 @@ static void optimize_toggle(lv_obj_t *container, const char *label, lv_event_cb_
 // is why sweeping them is a list rather than one naming rule.
 static const char *const PLAYBACK_CACHES[] = {
 	".local/tidal-cache", ".local/qobuz-cache", ".local/podcast-cache", ".local/ytmusic-cache", ".local/dlna",
+	".local/radio-cache",
 };
 
-// The cover caches, and the folders whose whole content is a sleeve cache.
+// Legacy cover cache folders swept when cleaning artwork
 static const char *const ART_CACHES[] = {
-	".local/radio-art", ".local/qobuz-art", ".local/podcast-art",
+	".local/radio-art", ".local/qobuz-art", ".local/podcast-art", ".local/tidal-art",
 };
 
 // A cache is not always a folder. The thumbnail cache is one SQLite file of
@@ -410,6 +411,8 @@ static void optimize_clicked_cb(lv_event_t *e) {
 		}
 		for (size_t i = 0; i < sizeof(PLAYBACK_CACHES) / sizeof(PLAYBACK_CACHES[0]); i++) {
 			sweep_under_root(PLAYBACK_CACHES[i], ".jpg", &junk);
+			sweep_under_root(PLAYBACK_CACHES[i], ".png", &junk);
+			sweep_under_root(PLAYBACK_CACHES[i], ".img", &junk);
 		}
 	}
 	if (optimize_caches()) {
